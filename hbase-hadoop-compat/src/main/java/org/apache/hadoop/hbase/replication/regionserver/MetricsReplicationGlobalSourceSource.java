@@ -15,18 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hbase.replication.regionserver;
 
-package org.apache.hadoop.hbase.replication;
-import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.yetus.audience.InterfaceAudience;
 
-/**
- * Skips WAL edits for all System tables including hbase:meta.
- */
 @InterfaceAudience.Private
-public class SystemTableWALEntryFilter implements WALEntryFilter {
-  @Override
-  public Entry filter(Entry entry) {
-    return entry.getKey().getTableName().isSystemTable()? null: entry;
-  }
+public interface MetricsReplicationGlobalSourceSource extends MetricsReplicationSourceSource {
+
+  public static final String SOURCE_WAL_READER_EDITS_BUFFER = "source.walReaderEditsBufferUsage";
+
+  /**
+   * Sets the total usage of memory used by edits in memory read from WALs. The memory represented
+   * by this usage measure is across peers/sources. For example, we may batch the same WAL edits
+   * multiple times for the sake of replicating them to multiple peers..
+   * @param usage The memory used by edits in bytes
+   */
+  void setWALReaderEditsBufferBytes(long usage);
+
+  /**
+   * Returns the size, in bytes, of edits held in memory to be replicated across all peers.
+   */
+  long getWALReaderEditsBufferBytes();
 }

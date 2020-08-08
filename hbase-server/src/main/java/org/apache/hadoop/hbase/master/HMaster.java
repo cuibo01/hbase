@@ -801,7 +801,7 @@ public class HMaster extends HRegionServer implements MasterServices {
     this.splitOrMergeTracker = new SplitOrMergeTracker(zooKeeper, conf, this);
     this.splitOrMergeTracker.start();
 
-    this.replicationPeerManager = ReplicationPeerManager.create(zooKeeper, conf);
+    this.replicationPeerManager = ReplicationPeerManager.create(zooKeeper, conf, clusterId);
 
     this.drainingServerTracker = new DrainingServerTracker(zooKeeper, this, this.serverManager);
     this.drainingServerTracker.start();
@@ -1945,11 +1945,11 @@ public class HMaster extends HRegionServer implements MasterServices {
             mergePlanCount++;
           }
         }
-        int totalPlansSubmitted = submittedPlanProcIds.size();
-        if (totalPlansSubmitted > 0 && LOG.isDebugEnabled()) {
-          LOG.debug("Normalizer plans submitted. Total plans count: {} , procID list: {}",
+      }
+      int totalPlansSubmitted = submittedPlanProcIds.size();
+      if (totalPlansSubmitted > 0 && LOG.isDebugEnabled()) {
+        LOG.debug("Normalizer plans submitted. Total plans count: {} , procID list: {}",
             totalPlansSubmitted, submittedPlanProcIds);
-        }
       }
     } finally {
       normalizationInProgressLock.unlock();
