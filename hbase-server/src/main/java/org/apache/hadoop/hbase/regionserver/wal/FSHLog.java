@@ -318,7 +318,7 @@ public class FSHLog extends AbstractFSWAL<Writer> {
     SyncFuture syncFuture = null;
     SafePointZigZagLatch zigzagLatch = null;
     long sequence = -1L;
-    if (this.ringBufferEventHandler != null) {
+    if (this.writer != null && this.ringBufferEventHandler != null) {
       // Get sequence first to avoid dead lock when ring buffer is full
       // Considering below sequence
       // 1. replaceWriter is called and zigzagLatch is initialized
@@ -596,8 +596,12 @@ public class FSHLog extends AbstractFSWAL<Writer> {
           Throwable lastException = null;
           try {
             TraceUtil.addTimelineAnnotation("syncing writer");
+            long unSyncedFlushSeq = highestUnsyncedTxid;
             writer.sync(sf.isForceSync());
             TraceUtil.addTimelineAnnotation("writer synced");
+            if (unSyncedFlushSeq > currentSequence) {
+              currentSequence = unSyncedFlushSeq;
+            }
             currentSequence = updateHighestSyncedSequence(currentSequence);
           } catch (IOException e) {
             LOG.error("Error syncing, request close of WAL", e);
