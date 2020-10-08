@@ -15,18 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.hadoop.hbase.master;
+package org.apache.hadoop.hbase.master.janitor;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
+import org.apache.hadoop.hbase.HBaseIOException;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.TableName;
@@ -35,14 +38,19 @@ import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.RegionReplicaUtil;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.exceptions.MergeRegionException;
+import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.master.assignment.TransitRegionStateProcedure;
+import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.ServerRegionReplicaUtil;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.collect.ArrayListMultimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.ListMultimap;
 
 
 /**
@@ -53,7 +61,7 @@ import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesti
  * and encapsulates their fixing on behalf of the Master.
  */
 @InterfaceAudience.Private
-class MetaFixer {
+public class MetaFixer {
   private static final Logger LOG = LoggerFactory.getLogger(MetaFixer.class);
   private static final String MAX_MERGE_COUNT_KEY = "hbase.master.metafixer.max.merge.count";
   private static final int MAX_MERGE_COUNT_DEFAULT = 64;
@@ -64,14 +72,14 @@ class MetaFixer {
    */
   private final int maxMergeCount;
 
-  MetaFixer(MasterServices masterServices) {
+  public MetaFixer(MasterServices masterServices) {
     this.masterServices = masterServices;
     this.maxMergeCount = this.masterServices.getConfiguration().
         getInt(MAX_MERGE_COUNT_KEY, MAX_MERGE_COUNT_DEFAULT);
   }
 
-  void fix() throws IOException {
-    CatalogJanitor.Report report = this.masterServices.getCatalogJanitor().getLastReport();
+  public void fix() throws IOException {
+    Report report = this.masterServices.getCatalogJanitor().getLastReport();
     if (report == null) {
       LOG.info("CatalogJanitor has not generated a report yet; run 'catalogjanitor_run' in " +
           "shell or wait until CatalogJanitor chore runs.");
@@ -88,7 +96,7 @@ class MetaFixer {
    * If hole, it papers it over by adding a region in the filesystem and to hbase:meta.
    * Does not assign.
    */
-  void fixHoles(CatalogJanitor.Report report) {
+  void fixHoles(Report report) {
     final List<Pair<RegionInfo, RegionInfo>> holes = report.getHoles();
     if (holes.isEmpty()) {
       LOG.info("CatalogJanitor Report contains no holes to fix. Skipping.");
@@ -142,8 +150,8 @@ class MetaFixer {
       return Optional.of(buildRegionInfo(left.getTable(), left.getEndKey(), right.getStartKey()));
     }
 
-    final boolean leftUndefined = left.equals(RegionInfo.UNDEFINED);
-    final boolean rightUndefined = right.equals(RegionInfo.UNDEFINED);
+    final boolean leftUndefined = left.equals(RegionInfoBuilder.UNDEFINED);
+    final boolean rightUndefined = right.equals(RegionInfoBuilder.UNDEFINED);
     final boolean last = left.isLast();
     final boolean first = right.isFirst();
     if (leftUndefined && rightUndefined) {
@@ -184,8 +192,8 @@ class MetaFixer {
 
           // Add replicas if needed
           // we need to create regions with replicaIds starting from 1
-          List<RegionInfo> newRegions = RegionReplicaUtil.addReplicas(
-            Collections.singletonList(regionInfo), 1, td.getRegionReplication());
+          List<RegionInfo> newRegions = RegionReplicaUtil
+            .addReplicas(Collections.singletonList(regionInfo), 1, td.getRegionReplication());
 
           // Add regions to META
           MetaTableAccessor.addRegionsToMeta(masterServices.getConnection(), newRegions,
@@ -193,12 +201,13 @@ class MetaFixer {
 
           // Setup replication for region replicas if needed
           if (td.getRegionReplication() > 1) {
-            ServerRegionReplicaUtil.setupRegionReplicaReplication(
-              masterServices.getConfiguration());
+            ServerRegionReplicaUtil.setupRegionReplicaReplication(masterServices);
           }
-          return Either.<List<RegionInfo>, IOException>ofLeft(newRegions);
+          return Either.<List<RegionInfo>, IOException> ofLeft(newRegions);
         } catch (IOException e) {
-          return Either.<List<RegionInfo>, IOException>ofRight(e);
+          return Either.<List<RegionInfo>, IOException> ofRight(e);
+        } catch (ReplicationException e) {
+          return Either.<List<RegionInfo>, IOException> ofRight(new HBaseIOException(e));
         }
       })
       .collect(Collectors.toList());
@@ -231,16 +240,18 @@ class MetaFixer {
   /**
    * Fix overlaps noted in CJ consistency report.
    */
-  void fixOverlaps(CatalogJanitor.Report report) throws IOException {
+  List<Long> fixOverlaps(Report report) throws IOException {
+    List<Long> pidList = new ArrayList<>();
     for (Set<RegionInfo> regions: calculateMerges(maxMergeCount, report.getOverlaps())) {
       RegionInfo [] regionsArray = regions.toArray(new RegionInfo [] {});
       try {
-        this.masterServices.mergeRegions(regionsArray,
-            true, HConstants.NO_NONCE, HConstants.NO_NONCE);
+        pidList.add(this.masterServices
+          .mergeRegions(regionsArray, true, HConstants.NO_NONCE, HConstants.NO_NONCE));
       } catch (MergeRegionException mre) {
         LOG.warn("Failed overlap fix of {}", regionsArray, mre);
       }
     }
+    return pidList;
   }
 
   /**
@@ -258,6 +269,21 @@ class MetaFixer {
       return Collections.emptyList();
     }
     List<SortedSet<RegionInfo>> merges = new ArrayList<>();
+    // First group overlaps by table then calculate merge table by table.
+    ListMultimap<TableName, Pair<RegionInfo, RegionInfo>> overlapGroups =
+      ArrayListMultimap.create();
+    for (Pair<RegionInfo, RegionInfo> pair : overlaps) {
+      overlapGroups.put(pair.getFirst().getTable(), pair);
+    }
+    for (Map.Entry<TableName, Collection<Pair<RegionInfo, RegionInfo>>> entry : overlapGroups
+      .asMap().entrySet()) {
+      calculateTableMerges(maxMergeCount, merges, entry.getValue());
+    }
+    return merges;
+  }
+
+  private static void calculateTableMerges(int maxMergeCount, List<SortedSet<RegionInfo>> merges,
+    Collection<Pair<RegionInfo, RegionInfo>> overlaps) {
     SortedSet<RegionInfo> currentMergeSet = new TreeSet<>();
     HashSet<RegionInfo> regionsInMergeSet = new HashSet<>();
     RegionInfo regionInfoWithlargestEndKey =  null;
@@ -301,7 +327,6 @@ class MetaFixer {
           regionInfoWithlargestEndKey);
     }
     merges.add(currentMergeSet);
-    return merges;
   }
 
   /**

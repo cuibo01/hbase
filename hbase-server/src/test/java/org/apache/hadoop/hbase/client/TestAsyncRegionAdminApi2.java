@@ -36,8 +36,8 @@ import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.master.CatalogJanitor;
 import org.apache.hadoop.hbase.master.HMaster;
+import org.apache.hadoop.hbase.master.janitor.CatalogJanitor;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -189,7 +189,7 @@ public class TestAsyncRegionAdminApi2 extends TestAsyncAdminBase {
     // Need to wait GC for merged child region is done.
     HMaster services = TEST_UTIL.getHBaseCluster().getMaster();
     CatalogJanitor cj = services.getCatalogJanitor();
-    cj.cleanMergeQualifier(mergedChildRegion);
+    assertTrue(cj.scan() > 0);
     // Wait until all procedures settled down
     while (!services.getMasterProcedureExecutor().getActiveProcIds().isEmpty()) {
       Thread.sleep(200);

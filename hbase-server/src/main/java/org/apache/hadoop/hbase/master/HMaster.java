@@ -40,6 +40,7 @@ import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -82,9 +83,9 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotDisabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.UnknownRegionException;
-import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.MasterSwitchType;
+import org.apache.hadoop.hbase.client.NormalizeTableFilterParams;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.RegionStatesCount;
@@ -92,7 +93,6 @@ import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.client.TableState;
 import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
-import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.executor.ExecutorType;
 import org.apache.hadoop.hbase.favored.FavoredNodesManager;
 import org.apache.hadoop.hbase.favored.FavoredNodesPromoter;
@@ -116,6 +116,7 @@ import org.apache.hadoop.hbase.master.cleaner.HFileCleaner;
 import org.apache.hadoop.hbase.master.cleaner.LogCleaner;
 import org.apache.hadoop.hbase.master.cleaner.ReplicationBarrierCleaner;
 import org.apache.hadoop.hbase.master.cleaner.SnapshotCleanerChore;
+import org.apache.hadoop.hbase.master.janitor.CatalogJanitor;
 import org.apache.hadoop.hbase.master.locking.LockManager;
 import org.apache.hadoop.hbase.master.normalizer.NormalizationPlan;
 import org.apache.hadoop.hbase.master.normalizer.NormalizationPlan.PlanType;
@@ -216,25 +217,23 @@ import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 import org.apache.hadoop.hbase.zookeeper.ZNodePaths;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException;
-import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.server.ServerConnector;
-import org.eclipse.jetty.servlet.ServletHolder;
-import org.eclipse.jetty.webapp.WebAppContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 import org.apache.hbase.thirdparty.com.google.common.collect.Maps;
+import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
 import org.apache.hbase.thirdparty.org.apache.commons.collections4.CollectionUtils;
+import org.apache.hbase.thirdparty.org.eclipse.jetty.server.Server;
+import org.apache.hbase.thirdparty.org.eclipse.jetty.server.ServerConnector;
+import org.apache.hbase.thirdparty.org.eclipse.jetty.servlet.ServletHolder;
+import org.apache.hbase.thirdparty.org.eclipse.jetty.webapp.WebAppContext;
 
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetRegionInfoResponse.CompactionState;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
 
 /**
- * HMaster is the "master server" for HBase. An HBase cluster has one active
- * master.  If many masters are started, all compete.  Whichever wins goes on to
  * run the cluster.  All others park themselves in their constructor until
  * master or cluster shutdown or until the active master loses its lease in
  * zookeeper.  Thereafter, all running master jostle to take over master role.
@@ -579,14 +578,9 @@ public class HMaster extends HRegionServer implements MasterServices {
         }
       }
 
-      // Some unit tests don't need a cluster, so no zookeeper at all
-      if (!conf.getBoolean("hbase.testing.nocluster", false)) {
-        this.metaRegionLocationCache = new MetaRegionLocationCache(this.zooKeeper);
-        this.activeMasterManager = createActiveMasterManager(zooKeeper, serverName, this);
-      } else {
-        this.metaRegionLocationCache = null;
-        this.activeMasterManager = null;
-      }
+      this.metaRegionLocationCache = new MetaRegionLocationCache(this.zooKeeper);
+      this.activeMasterManager = createActiveMasterManager(zooKeeper, serverName, this);
+
       cachedClusterId = new CachedClusterId(this, conf);
     } catch (Throwable t) {
       // Make sure we log the exception. HMaster is often started via reflection and the
@@ -600,8 +594,8 @@ public class HMaster extends HRegionServer implements MasterServices {
    * Protected to have custom implementations in tests override the default ActiveMaster
    * implementation.
    */
-  protected ActiveMasterManager createActiveMasterManager(
-      ZKWatcher zk, ServerName sn, org.apache.hadoop.hbase.Server server) {
+  protected ActiveMasterManager createActiveMasterManager(ZKWatcher zk, ServerName sn,
+      org.apache.hadoop.hbase.Server server) throws InterruptedIOException {
     return new ActiveMasterManager(zk, sn, server);
   }
 
@@ -615,22 +609,20 @@ public class HMaster extends HRegionServer implements MasterServices {
   @Override
   public void run() {
     try {
-      if (!conf.getBoolean("hbase.testing.nocluster", false)) {
-        Threads.setDaemonThreadRunning(new Thread(() -> {
-          try {
-            int infoPort = putUpJettyServer();
-            startActiveMasterManager(infoPort);
-          } catch (Throwable t) {
-            // Make sure we log the exception.
-            String error = "Failed to become Active Master";
-            LOG.error(error, t);
-            // Abort should have been called already.
-            if (!isAborted()) {
-              abort(error, t);
-            }
+      Threads.setDaemonThreadRunning(new Thread(() -> {
+        try {
+          int infoPort = putUpJettyServer();
+          startActiveMasterManager(infoPort);
+        } catch (Throwable t) {
+          // Make sure we log the exception.
+          String error = "Failed to become Active Master";
+          LOG.error(error, t);
+          // Abort should have been called already.
+          if (!isAborted()) {
+            abort(error, t);
           }
-        }), getName() + ":becomeActiveMaster");
-      }
+        }
+      }), getName() + ":becomeActiveMaster");
       // Fall in here even if we have been aborted. Need to run the shutdown services and
       // the super run call will do this for us.
       super.run();
@@ -750,6 +742,11 @@ public class HMaster extends HRegionServer implements MasterServices {
 
   @Override
   protected boolean canUpdateTableDescriptor() {
+    return true;
+  }
+
+  @Override
+  protected boolean cacheTableDescriptor() {
     return true;
   }
 
@@ -905,9 +902,6 @@ public class HMaster extends HRegionServer implements MasterServices {
     initializeMemStoreChunkCreator();
     this.fileSystemManager = new MasterFileSystem(conf);
     this.walManager = new MasterWalManager(this);
-
-    // enable table descriptors cache
-    this.tableDescriptors.setCacheOn();
 
     // warm-up HTDs cache on master initialization
     if (preLoadTableDescriptors) {
@@ -1360,8 +1354,7 @@ public class HMaster extends HRegionServer implements MasterServices {
   }
 
   boolean isCatalogJanitorEnabled() {
-    return catalogJanitorChore != null ?
-      catalogJanitorChore.getEnabled() : false;
+    return catalogJanitorChore != null ? catalogJanitorChore.getEnabled() : false;
   }
 
   boolean isCleanerChoreEnabled() {
@@ -1772,7 +1765,7 @@ public class HMaster extends HRegionServer implements MasterServices {
           toPrint = regionsInTransition.subList(0, max);
           truncated = true;
         }
-        LOG.info(prefix + "unning balancer because " + regionsInTransition.size() +
+        LOG.info(prefix + " not running balancer because " + regionsInTransition.size() +
           " region(s) in transition: " + toPrint + (truncated? "(truncated list)": ""));
         if (!force || metaInTransition) return false;
       }
@@ -1882,14 +1875,18 @@ public class HMaster extends HRegionServer implements MasterServices {
     return this.normalizer;
   }
 
+  public boolean normalizeRegions() throws IOException {
+    return normalizeRegions(new NormalizeTableFilterParams.Builder().build());
+  }
+
   /**
-   * Perform normalization of cluster (invoked by {@link RegionNormalizerChore}).
+   * Perform normalization of cluster.
    *
    * @return true if an existing normalization was already in progress, or if a new normalization
    *   was performed successfully; false otherwise (specifically, if HMaster finished initializing
    *   or normalization is globally disabled).
    */
-  public boolean normalizeRegions() throws IOException {
+  public boolean normalizeRegions(final NormalizeTableFilterParams ntfp) throws IOException {
     final long startTime = EnvironmentEdgeManager.currentTime();
     if (regionNormalizerTracker == null || !regionNormalizerTracker.isNormalizerOn()) {
       LOG.debug("Region normalization is disabled, don't run region normalizer.");
@@ -1910,12 +1907,19 @@ public class HMaster extends HRegionServer implements MasterServices {
 
     int affectedTables = 0;
     try {
-      final List<TableName> allEnabledTables =
-        new ArrayList<>(tableStateManager.getTablesInStates(TableState.State.ENABLED));
-      Collections.shuffle(allEnabledTables);
+      final Set<TableName> matchingTables = getTableDescriptors(new LinkedList<>(),
+        ntfp.getNamespace(), ntfp.getRegex(), ntfp.getTableNames(), false)
+        .stream()
+        .map(TableDescriptor::getTableName)
+        .collect(Collectors.toSet());
+      final Set<TableName> allEnabledTables =
+        tableStateManager.getTablesInStates(TableState.State.ENABLED);
+      final List<TableName> targetTables =
+        new ArrayList<>(Sets.intersection(matchingTables, allEnabledTables));
+      Collections.shuffle(targetTables);
 
       final List<Long> submittedPlanProcIds = new ArrayList<>();
-      for (TableName table : allEnabledTables) {
+      for (TableName table : targetTables) {
         if (table.isSystemTable()) {
           continue;
         }
@@ -2565,8 +2569,8 @@ public class HMaster extends HRegionServer implements MasterServices {
   }
 
   private void checkTableExists(final TableName tableName)
-      throws IOException, TableNotFoundException {
-    if (!MetaTableAccessor.tableExists(getConnection(), tableName)) {
+    throws IOException, TableNotFoundException {
+    if (!tableDescriptors.exists(tableName)) {
       throw new TableNotFoundException(tableName);
     }
   }
@@ -2689,51 +2693,8 @@ public class HMaster extends HRegionServer implements MasterServices {
     return status;
   }
 
-  private List<ServerName> getBackupMasters() throws InterruptedIOException {
-    // Build Set of backup masters from ZK nodes
-    List<String> backupMasterStrings;
-    try {
-      backupMasterStrings = ZKUtil.listChildrenNoWatch(this.zooKeeper,
-        this.zooKeeper.getZNodePaths().backupMasterAddressesZNode);
-    } catch (KeeperException e) {
-      LOG.warn(this.zooKeeper.prefix("Unable to list backup servers"), e);
-      backupMasterStrings = null;
-    }
-
-    List<ServerName> backupMasters = Collections.emptyList();
-    if (backupMasterStrings != null && !backupMasterStrings.isEmpty()) {
-      backupMasters = new ArrayList<>(backupMasterStrings.size());
-      for (String s: backupMasterStrings) {
-        try {
-          byte [] bytes;
-          try {
-            bytes = ZKUtil.getData(this.zooKeeper, ZNodePaths.joinZNode(
-                this.zooKeeper.getZNodePaths().backupMasterAddressesZNode, s));
-          } catch (InterruptedException e) {
-            throw new InterruptedIOException();
-          }
-          if (bytes != null) {
-            ServerName sn;
-            try {
-              sn = ProtobufUtil.parseServerNameFrom(bytes);
-            } catch (DeserializationException e) {
-              LOG.warn("Failed parse, skipping registering backup server", e);
-              continue;
-            }
-            backupMasters.add(sn);
-          }
-        } catch (KeeperException e) {
-          LOG.warn(this.zooKeeper.prefix("Unable to get information about " +
-                   "backup servers"), e);
-        }
-      }
-      Collections.sort(backupMasters, new Comparator<ServerName>() {
-        @Override
-        public int compare(ServerName s1, ServerName s2) {
-          return s1.getServerName().compareTo(s2.getServerName());
-        }});
-    }
-    return backupMasters;
+  List<ServerName> getBackupMasters() {
+    return activeMasterManager.getBackupMasters();
   }
 
   /**
@@ -3370,9 +3331,9 @@ public class HMaster extends HRegionServer implements MasterServices {
   }
 
   /**
-   * @return list of table table descriptors after filtering by regex and whether to include system
-   *    tables, etc.
-   * @throws IOException
+   * Return a list of table table descriptors after applying any provided filter parameters. Note
+   * that the user-facing description of this filter logic is presented on the class-level javadoc
+   * of {@link NormalizeTableFilterParams}.
    */
   private List<TableDescriptor> getTableDescriptors(final List<TableDescriptor> htds,
       final String namespace, final String regex, final List<TableName> tableNameList,
