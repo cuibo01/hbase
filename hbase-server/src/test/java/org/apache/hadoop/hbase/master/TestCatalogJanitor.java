@@ -25,6 +25,8 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Objects;
@@ -53,7 +55,7 @@ import org.apache.hadoop.hbase.master.assignment.MockMasterServices;
 import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility;
 import org.apache.hadoop.hbase.regionserver.ChunkCreator;
 import org.apache.hadoop.hbase.regionserver.HStore;
-import org.apache.hadoop.hbase.regionserver.MemStoreLABImpl;
+import org.apache.hadoop.hbase.regionserver.MemStoreLAB;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -86,7 +88,8 @@ public class TestCatalogJanitor {
 
   @BeforeClass
   public static void beforeClass() throws Exception {
-    ChunkCreator.initialize(MemStoreLABImpl.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null);
+    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0,
+      0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
   }
 
   @Before
@@ -552,6 +555,29 @@ public class TestCatalogJanitor {
     // and now check to make sure that the files have actually been archived
     archivedStoreFiles = fs.listStatus(storeArchive);
     assertArchiveEqualToOriginal(storeFiles, archivedStoreFiles, fs, true);
+  }
+
+  @Test
+  public void testAlreadyRunningStatus() throws Exception {
+    int numberOfThreads = 2;
+    List<Integer> gcValues = new ArrayList<>();
+    Thread[] threads = new Thread[numberOfThreads];
+    for (int i = 0; i < numberOfThreads; i++) {
+      threads[i] = new Thread(() -> {
+        try {
+          gcValues.add(janitor.scan());
+        } catch (IOException e) {
+          throw new RuntimeException(e);
+        }
+      });
+    }
+    for (int i = 0; i < numberOfThreads; i++) {
+      threads[i].start();
+    }
+    for (int i = 0; i < numberOfThreads; i++) {
+      threads[i].join();
+    }
+    assertTrue("One janitor.scan() call should have returned -1", gcValues.contains(-1));
   }
 
   private FileStatus[] addMockStoreFiles(int count, MasterServices services, Path storedir)
