@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.commons.lang3.NotImplementedException;
@@ -51,7 +50,6 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hbase.thirdparty.com.google.common.primitives.Ints;
 
 /**
@@ -81,9 +79,7 @@ public class FSTableDescriptors implements TableDescriptors {
   private final boolean usecache;
   private volatile boolean fsvisited;
 
-  @VisibleForTesting
   long cachehits = 0;
-  @VisibleForTesting
   long invocations = 0;
 
   /**
@@ -118,23 +114,18 @@ public class FSTableDescriptors implements TableDescriptors {
     this.usecache = usecache;
   }
 
-  @VisibleForTesting
   public static void tryUpdateMetaTableDescriptor(Configuration conf) throws IOException {
     tryUpdateAndGetMetaTableDescriptor(conf, CommonFSUtils.getCurrentFileSystem(conf),
-      CommonFSUtils.getRootDir(conf), null);
+      CommonFSUtils.getRootDir(conf));
   }
 
   public static TableDescriptor tryUpdateAndGetMetaTableDescriptor(Configuration conf,
-    FileSystem fs, Path rootdir,
-    Function<TableDescriptorBuilder, TableDescriptorBuilder> metaObserver) throws IOException {
+    FileSystem fs, Path rootdir) throws IOException {
     // see if we already have meta descriptor on fs. Write one if not.
     try {
       return getTableDescriptorFromFs(fs, rootdir, TableName.META_TABLE_NAME);
     } catch (TableInfoMissingException e) {
       TableDescriptorBuilder builder = createMetaTableDescriptorBuilder(conf);
-      if (metaObserver != null) {
-        builder = metaObserver.apply(builder);
-      }
       TableDescriptor td = builder.build();
       LOG.info("Creating new hbase:meta table descriptor {}", td);
       TableName tableName = td.getTableName();
@@ -148,7 +139,6 @@ public class FSTableDescriptors implements TableDescriptors {
     }
   }
 
-  @VisibleForTesting
   public static TableDescriptorBuilder createMetaTableDescriptorBuilder(final Configuration conf)
     throws IOException {
     // TODO We used to set CacheDataInL1 for META table. When we have BucketCache in file mode, now
@@ -188,7 +178,6 @@ public class FSTableDescriptors implements TableDescriptors {
         .build());
   }
 
-  @VisibleForTesting
   protected boolean isUsecache() {
     return this.usecache;
   }
@@ -295,7 +284,6 @@ public class FSTableDescriptors implements TableDescriptors {
     }
   }
 
-  @VisibleForTesting
   Path updateTableDescriptor(TableDescriptor td) throws IOException {
     TableName tableName = td.getTableName();
     Path tableDir = getTableDir(tableName);
@@ -406,7 +394,6 @@ public class FSTableDescriptors implements TableDescriptors {
   /**
    * Compare {@link FileStatus} instances by {@link Path#getName()}. Returns in reverse order.
    */
-  @VisibleForTesting
   static final Comparator<FileStatus> TABLEINFO_FILESTATUS_COMPARATOR =
     new Comparator<FileStatus>() {
       @Override
@@ -418,7 +405,6 @@ public class FSTableDescriptors implements TableDescriptors {
   /**
    * Return the table directory in HDFS
    */
-  @VisibleForTesting
   Path getTableDir(final TableName tableName) {
     return CommonFSUtils.getTableDir(rootdir, tableName);
   }
@@ -433,7 +419,6 @@ public class FSTableDescriptors implements TableDescriptors {
   /**
    * Width of the sequenceid that is a suffix on a tableinfo file.
    */
-  @VisibleForTesting
   static final int WIDTH_OF_SEQUENCE_ID = 10;
 
   /**
@@ -463,7 +448,6 @@ public class FSTableDescriptors implements TableDescriptors {
    * @param p Path to a <code>.tableinfo</code> file.
    * @return The current editid or 0 if none found.
    */
-  @VisibleForTesting
   static int getTableInfoSequenceId(final Path p) {
     if (p == null) {
       return 0;
@@ -483,7 +467,6 @@ public class FSTableDescriptors implements TableDescriptors {
    * @param sequenceid
    * @return Name of tableinfo file.
    */
-  @VisibleForTesting
   static String getTableInfoFileName(final int sequenceid) {
     return TABLEINFO_FILE_PREFIX + "." + formatTableInfoSequenceId(sequenceid);
   }

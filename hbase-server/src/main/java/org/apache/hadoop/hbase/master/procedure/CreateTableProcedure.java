@@ -44,7 +44,6 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
@@ -234,8 +233,9 @@ public class CreateTableProcedure
   @Override
   protected boolean waitInitialized(MasterProcedureEnv env) {
     if (getTableName().isSystemTable()) {
-      // Creating system table is part of the initialization, so do not wait here.
-      return false;
+      // Creating system table is part of the initialization, so only wait for meta loaded instead
+      // of waiting for master fully initialized.
+      return env.getAssignmentManager().waitMetaLoaded(this);
     }
     return super.waitInitialized(env);
   }
@@ -400,7 +400,6 @@ public class CreateTableProcedure
     return !getTableName().isSystemTable();
   }
 
-  @VisibleForTesting
   RegionInfo getFirstRegionInfo() {
     if (newRegions == null || newRegions.isEmpty()) {
       return null;

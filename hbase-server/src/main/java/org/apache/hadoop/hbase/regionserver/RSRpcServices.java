@@ -152,7 +152,6 @@ import org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hbase.thirdparty.com.google.common.cache.Cache;
 import org.apache.hbase.thirdparty.com.google.common.cache.CacheBuilder;
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
@@ -310,6 +309,9 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
 
   // Request counter for rpc scan
   final LongAdder rpcScanRequestCount = new LongAdder();
+  
+  // Request counter for scans that might end up in full scans
+  final LongAdder rpcFullScanRequestCount = new LongAdder();
 
   // Request counter for rpc multi
   final LongAdder rpcMultiRequestCount = new LongAdder();
@@ -321,7 +323,6 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   final RpcServerInterface rpcServer;
   final InetSocketAddress isa;
 
-  @VisibleForTesting
   protected final HRegionServer regionServer;
   private final long maxScannerResultSize;
 
@@ -455,15 +456,18 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     private final RpcCallback shippedCallback;
     private byte[] rowOfLastPartialResult;
     private boolean needCursor;
+    private boolean fullRegionScan;
 
     public RegionScannerHolder(String scannerName, RegionScanner s, HRegion r,
-        RpcCallback closeCallBack, RpcCallback shippedCallback, boolean needCursor) {
+        RpcCallback closeCallBack, RpcCallback shippedCallback, boolean needCursor,
+        boolean fullRegionScan) {
       this.scannerName = scannerName;
       this.s = s;
       this.r = r;
       this.closeCallBack = closeCallBack;
       this.shippedCallback = shippedCallback;
       this.needCursor = needCursor;
+      this.fullRegionScan = fullRegionScan;
     }
 
     public long getNextCallSeq() {
@@ -616,8 +620,22 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
             spaceQuotaEnforcement.getPolicyEnforcement(region).check(del);
             mutations.add(del);
             break;
+          case INCREMENT:
+            Increment increment = ProtobufUtil.toIncrement(action.getMutation(), cellScanner);
+            ++countOfCompleteMutation;
+            checkCellSizeLimit(region, increment);
+            spaceQuotaEnforcement.getPolicyEnforcement(region).check(increment);
+            mutations.add(increment);
+            break;
+          case APPEND:
+            Append append = ProtobufUtil.toAppend(action.getMutation(), cellScanner);
+            ++countOfCompleteMutation;
+            checkCellSizeLimit(region, append);
+            spaceQuotaEnforcement.getPolicyEnforcement(region).check(append);
+            mutations.add(append);
+            break;
           default:
-            throw new DoNotRetryIOException("Atomic put and/or delete only, not " + type.name());
+            throw new DoNotRetryIOException("invalid mutation type : " + type);
         }
       }
 
@@ -910,7 +928,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   }
 
   /**
-   * Execute a list of Put/Delete mutations.
+   * Execute a list of mutations.
    *
    * @param builder
    * @param region
@@ -940,12 +958,27 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
         }
         MutationProto m = action.getMutation();
         Mutation mutation;
-        if (m.getMutateType() == MutationType.PUT) {
-          mutation = ProtobufUtil.toPut(m, cells);
-          batchContainsPuts = true;
-        } else {
-          mutation = ProtobufUtil.toDelete(m, cells);
-          batchContainsDelete = true;
+        switch (m.getMutateType()) {
+          case PUT:
+            mutation = ProtobufUtil.toPut(m, cells);
+            batchContainsPuts = true;
+            break;
+
+          case DELETE:
+            mutation = ProtobufUtil.toDelete(m, cells);
+            batchContainsDelete = true;
+            break;
+
+          case INCREMENT:
+            mutation = ProtobufUtil.toIncrement(m, cells);
+            break;
+
+          case APPEND:
+            mutation = ProtobufUtil.toAppend(m, cells);
+            break;
+
+          default:
+            throw new DoNotRetryIOException("Invalid mutation type : " + m.getMutateType());
         }
         mutationActionMap.put(mutation, action);
         mArray[i++] = mutation;
@@ -968,11 +1001,51 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
 
       OperationStatus[] codes = region.batchMutate(mArray, atomic, HConstants.NO_NONCE,
         HConstants.NO_NONCE);
+
+      // When atomic is true, it indicates that the mutateRow API or the batch API with
+      // RowMutations is called. In this case, we need to merge the results of the
+      // Increment/Append operations if the mutations include those operations, and set the merged
+      // result to the first element of the ResultOrException list
+      if (atomic) {
+        List<ResultOrException> resultOrExceptions = new ArrayList<>();
+        List<Result> results = new ArrayList<>();
+        for (i = 0; i < codes.length; i++) {
+          if (codes[i].getResult() != null) {
+            results.add(codes[i].getResult());
+          }
+          if (i != 0) {
+            resultOrExceptions.add(getResultOrException(
+              ClientProtos.Result.getDefaultInstance(), i));
+          }
+        }
+
+        if (results.isEmpty()) {
+          builder.addResultOrException(getResultOrException(
+            ClientProtos.Result.getDefaultInstance(), 0));
+        } else {
+          // Merge the results of the Increment/Append operations
+          List<Cell> cellList = new ArrayList<>();
+          for (Result result : results) {
+            if (result.rawCells() != null) {
+              cellList.addAll(Arrays.asList(result.rawCells()));
+            }
+          }
+          Result result = Result.create(cellList);
+
+          // Set the merged result of the Increment/Append operations to the first element of the
+          // ResultOrException list
+          builder.addResultOrException(getResultOrException(ProtobufUtil.toResult(result), 0));
+        }
+
+        builder.addAllResultOrException(resultOrExceptions);
+        return;
+      }
+
       for (i = 0; i < codes.length; i++) {
         Mutation currentMutation = mArray[i];
         ClientProtos.Action currentAction = mutationActionMap.get(currentMutation);
-        int index = currentAction.hasIndex() || !atomic ? currentAction.getIndex() : i;
-        Exception e = null;
+        int index = currentAction.hasIndex() ? currentAction.getIndex() : i;
+        Exception e;
         switch (codes[i].getOperationStatusCode()) {
           case BAD_FAMILY:
             e = new NoSuchColumnFamilyException(codes[i].getExceptionMsg());
@@ -1108,34 +1181,9 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     }
   }
 
-  // Exposed for testing
-  interface LogDelegate {
-    void logBatchWarning(String firstRegionName, int sum, int rowSizeWarnThreshold);
-  }
-
-  private static LogDelegate DEFAULT_LOG_DELEGATE = new LogDelegate() {
-    @Override
-    public void logBatchWarning(String firstRegionName, int sum, int rowSizeWarnThreshold) {
-      if (LOG.isWarnEnabled()) {
-        LOG.warn("Large batch operation detected (greater than " + rowSizeWarnThreshold
-            + ") (HBASE-18023)." + " Requested Number of Rows: " + sum + " Client: "
-            + RpcServer.getRequestUserName().orElse(null) + "/"
-            + RpcServer.getRemoteAddress().orElse(null)
-            + " first region in multi=" + firstRegionName);
-      }
-    }
-  };
-
-  private final LogDelegate ld;
-
-  public RSRpcServices(final HRegionServer rs) throws IOException {
-    this(rs, DEFAULT_LOG_DELEGATE);
-  }
-
   // Directly invoked only for testing
-  RSRpcServices(final HRegionServer rs, final LogDelegate ld) throws IOException {
+  public RSRpcServices(final HRegionServer rs) throws IOException {
     final Configuration conf = rs.getConfiguration();
-    this.ld = ld;
     regionServer = rs;
     rowSizeWarnThreshold = conf.getInt(
       HConstants.BATCH_ROWS_THRESHOLD_NAME, HConstants.BATCH_ROWS_THRESHOLD_DEFAULT);
@@ -1251,7 +1299,6 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     }
   }
 
-  @VisibleForTesting
   public int getScannersCount() {
     return scanners.size();
   }
@@ -1347,7 +1394,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   }
 
   private RegionScannerHolder addScanner(String scannerName, RegionScanner s, Shipper shipper,
-      HRegion r, boolean needCursor) throws LeaseStillHeldException {
+      HRegion r, boolean needCursor, boolean fullRegionScan) throws LeaseStillHeldException {
     Lease lease = regionServer.getLeaseManager().createLease(
         scannerName, this.scannerLeaseTimeoutPeriod, new ScannerListener(scannerName));
     RpcCallback shippedCallback = new RegionScannerShippedCallBack(scannerName, shipper, lease);
@@ -1357,12 +1404,28 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     } else {
       closeCallback = new RegionScannerCloseCallBack(s);
     }
+
     RegionScannerHolder rsh =
-        new RegionScannerHolder(scannerName, s, r, closeCallback, shippedCallback, needCursor);
+        new RegionScannerHolder(scannerName, s, r, closeCallback, shippedCallback,
+          needCursor, fullRegionScan);
     RegionScannerHolder existing = scanners.putIfAbsent(scannerName, rsh);
     assert existing == null : "scannerId must be unique within regionserver's whole lifecycle! " +
       scannerName;
     return rsh;
+  }
+
+  private boolean isFullRegionScan(Scan scan, HRegion region) {
+    // If the scan start row equals or less than the start key of the region
+    // and stop row greater than equals end key (if stop row present)
+    // or if the stop row is empty
+    // account this as a full region scan
+    if (Bytes.compareTo(scan.getStartRow(), region.getRegionInfo().getStartKey())  <= 0
+      && (Bytes.compareTo(scan.getStopRow(), region.getRegionInfo().getEndKey()) >= 0 &&
+      !Bytes.equals(region.getRegionInfo().getEndKey(), HConstants.EMPTY_END_ROW)
+      || Bytes.equals(scan.getStopRow(), HConstants.EMPTY_END_ROW))) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -1373,7 +1436,6 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
    * @throws IOException if the specifier is not null,
    *    but failed to find the region
    */
-  @VisibleForTesting
   public HRegion getRegion(
       final RegionSpecifier regionSpecifier) throws IOException {
     return regionServer.getRegion(regionSpecifier.getValue().toByteArray());
@@ -1400,12 +1462,10 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     return regions;
   }
 
-  @VisibleForTesting
   public PriorityFunction getPriority() {
     return priority;
   }
 
-  @VisibleForTesting
   public Configuration getConfiguration() {
     return regionServer.getConfiguration();
   }
@@ -2065,48 +2125,34 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   }
 
   /**
-   *  Wamrmup a region on this server.
-   *
-   * This method should only be called by Master. It synchrnously opens the region and
+   * Warmup a region on this server.
+   * This method should only be called by Master. It synchronously opens the region and
    * closes the region bringing the most important pages in cache.
-   * <p>
-   *
-   * @param controller the RPC controller
-   * @param request the request
-   * @throws ServiceException
    */
   @Override
   public WarmupRegionResponse warmupRegion(final RpcController controller,
       final WarmupRegionRequest request) throws ServiceException {
-
     final RegionInfo region = ProtobufUtil.toRegionInfo(request.getRegionInfo());
-    TableDescriptor htd;
     WarmupRegionResponse response = WarmupRegionResponse.getDefaultInstance();
-
     try {
       checkOpen();
       String encodedName = region.getEncodedName();
       byte[] encodedNameBytes = region.getEncodedNameAsBytes();
       final HRegion onlineRegion = regionServer.getRegion(encodedName);
-
       if (onlineRegion != null) {
-        LOG.info("Region already online. Skipping warming up " + region);
+        LOG.info("{} is online; skipping warmup", region);
         return response;
       }
-
-      htd = regionServer.tableDescriptors.get(region.getTable());
-
+      TableDescriptor htd = regionServer.tableDescriptors.get(region.getTable());
       if (regionServer.getRegionsInTransitionInRS().containsKey(encodedNameBytes)) {
-        LOG.info("Region is in transition. Skipping warmup " + region);
+        LOG.info("{} is in transition; skipping warmup", region);
         return response;
       }
-
-      LOG.info("Warming up region " + region.getRegionNameAsString());
+      LOG.info("Warmup {}", region.getRegionNameAsString());
       HRegion.warmupHRegion(region, htd, regionServer.getWAL(region),
           regionServer.getConfiguration(), regionServer, null);
-
     } catch (IOException ie) {
-      LOG.error("Failed warming up region " + region.getRegionNameAsString(), ie);
+      LOG.error("Failed warmup of {}", region.getRegionNameAsString(), ie);
       throw new ServiceException(ie);
     }
 
@@ -2600,12 +2646,15 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       sum += regionAction.getActionCount();
     }
     if (sum > rowSizeWarnThreshold) {
-      ld.logBatchWarning(firstRegionName, sum, rowSizeWarnThreshold);
+      LOG.warn("Large batch operation detected (greater than " + rowSizeWarnThreshold +
+        ") (HBASE-18023)." + " Requested Number of Rows: " + sum + " Client: " +
+        RpcServer.getRequestUserName().orElse(null) + "/" +
+        RpcServer.getRemoteAddress().orElse(null) + " first region in multi=" + firstRegionName);
       if (rejectRowsWithSizeOverThreshold) {
         throw new ServiceException(
-          "Rejecting large batch operation for current batch with firstRegionName: "
-            + firstRegionName + " , Requested Number of Rows: " + sum + " , Size Threshold: "
-            + rowSizeWarnThreshold);
+          "Rejecting large batch operation for current batch with firstRegionName: " +
+            firstRegionName + " , Requested Number of Rows: " + sum + " , Size Threshold: " +
+            rowSizeWarnThreshold);
       }
     }
   }
@@ -2758,6 +2807,8 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
               regionActionResultBuilder.setProcessed(result.isSuccess());
               for (int i = 0; i < regionAction.getActionCount(); i++) {
                 if (i == 0 && result.getResult() != null) {
+                  // Set the result of the Increment/Append operations to the first element of the
+                  // ResultOrException list
                   resultOrExceptionOrBuilder.setIndex(i);
                   regionActionResultBuilder.addResultOrException(resultOrExceptionOrBuilder
                     .setResult(ProtobufUtil.toResult(result.getResult())).build());
@@ -2781,7 +2832,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
               cellScanner, spaceQuotaEnforcement);
             regionActionResultBuilder.setProcessed(true);
             // We no longer use MultiResponse#processed. Instead, we use
-            // RegionActionResult#condition. This is for backward compatibility for old clients.
+            // RegionActionResult#processed. This is for backward compatibility for old clients.
             responseBuilder.setProcessed(true);
           } catch (IOException e) {
             rpcServer.getMetrics().exception(e);
@@ -2997,15 +3048,18 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     MetricsRegionServer metricsRegionServer = regionServer.getMetrics();
     if (metricsRegionServer != null) {
       long after = EnvironmentEdgeManager.currentTime();
-      metricsRegionServer.updateCheckAndMutate(after - before);
+      metricsRegionServer.updateCheckAndMutate(
+        region.getRegionInfo().getTable(), after - before);
 
       MutationType type = mutation.getMutateType();
       switch (type) {
         case PUT:
-          metricsRegionServer.updateCheckAndPut(after - before);
+          metricsRegionServer.updateCheckAndPut(
+            region.getRegionInfo().getTable(), after - before);
           break;
         case DELETE:
-          metricsRegionServer.updateCheckAndDelete(after - before);
+          metricsRegionServer.updateCheckAndDelete(
+            region.getRegionInfo().getTable(), after - before);
           break;
         default:
           break;
@@ -3102,7 +3156,12 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     builder.setMvccReadPoint(scanner.getMvccReadPoint());
     builder.setTtl(scannerLeaseTimeoutPeriod);
     String scannerName = String.valueOf(scannerId);
-    return addScanner(scannerName, scanner, shipper, region, scan.isNeedCursorResult());
+
+    boolean fullRegionScan = !region.getRegionInfo().getTable().isSystemTable() &&
+      isFullRegionScan(scan, region);
+
+    return addScanner(scannerName, scanner, shipper, region, scan.isNeedCursorResult(),
+      fullRegionScan);
   }
 
   private void checkScanNextCallSeq(ScanRequest request, RegionScannerHolder rsh)
@@ -3415,6 +3474,9 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
         return builder.build();
       }
       throw new ServiceException(e);
+    }
+    if (rsh.fullRegionScan) {
+      rpcFullScanRequestCount.increment();
     }
     HRegion region = rsh.r;
     String scannerName = rsh.scannerName;
@@ -3859,7 +3921,6 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     throw new ServiceException("Invalid request params");
   }
 
-  @VisibleForTesting
   public RpcScheduler getRpcScheduler() {
     return rpcServer.getScheduler();
   }

@@ -28,6 +28,8 @@ import static org.apache.hadoop.hbase.client.NonceGenerator.CLIENT_NONCES_ENABLE
 import static org.apache.hadoop.hbase.util.FutureUtils.addListener;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -48,21 +50,18 @@ import org.apache.hadoop.hbase.ipc.RpcClient;
 import org.apache.hadoop.hbase.ipc.RpcClientFactory;
 import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.security.User;
-import org.apache.hadoop.hbase.util.ConcurrentMapUtils;
-import org.apache.hadoop.hbase.util.Threads;
-import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
-import org.apache.hbase.thirdparty.io.netty.util.HashedWheelTimer;
-
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.AdminService;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos.ClientService;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.MasterService;
+import org.apache.hadoop.hbase.util.ConcurrentMapUtils;
+import org.apache.hadoop.hbase.util.Threads;
+import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.apache.hbase.thirdparty.io.netty.util.HashedWheelTimer;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The implementation of AsyncConnection.
@@ -72,13 +71,10 @@ class AsyncConnectionImpl implements AsyncConnection {
 
   private static final Logger LOG = LoggerFactory.getLogger(AsyncConnectionImpl.class);
 
-  @VisibleForTesting
   static final HashedWheelTimer RETRY_TIMER = new HashedWheelTimer(
     new ThreadFactoryBuilder().setNameFormat("Async-Client-Retry-Timer-pool-%d").setDaemon(true)
       .setUncaughtExceptionHandler(Threads.LOGGING_EXCEPTION_HANDLER).build(),
     10, TimeUnit.MILLISECONDS);
-
-  private static final String RESOLVE_HOSTNAME_ON_FAIL_KEY = "hbase.resolve.hostnames.on.failure";
 
   private final Configuration conf;
 
@@ -93,8 +89,6 @@ class AsyncConnectionImpl implements AsyncConnection {
   private final RpcClient rpcClient;
 
   final RpcControllerFactory rpcControllerFactory;
-
-  private final boolean hostnameCanChange;
 
   private final AsyncRegionLocator locator;
 
@@ -113,7 +107,7 @@ class AsyncConnectionImpl implements AsyncConnection {
   private final Optional<ServerStatisticTracker> stats;
   private final ClientBackoffPolicy backoffPolicy;
 
-  private ChoreService authService;
+  private ChoreService choreService;
 
   private volatile boolean closed = false;
 
@@ -125,6 +119,7 @@ class AsyncConnectionImpl implements AsyncConnection {
       User user) {
     this.conf = conf;
     this.user = user;
+
     if (user.isLoginFromKeytab()) {
       spawnRenewalChore(user.getUGI());
     }
@@ -137,7 +132,6 @@ class AsyncConnectionImpl implements AsyncConnection {
     }
     this.rpcClient = RpcClientFactory.createClient(conf, clusterId, metrics.orElse(null));
     this.rpcControllerFactory = RpcControllerFactory.instantiate(conf);
-    this.hostnameCanChange = conf.getBoolean(RESOLVE_HOSTNAME_ON_FAIL_KEY, true);
     this.rpcTimeout =
       (int) Math.min(Integer.MAX_VALUE, TimeUnit.NANOSECONDS.toMillis(connConf.getRpcTimeoutNs()));
     this.locator = new AsyncRegionLocator(this, RETRY_TIMER);
@@ -176,8 +170,19 @@ class AsyncConnectionImpl implements AsyncConnection {
   }
 
   private void spawnRenewalChore(final UserGroupInformation user) {
-    authService = new ChoreService("Relogin service");
-    authService.scheduleChore(AuthUtil.getAuthRenewalChore(user));
+    ChoreService service = getChoreService();
+    service.scheduleChore(AuthUtil.getAuthRenewalChore(user));
+  }
+
+  /**
+   * If choreService has not been created yet, create the ChoreService.
+   * @return ChoreService
+   */
+  synchronized ChoreService getChoreService() {
+    if (choreService == null) {
+      choreService = new ChoreService("AsyncConn Chore Service");
+    }
+    return choreService;
   }
 
   @Override
@@ -199,8 +204,8 @@ class AsyncConnectionImpl implements AsyncConnection {
     IOUtils.closeQuietly(clusterStatusListener);
     IOUtils.closeQuietly(rpcClient);
     IOUtils.closeQuietly(registry);
-    if (authService != null) {
-      authService.shutdown();
+    if (choreService != null) {
+      choreService.shutdown();
     }
     metrics.ifPresent(MetricsConnection::shutdown);
     closed = true;
@@ -232,7 +237,6 @@ class AsyncConnectionImpl implements AsyncConnection {
   }
 
   // ditto
-  @VisibleForTesting
   public NonceGenerator getNonceGenerator() {
     return nonceGenerator;
   }
@@ -243,7 +247,7 @@ class AsyncConnectionImpl implements AsyncConnection {
 
   ClientService.Interface getRegionServerStub(ServerName serverName) throws IOException {
     return ConcurrentMapUtils.computeIfAbsentEx(rsStubs,
-      getStubKey(ClientService.getDescriptor().getName(), serverName, hostnameCanChange),
+      getStubKey(ClientService.getDescriptor().getName(), serverName),
       () -> createRegionServerStub(serverName));
   }
 
@@ -257,7 +261,7 @@ class AsyncConnectionImpl implements AsyncConnection {
 
   AdminService.Interface getAdminStub(ServerName serverName) throws IOException {
     return ConcurrentMapUtils.computeIfAbsentEx(adminSubs,
-      getStubKey(AdminService.getDescriptor().getName(), serverName, hostnameCanChange),
+      getStubKey(AdminService.getDescriptor().getName(), serverName),
       () -> createAdminServerStub(serverName));
   }
 
