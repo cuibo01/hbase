@@ -472,6 +472,12 @@
       <timezone>-8</timezone>
     </developer>
     <developer>
+      <id>niuyulin</id>
+      <name>Yulin Niu</name>
+      <email>niuyulin@apache.org</email>
+      <timezone>+8</timezone>
+    </developer>
+    <developer>
       <id>nkeywal</id>
       <name>Nicolas Liochon</name>
       <email>nkeywal@apache.org</email>
@@ -678,6 +684,12 @@
       <id>wangzheng</id>
       <name>Zheng (bsglz) Wang</name>
       <email>wangzheng@apache.org</email>
+      <timezone>+8</timezone>
+    </developer>
+    <developer>
+      <id>sunxin</id>
+      <name>Xin Sun</name>
+      <email>sunxin@apache.org</email>
       <timezone>+8</timezone>
     </developer>
   </developers>
@@ -1188,8 +1200,8 @@
               <rules>
                 <bannedDependencies>
                   <excludes>
-                    <exclude>>org.glassfish.jersey.containers:**</exclude>
-                    <exclude>>org.glassfish.jersey.core:**</exclude>
+                    <exclude>org.glassfish.jersey.containers:**</exclude>
+                    <exclude>org.glassfish.jersey.core:**</exclude>
                   </excludes>
                   <message>
                     Use shaded jersey instead
@@ -2274,13 +2286,11 @@
         <groupId>org.hamcrest</groupId>
         <artifactId>hamcrest-core</artifactId>
         <version>${hamcrest.version}</version>
-        <scope>test</scope>
       </dependency>
       <dependency>
         <groupId>org.hamcrest</groupId>
         <artifactId>hamcrest-library</artifactId>
         <version>${hamcrest.version}</version>
-        <scope>test</scope>
       </dependency>
       <dependency>
         <groupId>org.mockito</groupId>
