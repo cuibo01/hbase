@@ -137,7 +137,6 @@ import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
 import org.apache.hadoop.hbase.monitoring.MonitoredTask;
 import org.apache.hadoop.hbase.monitoring.TaskMonitor;
-import org.apache.hadoop.hbase.regionserver.HRegion.RegionScannerImpl;
 import org.apache.hadoop.hbase.regionserver.Region.Operation;
 import org.apache.hadoop.hbase.regionserver.Region.RowLock;
 import org.apache.hadoop.hbase.regionserver.TestHStore.FaultyFileSystem;
@@ -3768,7 +3767,7 @@ public class TestHRegion {
     region.put(put);
 
     Scan scan = null;
-    HRegion.RegionScannerImpl is = null;
+    RegionScannerImpl is = null;
 
     // Testing to see how many scanners that is produced by getScanner,
     // starting
@@ -7646,7 +7645,7 @@ public class TestHRegion {
         LOG.warn("hbase.hstore.compaction.complete is set to false");
         List<HStoreFile> sfs = new ArrayList<>(newFiles.size());
         final boolean evictOnClose =
-            cacheConf != null? cacheConf.shouldEvictOnClose(): true;
+            getCacheConfig() != null? getCacheConfig().shouldEvictOnClose(): true;
         for (Path newFile : newFiles) {
           // Create storefile around what we wrote with a reader on it.
           HStoreFile sf = createStoreFileAndReader(newFile);
