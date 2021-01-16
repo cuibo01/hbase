@@ -82,7 +82,6 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotDisabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.UnknownRegionException;
-import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.MasterSwitchType;
 import org.apache.hadoop.hbase.client.RegionInfo;
@@ -1074,12 +1073,10 @@ public class HMaster extends HRegionServer implements MasterServices {
     this.assignmentManager.joinCluster();
     // The below depends on hbase:meta being online.
     this.tableStateManager.start();
-    // Below has to happen after tablestatemanager has started in the case where this hbase-2.x
-    // is being started over an hbase-1.x dataset. tablestatemanager runs a migration as part
-    // of its 'start' moving table state from zookeeper to hbase:meta. This migration needs to
-    // complete before we do this next step processing offline regions else it fails reading
-    // table states messing up master launch (namespace table, etc., are not assigned).
     this.assignmentManager.processOfflineRegions();
+    // this must be called after the above processOfflineRegions to prevent race
+    this.assignmentManager.wakeMetaLoadedEvent();
+
     // Initialize after meta is up as below scans meta
     if (favoredNodesManager != null && !maintenanceMode) {
       SnapshotOfRegionAssignmentFromMeta snapshotOfRegionAssignment =
@@ -1234,7 +1231,7 @@ public class HMaster extends HRegionServer implements MasterServices {
           ri.getRegionNameAsString(), rs, optProc.isPresent());
       // Check once-a-minute.
       if (rc == null) {
-        rc = new RetryCounterFactory(1000).create();
+        rc = new RetryCounterFactory(Integer.MAX_VALUE, 1000, 60_000).create();
       }
       Threads.sleep(rc.getBackoffTimeAndIncrementAttempts());
     }
@@ -2687,7 +2684,7 @@ public class HMaster extends HRegionServer implements MasterServices {
     return status;
   }
 
-  private List<ServerName> getBackupMasters() throws InterruptedIOException {
+  List<ServerName> getBackupMasters() throws InterruptedIOException {
     // Build Set of backup masters from ZK nodes
     List<String> backupMasterStrings;
     try {
@@ -2967,6 +2964,19 @@ public class HMaster extends HRegionServer implements MasterServices {
   @Override
   public boolean isInitialized() {
     return initialized.isReady();
+  }
+
+  /**
+   * Report whether this master is started
+   *
+   * This method is used for testing.
+   *
+   * @return true if master is ready to go, false if not.
+   */
+
+  @Override
+  public boolean isOnline() {
+    return serviceStarted;
   }
 
   /**
@@ -3825,8 +3835,15 @@ public class HMaster extends HRegionServer implements MasterServices {
       List<ReplicationLoadSource> replicationLoadSources =
           getServerManager().getLoad(serverName).getReplicationLoadSourceList();
       for (ReplicationLoadSource replicationLoadSource : replicationLoadSources) {
-        replicationLoadSourceMap.get(replicationLoadSource.getPeerID())
-            .add(new Pair<>(serverName, replicationLoadSource));
+        List<Pair<ServerName, ReplicationLoadSource>> replicationLoadSourceList =
+          replicationLoadSourceMap.get(replicationLoadSource.getPeerID());
+        if (replicationLoadSourceList == null) {
+          LOG.debug("{} does not exist, but it exists "
+            + "in znode(/hbase/replication/rs). when the rs restarts, peerId is deleted, so "
+            + "we just need to ignore it", replicationLoadSource.getPeerID());
+          continue;
+        }
+        replicationLoadSourceList.add(new Pair<>(serverName, replicationLoadSource));
       }
     }
     for (List<Pair<ServerName, ReplicationLoadSource>> loads : replicationLoadSourceMap.values()) {

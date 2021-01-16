@@ -20,6 +20,128 @@
 # Be careful doing manual edits in this file. Do not change format
 # of release header or remove the below marker. This file is generated.
 # DO NOT REMOVE THIS MARKER; FOR INTERPOLATING CHANGES!-->
+# HBASE  2.3.4 Release Notes
+
+These release notes cover new developer and user-facing incompatibilities, important issues, features, and major improvements.
+
+
+---
+
+* [HBASE-25449](https://issues.apache.org/jira/browse/HBASE-25449) | *Major* | **'dfs.client.read.shortcircuit' should not be set in hbase-default.xml**
+
+The presence of HDFS short-circuit read configuration properties in hbase-default.xml inadvertently causes short-circuit reads to not happen inside of RegionServers, despite short-circuit reads being enabled in hdfs-site.xml.
+
+
+---
+
+* [HBASE-25441](https://issues.apache.org/jira/browse/HBASE-25441) | *Critical* | **add security check for some APIs in RSRpcServices**
+
+RsRpcServices APIs that can be accessed only through Admin rights:
+- stopServer
+- updateFavoredNodes
+- updateConfiguration
+- clearRegionBlockCache
+- clearSlowLogsResponses
+
+
+---
+
+* [HBASE-25432](https://issues.apache.org/jira/browse/HBASE-25432) | *Blocker* | **we should add security checks for setTableStateInMeta and fixMeta**
+
+setTableStateInMeta and fixMeta can be accessed only through Admin rights
+
+
+---
+
+* [HBASE-25318](https://issues.apache.org/jira/browse/HBASE-25318) | *Minor* | **Configure where IntegrationTestImportTsv generates HFiles**
+
+Added IntegrationTestImportTsv.generatedHFileFolder configuration property to override the default location in IntegrationTestImportTsv. Useful for running the integration test when HDFS Transparent Encryption is enabled.
+
+
+---
+
+* [HBASE-25456](https://issues.apache.org/jira/browse/HBASE-25456) | *Critical* | **setRegionStateInMeta need security check**
+
+setRegionStateInMeta can be accessed only through Admin rights
+
+
+---
+
+* [HBASE-25237](https://issues.apache.org/jira/browse/HBASE-25237) | *Major* | **'hbase master stop' shuts down the cluster, not the master only**
+
+\`hbase master stop\` should shutdown only master by default. 
+1. Help added to \`hbase master stop\`:
+To stop cluster, use \`stop-hbase.sh\` or \`hbase master stop --shutDownCluster\`
+
+2. Help added to \`stop-hbase.sh\`:
+stop-hbase.sh can only be used for shutting down entire cluster. To shut down (HMaster\|HRegionServer) use hbase-daemon.sh stop (master\|regionserver)
+
+
+---
+
+* [HBASE-25238](https://issues.apache.org/jira/browse/HBASE-25238) | *Critical* | **Upgrading HBase from 2.2.0 to 2.3.x fails because of “Message missing required fields: state”**
+
+Fixes master procedure store migration issues going from 2.0.x to 2.2.x and/or 2.3.x. Also fixes failed heartbeat parse during rolling upgrade from 2.0.x. to 2.3.x.
+
+
+---
+
+* [HBASE-25234](https://issues.apache.org/jira/browse/HBASE-25234) | *Major* | **[Upgrade]Incompatibility in reading RS report from 2.1 RS when Master is upgraded to a version containing HBASE-21406**
+
+Fixes so auto-migration of master procedure store works again going from 2.0.x =\> 2.2+. Also make it so heartbeats work when rolling upgrading from 2.0.x =\> 2.3+.
+
+
+---
+
+* [HBASE-25224](https://issues.apache.org/jira/browse/HBASE-25224) | *Major* | **Maximize sleep for checking meta and namespace regions availability**
+
+Changed the max sleep time during meta and namespace regions availability check to be 60 sec. Previously there was no such cap
+
+
+
+# HBASE  2.3.3 Release Notes
+
+These release notes cover new developer and user-facing incompatibilities, important issues, features, and major improvements.
+
+
+---
+
+* [HBASE-25163](https://issues.apache.org/jira/browse/HBASE-25163) | *Major* | **Increase the timeout value for nightly jobs**
+
+Increase timeout value for nightly jobs to 16 hours since the new build machines are dedicated to hbase project, so we are allowed to use it all the time.
+
+
+---
+
+* [HBASE-22976](https://issues.apache.org/jira/browse/HBASE-22976) | *Major* | **[HBCK2] Add RecoveredEditsPlayer**
+
+WALPlayer can replay the content of recovered.edits directories.
+
+Side-effect is that WAL filename timestamp is now factored when setting start/end times for WALInputFormat; i.e. wal.start.time and wal.end.time values on a job context. Previous we looked at wal.end.time only. Now we consider wal.start.time too. If a file has a name outside of wal.start.time\<-\>wal.end.time, it'll be by-passed. This change-in-behavior will make it easier on operator crafting timestamp filters processing WALs.
+
+
+---
+
+* [HBASE-25154](https://issues.apache.org/jira/browse/HBASE-25154) | *Major* | **Set java.io.tmpdir to project build directory to avoid writing std\*deferred files to /tmp**
+
+Change the java.io.tmpdir to project.build.directory in surefire-maven-plugin, to avoid writing std\*deferred files to /tmp which may blow up the /tmp disk on our jenkins build node.
+
+
+---
+
+* [HBASE-25109](https://issues.apache.org/jira/browse/HBASE-25109) | *Major* | **Add MR Counters to WALPlayer; currently hard to tell if it is doing anything**
+
+Adds a WALPlayer to MR Counter output:
+
+	org.apache.hadoop.hbase.mapreduce.WALPlayer$Counter
+		CELLS\_READ=89574
+		CELLS\_WRITTEN=89572
+		DELETES=64
+		PUTS=5305
+		WALEDITS=4375
+
+
+
 # HBASE  2.3.2 Release Notes
 
 These release notes cover new developer and user-facing incompatibilities, important issues, features, and major improvements.

@@ -44,6 +44,7 @@ public class MetricsRegionServer {
       "hbase.regionserver.enable.table.latencies";
   public static final boolean RS_ENABLE_TABLE_METRICS_DEFAULT = true;
 
+  public static final String SLOW_METRIC_TIME = "hbase.ipc.slow.metric.time";
   private final MetricsRegionServerSource serverSource;
   private final MetricsRegionServerWrapper regionServerWrapper;
   private RegionServerTableMetrics tableMetrics;
@@ -55,6 +56,8 @@ public class MetricsRegionServer {
   private Timer bulkLoadTimer;
   private Meter serverReadQueryMeter;
   private Meter serverWriteQueryMeter;
+  protected long slowMetricTime;
+  protected static final int DEFAULT_SLOW_METRIC_TIME = 1000; // milliseconds
 
   public MetricsRegionServer(MetricsRegionServerWrapper regionServerWrapper, Configuration conf,
       MetricsTable metricsTable) {
@@ -70,6 +73,7 @@ public class MetricsRegionServer {
     // create and use metrics from the new hbase-metrics based registry.
     bulkLoadTimer = metricRegistry.timer("Bulkload");
 
+    slowMetricTime = conf.getLong(SLOW_METRIC_TIME, DEFAULT_SLOW_METRIC_TIME);
     serverReadQueryMeter = metricRegistry.meter("ServerReadQueryPerSecond");
     serverWriteQueryMeter = metricRegistry.meter("ServerWriteQueryPerSecond");
     quotaSource = CompatibilitySingletonFactory.getInstance(MetricsRegionServerQuotaSource.class);
@@ -113,15 +117,15 @@ public class MetricsRegionServer {
     if (tableMetrics != null && tn != null) {
       tableMetrics.updatePutBatch(tn, t);
     }
-    if (t > 1000) {
-      serverSource.incrSlowPut();
-    }
     serverSource.updatePutBatch(t);
   }
 
   public void updatePut(TableName tn, long t) {
     if (tableMetrics != null && tn != null) {
       tableMetrics.updatePut(tn, t);
+    }
+    if (t > slowMetricTime) {
+      serverSource.incrSlowPut();
     }
     serverSource.updatePut(t);
     userAggregate.updatePut(t);
@@ -131,6 +135,9 @@ public class MetricsRegionServer {
     if (tableMetrics != null && tn != null) {
       tableMetrics.updateDelete(tn, t);
     }
+    if (t > slowMetricTime) {
+      serverSource.incrSlowDelete();
+    }
     serverSource.updateDelete(t);
     userAggregate.updateDelete(t);
   }
@@ -139,17 +146,20 @@ public class MetricsRegionServer {
     if (tableMetrics != null && tn != null) {
       tableMetrics.updateDeleteBatch(tn, t);
     }
-    if (t > 1000) {
-      serverSource.incrSlowDelete();
-    }
     serverSource.updateDeleteBatch(t);
   }
 
-  public void updateCheckAndDelete(long t) {
+  public void updateCheckAndDelete(TableName tn, long t) {
+    if (tableMetrics != null && tn != null) {
+      tableMetrics.updateCheckAndDelete(tn, t);
+    }
     serverSource.updateCheckAndDelete(t);
   }
 
-  public void updateCheckAndPut(long t) {
+  public void updateCheckAndPut(TableName tn, long t) {
+    if (tableMetrics != null && tn != null) {
+      tableMetrics.updateCheckAndPut(tn, t);
+    }
     serverSource.updateCheckAndPut(t);
   }
 
@@ -157,7 +167,7 @@ public class MetricsRegionServer {
     if (tableMetrics != null && tn != null) {
       tableMetrics.updateGet(tn, t);
     }
-    if (t > 1000) {
+    if (t > slowMetricTime) {
       serverSource.incrSlowGet();
     }
     serverSource.updateGet(t);
@@ -168,7 +178,7 @@ public class MetricsRegionServer {
     if (tableMetrics != null && tn != null) {
       tableMetrics.updateIncrement(tn, t);
     }
-    if (t > 1000) {
+    if (t > slowMetricTime) {
       serverSource.incrSlowIncrement();
     }
     serverSource.updateIncrement(t);
@@ -179,7 +189,7 @@ public class MetricsRegionServer {
     if (tableMetrics != null && tn != null) {
       tableMetrics.updateAppend(tn, t);
     }
-    if (t > 1000) {
+    if (t > slowMetricTime) {
       serverSource.incrSlowAppend();
     }
     serverSource.updateAppend(t);
