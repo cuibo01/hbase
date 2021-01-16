@@ -119,7 +119,6 @@ import org.apache.hadoop.hbase.quotas.RegionServerRpcQuotaManager;
 import org.apache.hadoop.hbase.quotas.RegionServerSpaceQuotaManager;
 import org.apache.hadoop.hbase.quotas.SpaceQuotaSnapshot;
 import org.apache.hadoop.hbase.quotas.SpaceViolationPolicyEnforcement;
-import org.apache.hadoop.hbase.regionserver.HRegion.RegionScannerImpl;
 import org.apache.hadoop.hbase.regionserver.LeaseManager.Lease;
 import org.apache.hadoop.hbase.regionserver.LeaseManager.LeaseStillHeldException;
 import org.apache.hadoop.hbase.regionserver.Region.Operation;
@@ -999,8 +998,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
         Arrays.sort(mArray, (v1, v2) -> Row.COMPARATOR.compare(v1, v2));
       }
 
-      OperationStatus[] codes = region.batchMutate(mArray, atomic, HConstants.NO_NONCE,
-        HConstants.NO_NONCE);
+      OperationStatus[] codes = region.batchMutate(mArray, atomic);
 
       // When atomic is true, it indicates that the mutateRow API or the batch API with
       // RowMutations is called. In this case, we need to merge the results of the
@@ -2323,6 +2321,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   @QosPriority(priority=HConstants.ADMIN_QOS)
   public StopServerResponse stopServer(final RpcController controller,
       final StopServerRequest request) throws ServiceException {
+    rpcPreCheck("stopServer");
     requestCount.increment();
     String reason = request.getReason();
     regionServer.stop(reason);
@@ -2332,6 +2331,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   @Override
   public UpdateFavoredNodesResponse updateFavoredNodes(RpcController controller,
       UpdateFavoredNodesRequest request) throws ServiceException {
+    rpcPreCheck("updateFavoredNodes");
     List<UpdateFavoredNodesRequest.RegionUpdateInfo> openInfoList = request.getUpdateInfoList();
     UpdateFavoredNodesResponse.Builder respBuilder = UpdateFavoredNodesResponse.newBuilder();
     for (UpdateFavoredNodesRequest.RegionUpdateInfo regionUpdateInfo : openInfoList) {
@@ -3693,6 +3693,7 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
       RpcController controller, UpdateConfigurationRequest request)
       throws ServiceException {
     try {
+      requirePermission("updateConfiguration", Permission.Action.ADMIN);
       this.regionServer.updateConfiguration();
     } catch (Exception e) {
       throw new ServiceException(e);
@@ -3725,7 +3726,8 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
 
   @Override
   public ClearRegionBlockCacheResponse clearRegionBlockCache(RpcController controller,
-      ClearRegionBlockCacheRequest request) {
+      ClearRegionBlockCacheRequest request) throws ServiceException {
+    rpcPreCheck("clearRegionBlockCache");
     ClearRegionBlockCacheResponse.Builder builder =
         ClearRegionBlockCacheResponse.newBuilder();
     CacheEvictionStatsBuilder stats = CacheEvictionStats.builder();
@@ -3878,7 +3880,8 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
   @Override
   @QosPriority(priority = HConstants.ADMIN_QOS)
   public ClearSlowLogResponses clearSlowLogsResponses(final RpcController controller,
-    final ClearSlowLogResponseRequest request) {
+    final ClearSlowLogResponseRequest request) throws ServiceException {
+    rpcPreCheck("clearSlowLogsResponses");
     final NamedQueueRecorder namedQueueRecorder =
       this.regionServer.getNamedQueueRecorder();
     boolean slowLogsCleaned = Optional.ofNullable(namedQueueRecorder)
