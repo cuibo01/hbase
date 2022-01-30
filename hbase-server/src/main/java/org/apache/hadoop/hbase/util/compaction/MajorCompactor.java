@@ -44,6 +44,7 @@ import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -201,8 +202,7 @@ public class MajorCompactor extends Configured implements Tool {
 
   protected Optional<MajorCompactionRequest> getMajorCompactionRequest(RegionInfo hri)
       throws IOException {
-    return MajorCompactionRequest.newRequest(connection.getConfiguration(), hri, storesToCompact,
-            timestamp);
+    return MajorCompactionRequest.newRequest(connection, hri, storesToCompact, timestamp);
   }
 
   private Collection<ServerName> getServersToCompact(Set<ServerName> snSet) {
@@ -351,8 +351,7 @@ public class MajorCompactor extends Configured implements Tool {
       for (HRegionLocation location : locations) {
         if (location.getRegion().getRegionId() > timestamp) {
           Optional<MajorCompactionRequest> compactionRequest = MajorCompactionRequest
-              .newRequest(connection.getConfiguration(), location.getRegion(), storesToCompact,
-                  timestamp);
+              .newRequest(connection, location.getRegion(), storesToCompact, timestamp);
           compactionRequest.ifPresent(request -> clusterCompactionQueues
               .addToCompactionQueue(location.getServerName(), request));
         }
@@ -487,7 +486,8 @@ public class MajorCompactor extends Configured implements Tool {
     Configuration configuration = getConf();
     int concurrency = Integer.parseInt(commandLine.getOptionValue("servers"));
     long minModTime = Long.parseLong(
-        commandLine.getOptionValue("minModTime", String.valueOf(System.currentTimeMillis())));
+        commandLine.getOptionValue("minModTime",
+          String.valueOf(EnvironmentEdgeManager.currentTime())));
     String quorum =
         commandLine.getOptionValue("zk", configuration.get(HConstants.ZOOKEEPER_QUORUM));
     String rootDir = commandLine.getOptionValue("rootDir", configuration.get(HConstants.HBASE_DIR));

@@ -32,7 +32,7 @@ import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.ClusterMetrics.Option;
 import org.apache.hadoop.hbase.CompareOperator;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.RegionMetrics;
 import org.apache.hadoop.hbase.ServerMetrics;
 import org.apache.hadoop.hbase.ServerName;
@@ -58,7 +58,6 @@ import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.filter.BinaryComparator;
 import org.apache.hadoop.hbase.filter.RowFilter;
 import org.apache.hadoop.hbase.filter.SingleColumnValueFilter;
-import org.apache.hadoop.hbase.master.LoadBalancer;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.AfterClass;
@@ -80,7 +79,7 @@ public class TestRegionServerReadRequestMetrics {
 
   private static final Logger LOG =
       LoggerFactory.getLogger(TestRegionServerReadRequestMetrics.class);
-  private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+  private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static final TableName TABLE_NAME = TableName.valueOf("test");
   private static final byte[] CF1 = Bytes.toBytes("c1");
   private static final byte[] CF2 = Bytes.toBytes("c2");
@@ -109,9 +108,6 @@ public class TestRegionServerReadRequestMetrics {
 
   @BeforeClass
   public static void setUpOnce() throws Exception {
-    // Default starts one regionserver only.
-    TEST_UTIL.getConfiguration().setBoolean(LoadBalancer.TABLES_ON_MASTER, true);
-    // TEST_UTIL.getConfiguration().setBoolean(LoadBalancer.SYSTEM_TABLES_ON_MASTER, true);
     TEST_UTIL.startMiniCluster();
     admin = TEST_UTIL.getAdmin();
     serverNames = admin.getClusterMetrics(EnumSet.of(Option.LIVE_SERVERS))
@@ -146,16 +142,6 @@ public class TestRegionServerReadRequestMetrics {
 
     assertEquals(expectedReadRequests,
       requestsMap.get(Metric.REGION_READ) - requestsMapPrev.get(Metric.REGION_READ));
-    boolean tablesOnMaster = LoadBalancer.isTablesOnMaster(TEST_UTIL.getConfiguration());
-    if (tablesOnMaster) {
-      // If NO tables on master, then the single regionserver in this test carries user-space
-      // tables and the meta table. The first time through, the read will be inflated by meta
-      // lookups. We don't know which test will be first through since junit randomizes. This
-      // method is used by a bunch of tests. Just do this check if master is hosting (system)
-      // regions only.
-      assertEquals(expectedReadRequests,
-      requestsMap.get(Metric.SERVER_READ) - requestsMapPrev.get(Metric.SERVER_READ));
-    }
     assertEquals(expectedFilteredReadRequests,
       requestsMap.get(Metric.FILTERED_REGION_READ)
         - requestsMapPrev.get(Metric.FILTERED_REGION_READ));

@@ -20,6 +20,7 @@
 package org.apache.hadoop.hbase.thrift;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.CallDroppedException;
 import org.apache.hadoop.hbase.CallQueueTooBigException;
 import org.apache.hadoop.hbase.CompatibilitySingletonFactory;
 import org.apache.hadoop.hbase.MultiActionResultTooLarge;
@@ -31,9 +32,13 @@ import org.apache.hadoop.hbase.exceptions.FailedSanityCheckException;
 import org.apache.hadoop.hbase.exceptions.OutOfOrderScannerNextException;
 import org.apache.hadoop.hbase.exceptions.RegionMovedException;
 import org.apache.hadoop.hbase.exceptions.ScannerResetException;
+import org.apache.hadoop.hbase.quotas.QuotaExceededException;
+import org.apache.hadoop.hbase.quotas.RpcThrottlingException;
 import org.apache.hadoop.hbase.thrift.generated.IOError;
 import org.apache.hadoop.hbase.thrift2.generated.TIOError;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This class is for maintaining the various statistics of thrift server
@@ -42,6 +47,7 @@ import org.apache.yetus.audience.InterfaceAudience;
 @InterfaceAudience.Private
 public class ThriftMetrics  {
 
+  private static final Logger LOG = LoggerFactory.getLogger(ThriftMetrics.class);
 
   public enum ThriftServerType {
     ONE,
@@ -145,6 +151,14 @@ public class ThriftMetrics  {
         source.multiActionTooLargeException();
       } else if (throwable instanceof CallQueueTooBigException) {
         source.callQueueTooBigException();
+      } else if (throwable instanceof QuotaExceededException) {
+        source.quotaExceededException();
+      } else if (throwable instanceof RpcThrottlingException) {
+        source.rpcThrottlingException();
+      } else if (throwable instanceof CallDroppedException) {
+        source.callDroppedException();
+      } else if (LOG.isDebugEnabled()) {
+        LOG.debug("Unknown exception type", throwable);
       }
     }
   }

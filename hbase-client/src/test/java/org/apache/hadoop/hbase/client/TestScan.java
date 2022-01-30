@@ -24,7 +24,6 @@ import static org.junit.Assert.fail;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Set;
-
 import org.apache.commons.lang3.builder.EqualsBuilder;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
@@ -39,6 +38,7 @@ import org.junit.Assert;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos;
 
@@ -248,7 +248,6 @@ public class TestScan {
         .setRowOffsetPerColumnFamily(5)
         .setRowPrefixFilter(Bytes.toBytes("row_"))
         .setScanMetricsEnabled(true)
-        .setSmall(true)
         .setReadType(ReadType.STREAM)
         .withStartRow(Bytes.toBytes("row_1"))
         .withStopRow(Bytes.toBytes("row_2"))
@@ -291,5 +290,13 @@ public class TestScan {
 
     assertTrue("Make sure copy constructor adds all the fields in the copied object",
       EqualsBuilder.reflectionEquals(scan, scanCopy));
+  }
+
+  @Test
+  public void testScanReadType() throws Exception {
+    Scan scan = new Scan();
+    assertEquals(ReadType.DEFAULT, scan.getReadType());
+    Scan copyScan = new Scan(scan);
+    assertEquals(ReadType.DEFAULT, copyScan.getReadType());
   }
 }

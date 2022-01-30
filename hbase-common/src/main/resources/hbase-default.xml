@@ -594,6 +594,13 @@ possible configurations would overwhelm and obscure the important.
     0 means never give up.</description>
   </property>
   <property>
+    <name>hbase.compaction.after.bulkload.enable</name>
+    <value>false</value>
+    <description>Request Compaction after bulkload immediately.
+      If bulkload is continuous, the triggered compactions may increase load,
+      bring about performance side effect.</description>
+  </property>
+  <property>
     <name>hbase.master.balancer.maxRitPercent</name>
     <value>1.0</value>
     <description>The max percent of regions in transition when balancing.
@@ -632,7 +639,7 @@ possible configurations would overwhelm and obscure the important.
     <description>Whether to merge a region as part of normalization.</description>
   </property>
   <property>
-    <name>hbase.normalizer.min.region.count</name>
+    <name>hbase.normalizer.merge.min.region.count</name>
     <value>3</value>
     <description>The minimum number of regions in a table to consider it for merge
       normalization.</description>
@@ -652,6 +659,13 @@ possible configurations would overwhelm and obscure the important.
     <value>1</value>
     <description>The minimum size for a region to be considered for a merge, in whole
       MBs.</description>
+  </property>
+  <property>
+    <name>hbase.table.normalization.enabled</name>
+    <value>false</value>
+    <description>This config is used to set default behaviour of normalizer at table level.
+      To override this at table level one can set NORMALIZATION_ENABLED at table descriptor level
+      and that property will be honored</description>
   </property>
   <property>
     <name>hbase.server.thread.wakefrequency</name>
@@ -1215,6 +1229,14 @@ possible configurations would overwhelm and obscure the important.
       MUST BE DISABLED for secure operation.</description>
   </property>
   <property>
+    <name>hbase.unsafe.client.kerberos.hostname.disable.reversedns</name>
+    <value>false</value>
+    <description>This config is for experts: don't set its value unless you really know what you are doing.
+      When set to true, HBase client using SASL Kerberos will skip reverse DNS lookup and use provided
+      hostname of the destination for the principal instead. See https://issues.apache.org/jira/browse/HBASE-25665
+      for more details.</description>
+  </property>
+  <property>
     <name>hbase.display.keys</name>
     <value>true</value>
     <description>When this is set to true the webUI and such will display all start/end keys
@@ -1720,11 +1742,8 @@ possible configurations would overwhelm and obscure the important.
     <value>false</value>
     <description>
       Whether asynchronous WAL replication to the secondary region replicas is enabled or not.
-      If this is enabled, a replication peer named "region_replica_replication" will be created
-      which will tail the logs and replicate the mutations to region replicas for tables that
-      have region replication > 1. If this is enabled once, disabling this replication also
-      requires disabling the replication peer using shell or Admin java class.
-      Replication to secondary region replicas works over standard inter-cluster replication.
+      We have a separated implementation for replicating the WAL without using the general
+      inter-cluster replication framework, so now we will not add any replication peers.
     </description>
   </property>
   <property>
@@ -1992,7 +2011,7 @@ possible configurations would overwhelm and obscure the important.
   </property>
   <property>
     <name>hbase.namedqueue.provider.classes</name>
-    <value>org.apache.hadoop.hbase.namequeues.impl.SlowLogQueueService,org.apache.hadoop.hbase.namequeues.impl.BalancerDecisionQueueService</value>
+    <value>org.apache.hadoop.hbase.namequeues.impl.SlowLogQueueService,org.apache.hadoop.hbase.namequeues.impl.BalancerDecisionQueueService,org.apache.hadoop.hbase.namequeues.impl.BalancerRejectionQueueService</value>
     <description>
       Default values for NamedQueueService implementors. This comma separated full class names
       represent all implementors of NamedQueueService that we would like to be invoked by
@@ -2009,6 +2028,34 @@ possible configurations would overwhelm and obscure the important.
       Indicates whether active HMaster has ring buffer running for storing
       balancer decisions in FIFO manner with limited entries. The size of
       the ring buffer is indicated by config: hbase.master.balancer.decision.queue.size
+    </description>
+  </property>
+  <property>
+    <name>hbase.master.balancer.rejection.buffer.enabled</name>
+    <value>false</value>
+    <description>
+      Indicates whether active HMaster has ring buffer running for storing
+      balancer rejection in FIFO manner with limited entries. The size of
+      the ring buffer is indicated by config: hbase.master.balancer.rejection.queue.size
+    </description>
+  </property>
+  <property>
+    <name>hbase.locality.inputstream.derive.enabled</name>
+    <value>false</value>
+    <description>
+      If true, derive StoreFile locality metrics from the underlying DFSInputStream
+      backing reads for that StoreFile. This value will update as the DFSInputStream's
+      block locations are updated over time. Otherwise, locality is computed on StoreFile
+      open, and cached until the StoreFile is closed.
+    </description>
+  </property>
+  <property>
+    <name>hbase.locality.inputstream.derive.cache.period</name>
+    <value>60000</value>
+    <description>
+      If deriving StoreFile locality metrics from the underlying DFSInputStream, how
+      long should the derived values be cached for. The derivation process may involve
+      hitting the namenode, if the DFSInputStream's block list is incomplete.
     </description>
   </property>
 </configuration>

@@ -32,6 +32,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.hadoop.conf.Configuration;
@@ -40,17 +41,12 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Abortable;
-import org.apache.hadoop.hbase.ChoreService;
-import org.apache.hadoop.hbase.CoordinatedStateManager;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
-import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.Waiter;
 import org.apache.hadoop.hbase.ZooKeeperConnectionException;
-import org.apache.hadoop.hbase.client.AsyncClusterConnection;
-import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationQueueStorage;
@@ -58,6 +54,8 @@ import org.apache.hadoop.hbase.replication.ReplicationStorageFactory;
 import org.apache.hadoop.hbase.replication.master.ReplicationLogCleaner;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.MockServer;
 import org.apache.hadoop.hbase.zookeeper.RecoverableZooKeeper;
 import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 import org.apache.zookeeper.KeeperException;
@@ -80,7 +78,7 @@ public class TestLogsCleaner {
       HBaseClassTestRule.forClass(TestLogsCleaner.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestLogsCleaner.class);
-  private final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+  private final static HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
 
   private static final Path OLD_WALS_DIR =
       new Path(TEST_UTIL.getDataTestDir(), HConstants.HREGION_OLDLOGDIR_NAME);
@@ -96,7 +94,7 @@ public class TestLogsCleaner {
   public static void setUpBeforeClass() throws Exception {
     TEST_UTIL.startMiniZKCluster();
     TEST_UTIL.startMiniDFSCluster(1);
-    POOL = new DirScanPool(TEST_UTIL.getConfiguration());
+    POOL = DirScanPool.getLogCleanerScanPool(TEST_UTIL.getConfiguration());
   }
 
   @AfterClass
@@ -154,7 +152,7 @@ public class TestLogsCleaner {
     final FileSystem fs = FileSystem.get(conf);
     fs.mkdirs(OLD_PROCEDURE_WALS_DIR);
 
-    final long now = System.currentTimeMillis();
+    final long now = EnvironmentEdgeManager.currentTime();
 
     // Case 1: 2 invalid files, which would be deleted directly
     fs.createNewFile(new Path(OLD_WALS_DIR, "a"));
@@ -230,8 +228,8 @@ public class TestLogsCleaner {
     ReplicationLogCleaner cleaner = new ReplicationLogCleaner();
 
     List<FileStatus> dummyFiles = Arrays.asList(
-        new FileStatus(100, false, 3, 100, System.currentTimeMillis(), new Path("log1")),
-        new FileStatus(100, false, 3, 100, System.currentTimeMillis(), new Path("log2"))
+      new FileStatus(100, false, 3, 100, EnvironmentEdgeManager.currentTime(), new Path("log1")),
+      new FileStatus(100, false, 3, 100, EnvironmentEdgeManager.currentTime(), new Path("log2"))
     );
 
     FaultyZooKeeperWatcher faultyZK =
@@ -290,7 +288,7 @@ public class TestLogsCleaner {
 
     // Subtract 1000 from current time so modtime is for sure older
     // than 'now'.
-    long modTime = System.currentTimeMillis() - 1000;
+    long modTime = EnvironmentEdgeManager.currentTime() - 1000;
     List<FileStatus> dummyFiles = Arrays.asList(
         new FileStatus(100, false, 3, 100, modTime, new Path("log1")),
         new FileStatus(100, false, 3, 100, modTime, new Path("log2"))
@@ -356,7 +354,7 @@ public class TestLogsCleaner {
     }
   }
 
-  static class DummyServer implements Server {
+  static class DummyServer extends MockServer {
 
     @Override
     public Configuration getConfiguration() {
@@ -370,62 +368,6 @@ public class TestLogsCleaner {
       } catch (IOException e) {
         e.printStackTrace();
       }
-      return null;
-    }
-
-    @Override
-    public CoordinatedStateManager getCoordinatedStateManager() {
-      return null;
-    }
-
-    @Override
-    public Connection getConnection() {
-      return null;
-    }
-
-    @Override
-    public ServerName getServerName() {
-      return ServerName.valueOf("regionserver,60020,000000");
-    }
-
-    @Override
-    public void abort(String why, Throwable e) {}
-
-    @Override
-    public boolean isAborted() {
-      return false;
-    }
-
-    @Override
-    public void stop(String why) {}
-
-    @Override
-    public boolean isStopped() {
-      return false;
-    }
-
-    @Override
-    public ChoreService getChoreService() {
-      return null;
-    }
-
-    @Override
-    public FileSystem getFileSystem() {
-      return null;
-    }
-
-    @Override
-    public boolean isStopping() {
-      return false;
-    }
-
-    @Override
-    public Connection createConnection(Configuration conf) throws IOException {
-      return null;
-    }
-
-    @Override
-    public AsyncClusterConnection getAsyncClusterConnection() {
       return null;
     }
   }

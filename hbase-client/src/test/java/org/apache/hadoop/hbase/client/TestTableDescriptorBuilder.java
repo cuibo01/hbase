@@ -149,6 +149,20 @@ public class TestTableDescriptorBuilder {
   }
 
   /**
+   * Test removing cps in the table description that does not exist
+   * @throws Exception if removing a coprocessor fails other than IllegalArgumentException
+   */
+  @Test(expected = IllegalArgumentException.class)
+  public void testRemoveNonExistingCoprocessor() throws Exception {
+    String className = "org.apache.hadoop.hbase.coprocessor.SimpleRegionObserver";
+    TableDescriptor desc = TableDescriptorBuilder
+      .newBuilder(TableName.valueOf(name.getMethodName()))
+      .build();
+    assertFalse(desc.hasCoprocessor(className));
+    TableDescriptorBuilder.newBuilder(desc).removeCoprocessor(className).build();
+  }
+
+  /**
    * Test that we add and remove strings from settings properly.
    */
   @Test
@@ -339,13 +353,15 @@ public class TestTableDescriptorBuilder {
   public void testStringCustomizedValues() throws HBaseException {
     byte[] familyName = Bytes.toBytes("cf");
     ColumnFamilyDescriptor hcd =
-      ColumnFamilyDescriptorBuilder.newBuilder(familyName).setBlocksize(1000).build();
-    TableDescriptor htd = TableDescriptorBuilder.newBuilder(TableName.valueOf(name.getMethodName()))
+      ColumnFamilyDescriptorBuilder.newBuilder(familyName).setBlocksize(131072).build();
+    TableDescriptor htd = TableDescriptorBuilder
+      .newBuilder(TableName.valueOf(name.getMethodName()))
       .setColumnFamily(hcd).setDurability(Durability.ASYNC_WAL).build();
 
     assertEquals(
       "'testStringCustomizedValues', " +
-        "{TABLE_ATTRIBUTES => {DURABILITY => 'ASYNC_WAL'}}, {NAME => 'cf', BLOCKSIZE => '1000'}",
+        "{TABLE_ATTRIBUTES => {DURABILITY => 'ASYNC_WAL'}}, "
+        + "{NAME => 'cf', BLOCKSIZE => '131072 B (128KB)'}",
       htd.toStringCustomizedValues());
 
     htd = TableDescriptorBuilder.newBuilder(htd)
@@ -356,7 +372,8 @@ public class TestTableDescriptorBuilder {
       "'testStringCustomizedValues', " +
         "{TABLE_ATTRIBUTES => {DURABILITY => 'ASYNC_WAL', "
         + "MAX_FILESIZE => '10737942528 B (10GB 512KB)', "
-        + "MEMSTORE_FLUSHSIZE => '268435456 B (256MB)'}}, {NAME => 'cf', BLOCKSIZE => '1000'}",
+        + "MEMSTORE_FLUSHSIZE => '268435456 B (256MB)'}}, "
+        + "{NAME => 'cf', BLOCKSIZE => '131072 B (128KB)'}",
       htd.toStringCustomizedValues());
   }
 
@@ -368,5 +385,23 @@ public class TestTableDescriptorBuilder {
     assertEquals(htd.getValue(RSGroupInfo.TABLE_DESC_PROP_GROUP), groupName);
     htd = TableDescriptorBuilder.newBuilder(htd).setRegionServerGroup(null).build();
     assertNull(htd.getValue(RSGroupInfo.TABLE_DESC_PROP_GROUP));
+  }
+
+  @Test
+  public void testSetEmptyValue() {
+    TableDescriptorBuilder builder =
+      TableDescriptorBuilder.newBuilder(TableName.valueOf(name.getMethodName()));
+    String testValue = "TestValue";
+    // test setValue
+    builder.setValue(testValue, "2");
+    assertEquals("2", builder.build().getValue(testValue));
+    builder.setValue(testValue, "");
+    assertNull(builder.build().getValue(Bytes.toBytes(testValue)));
+
+    // test setFlushPolicyClassName
+    builder.setFlushPolicyClassName("class");
+    assertEquals("class", builder.build().getFlushPolicyClassName());
+    builder.setFlushPolicyClassName("");
+    assertNull(builder.build().getFlushPolicyClassName());
   }
 }

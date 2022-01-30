@@ -25,7 +25,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Waiter;
 import org.apache.hadoop.hbase.client.Admin;
@@ -71,8 +71,8 @@ public class TestReplicator extends TestReplicationBase {
 
     // Replace the peer set up for us by the base class with a wrapper for this test
     hbaseAdmin.addReplicationPeer("testReplicatorBatching",
-      new ReplicationPeerConfig().setClusterKey(UTIL2.getClusterKey())
-          .setReplicationEndpointImpl(ReplicationEndpointForTest.class.getName()));
+      ReplicationPeerConfig.newBuilder().setClusterKey(UTIL2.getClusterKey())
+          .setReplicationEndpointImpl(ReplicationEndpointForTest.class.getName()).build());
 
     ReplicationEndpointForTest.setBatchCount(0);
     ReplicationEndpointForTest.setEntriesCount(0);
@@ -120,8 +120,9 @@ public class TestReplicator extends TestReplicationBase {
 
     // Replace the peer set up for us by the base class with a wrapper for this test
     hbaseAdmin.addReplicationPeer("testReplicatorWithErrors",
-      new ReplicationPeerConfig().setClusterKey(UTIL2.getClusterKey())
-          .setReplicationEndpointImpl(FailureInjectingReplicationEndpointForTest.class.getName()));
+      ReplicationPeerConfig.newBuilder().setClusterKey(UTIL2.getClusterKey())
+        .setReplicationEndpointImpl(FailureInjectingReplicationEndpointForTest.class.getName())
+        .build());
 
     FailureInjectingReplicationEndpointForTest.setBatchCount(0);
     FailureInjectingReplicationEndpointForTest.setEntriesCount(0);
@@ -164,7 +165,7 @@ public class TestReplicator extends TestReplicationBase {
     TestReplicationBase.tearDownAfterClass();
   }
 
-  private void truncateTable(HBaseTestingUtility util, TableName tablename) throws IOException {
+  private void truncateTable(HBaseTestingUtil util, TableName tablename) throws IOException {
     Admin admin = util.getAdmin();
     admin.disableTable(tableName);
     admin.truncateTable(tablename, false);

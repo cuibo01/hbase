@@ -24,6 +24,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -44,17 +45,20 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.PrivateCellUtil;
+import org.apache.hadoop.hbase.TableDescriptors;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
 import org.apache.hadoop.hbase.io.HFileLink;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
@@ -69,12 +73,15 @@ import org.apache.hadoop.hbase.io.hfile.HFileInfo;
 import org.apache.hadoop.hbase.io.hfile.HFileScanner;
 import org.apache.hadoop.hbase.io.hfile.ReaderContext;
 import org.apache.hadoop.hbase.io.hfile.ReaderContextBuilder;
+import org.apache.hadoop.hbase.master.MasterServices;
+import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.util.BloomFilterFactory;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ChecksumType;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.ClassRule;
@@ -101,7 +108,7 @@ public class TestHStoreFile {
     HBaseClassTestRule.forClass(TestHStoreFile.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestHStoreFile.class);
-  private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+  private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private CacheConfig cacheConf = new CacheConfig(TEST_UTIL.getConfiguration());
   private static String ROOT_DIR = TEST_UTIL.getDataTestDir("TestStoreFile").toString();
   private static final ChecksumType CKTYPE = ChecksumType.CRC32C;
@@ -131,14 +138,17 @@ public class TestHStoreFile {
 
   /**
    * Write a file and then assert that we can read from top and bottom halves using two
-   * HalfMapFiles.
+   * HalfMapFiles, as well as one HalfMapFile and one HFileLink file.
    */
   @Test
-  public void testBasicHalfMapFile() throws Exception {
+  public void testBasicHalfAndHFileLinkMapFile() throws Exception {
     final RegionInfo hri =
-      RegionInfoBuilder.newBuilder(TableName.valueOf("testBasicHalfMapFileTb")).build();
+      RegionInfoBuilder.newBuilder(TableName.valueOf("testBasicHalfAndHFileLinkMapFile")).build();
+    // The locations of HFileLink refers hfiles only should be consistent with the table dir
+    // create by CommonFSUtils directory, so we should make the region directory under
+    // the mode of CommonFSUtils.getTableDir here.
     HRegionFileSystem regionFs = HRegionFileSystem.createRegionOnFileSystem(conf, fs,
-      new Path(testDir, hri.getTable().getNameAsString()), hri);
+      CommonFSUtils.getTableDir(CommonFSUtils.getRootDir(conf), hri.getTable()), hri);
 
     HFileContext meta = new HFileContextBuilder().withBlockSize(2 * 1024).build();
     StoreFileWriter writer = new StoreFileWriter.Builder(conf, cacheConf, this.fs)
@@ -165,7 +175,7 @@ public class TestHStoreFile {
    */
   public static void writeStoreFile(final StoreFileWriter writer, byte[] fam, byte[] qualifier)
     throws IOException {
-    long now = System.currentTimeMillis();
+    long now = EnvironmentEdgeManager.currentTime();
     try {
       for (char d = FIRST_CHAR; d <= LAST_CHAR; d++) {
         for (char e = FIRST_CHAR; e <= LAST_CHAR; e++) {
@@ -394,6 +404,8 @@ public class TestHStoreFile {
     f.initReader();
     Cell midkey = f.getReader().midKey().get();
     KeyValue midKV = (KeyValue) midkey;
+    // 1. test using the midRow as the splitKey, this test will generate two Reference files
+    // in the children
     byte[] midRow = CellUtil.cloneRow(midKV);
     // Create top split.
     RegionInfo topHri =
@@ -454,7 +466,7 @@ public class TestHStoreFile {
       regionFs.cleanupDaughterRegion(topHri);
       regionFs.cleanupDaughterRegion(bottomHri);
 
-      // Next test using a midkey that does not exist in the file.
+      // 2. test using a midkey which will generate one Reference file and one HFileLink file.
       // First, do a key that is < than first key. Ensure splits behave
       // properly.
       byte[] badmidkey = Bytes.toBytes("  .");
@@ -547,7 +559,7 @@ public class TestHStoreFile {
   private void bloomWriteRead(StoreFileWriter writer, FileSystem fs) throws Exception {
     float err = conf.getFloat(BloomFilterFactory.IO_STOREFILE_BLOOM_ERROR_RATE, 0);
     Path f = writer.getPath();
-    long now = System.currentTimeMillis();
+    long now = EnvironmentEdgeManager.currentTime();
     for (int i = 0; i < 2000; i += 2) {
       String row = String.format(localFormatter, i);
       KeyValue kv = new KeyValue(Bytes.toBytes(row), Bytes.toBytes("family"), Bytes.toBytes("col"),
@@ -630,7 +642,7 @@ public class TestHStoreFile {
       .withMaxKeyCount(2000).withFileContext(meta).build();
 
     // add delete family
-    long now = System.currentTimeMillis();
+    long now = EnvironmentEdgeManager.currentTime();
     for (int i = 0; i < 2000; i += 2) {
       String row = String.format(localFormatter, i);
       KeyValue kv = new KeyValue(Bytes.toBytes(row), Bytes.toBytes("family"), Bytes.toBytes("col"),
@@ -732,7 +744,7 @@ public class TestHStoreFile {
       StoreFileWriter writer = new StoreFileWriter.Builder(conf, cacheConf, this.fs).withFilePath(f)
         .withBloomType(bt[x]).withMaxKeyCount(expKeys[x]).withFileContext(meta).build();
 
-      long now = System.currentTimeMillis();
+      long now = EnvironmentEdgeManager.currentTime();
       for (int i = 0; i < rowCount * 2; i += 2) { // rows
         for (int j = 0; j < colCount * 2; j += 2) { // column qualifiers
           String row = String.format(localFormatter, i);
@@ -1054,7 +1066,18 @@ public class TestHStoreFile {
     if (null == path) {
       return null;
     }
-    Path regionDir = regionFs.commitDaughterRegion(hri);
+    List<Path> splitFiles = new ArrayList<>();
+    splitFiles.add(path);
+    MasterProcedureEnv mockEnv = mock(MasterProcedureEnv.class);
+    MasterServices mockServices = mock(MasterServices.class);
+    when(mockEnv.getMasterServices()).thenReturn(mockServices);
+    when(mockEnv.getMasterConfiguration()).thenReturn(new Configuration());
+    TableDescriptors mockTblDescs = mock(TableDescriptors.class);
+    when(mockServices.getTableDescriptors()).thenReturn(mockTblDescs);
+    TableDescriptor mockTblDesc = TableDescriptorBuilder.newBuilder(hri.getTable())
+      .setColumnFamily(ColumnFamilyDescriptorBuilder.of(family)).build();
+    when(mockTblDescs.get(any())).thenReturn(mockTblDesc);
+    Path regionDir = regionFs.commitDaughterRegion(hri, splitFiles, mockEnv);
     return new Path(new Path(regionDir, family), path.getName());
   }
 

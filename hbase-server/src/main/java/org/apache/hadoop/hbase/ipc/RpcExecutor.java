@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
@@ -33,6 +34,7 @@ import java.util.HashMap;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Abortable;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.conf.ConfigurationObserver;
 import org.apache.hbase.thirdparty.io.netty.util.internal.StringUtil;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -67,6 +69,7 @@ public abstract class RpcExecutor {
   public static final String CALL_QUEUE_TYPE_CODEL_CONF_VALUE = "codel";
   public static final String CALL_QUEUE_TYPE_DEADLINE_CONF_VALUE = "deadline";
   public static final String CALL_QUEUE_TYPE_FIFO_CONF_VALUE = "fifo";
+  public static final String CALL_QUEUE_TYPE_PLUGGABLE_CONF_VALUE = "pluggable";
   public static final String CALL_QUEUE_TYPE_CONF_KEY = "hbase.ipc.server.callqueue.type";
   public static final String CALL_QUEUE_TYPE_CONF_DEFAULT = CALL_QUEUE_TYPE_FIFO_CONF_VALUE;
 
@@ -78,6 +81,9 @@ public abstract class RpcExecutor {
   public static final int CALL_QUEUE_CODEL_DEFAULT_TARGET_DELAY = 100;
   public static final int CALL_QUEUE_CODEL_DEFAULT_INTERVAL = 100;
   public static final double CALL_QUEUE_CODEL_DEFAULT_LIFO_THRESHOLD = 0.8;
+
+  public static final String PLUGGABLE_CALL_QUEUE_CLASS_NAME =
+    "hbase.ipc.server.callqueue.pluggable.queue.class.name";
 
   private LongAdder numGeneralCallsDropped = new LongAdder();
   private LongAdder numLifoModeSwitches = new LongAdder();
@@ -92,12 +98,11 @@ public abstract class RpcExecutor {
   protected volatile int currentQueueLimit;
 
   private final AtomicInteger activeHandlerCount = new AtomicInteger(0);
-  private final List<Handler> handlers;
+  private final List<RpcHandler> handlers;
   private final int handlerCount;
   private final AtomicInteger failedHandlerCount = new AtomicInteger(0);
 
   private String name;
-  private boolean running;
 
   private Configuration conf = null;
   private Abortable abortable = null;
@@ -150,13 +155,23 @@ public abstract class RpcExecutor {
       int codelInterval = conf.getInt(CALL_QUEUE_CODEL_INTERVAL, CALL_QUEUE_CODEL_DEFAULT_INTERVAL);
       double codelLifoThreshold = conf.getDouble(CALL_QUEUE_CODEL_LIFO_THRESHOLD,
         CALL_QUEUE_CODEL_DEFAULT_LIFO_THRESHOLD);
-      queueInitArgs = new Object[] { maxQueueLength, codelTargetDelay, codelInterval,
+      this.queueInitArgs = new Object[] { maxQueueLength, codelTargetDelay, codelInterval,
           codelLifoThreshold, numGeneralCallsDropped, numLifoModeSwitches };
-      queueClass = AdaptiveLifoCoDelCallQueue.class;
+      this.queueClass = AdaptiveLifoCoDelCallQueue.class;
+    } else if (isPluggableQueueType(callQueueType)) {
+      Optional<Class<? extends BlockingQueue<CallRunner>>> pluggableQueueClass = getPluggableQueueClass();
+
+      if (!pluggableQueueClass.isPresent()) {
+        throw new PluggableRpcQueueNotFound("Pluggable call queue failed to load and selected call"
+          + " queue type required");
+      } else {
+        this.queueInitArgs = new Object[] { maxQueueLength, this.priority, conf };
+        this.queueClass = pluggableQueueClass.get();
+      }
     } else {
       this.name += ".Fifo";
-      queueInitArgs = new Object[] { maxQueueLength };
-      queueClass = LinkedBlockingQueue.class;
+      this.queueInitArgs = new Object[] { maxQueueLength };
+      this.queueClass = LinkedBlockingQueue.class;
     }
 
     LOG.info("Instantiated {} with queueClass={}; " +
@@ -223,13 +238,12 @@ public abstract class RpcExecutor {
   }
 
   public void start(final int port) {
-    running = true;
     startHandlers(port);
   }
 
   public void stop() {
-    running = false;
-    for (Thread handler : handlers) {
+    for (RpcHandler handler : handlers) {
+      handler.stopRunning();
       handler.interrupt();
     }
   }
@@ -250,9 +264,12 @@ public abstract class RpcExecutor {
   /**
    * Override if providing alternate Handler implementation.
    */
-  protected Handler getHandler(final String name, final double handlerFailureThreshhold,
-      final BlockingQueue<CallRunner> q, final AtomicInteger activeHandlerCount) {
-    return new Handler(name, handlerFailureThreshhold, q, activeHandlerCount);
+  protected RpcHandler getHandler(final String name, final double handlerFailureThreshhold,
+      final int handlerCount, final BlockingQueue<CallRunner> q,
+      final AtomicInteger activeHandlerCount, final AtomicInteger failedHandlerCount,
+      final Abortable abortable) {
+    return new RpcHandler(name, handlerFailureThreshhold, handlerCount, q, activeHandlerCount,
+      failedHandlerCount, abortable);
   }
 
   /**
@@ -269,97 +286,13 @@ public abstract class RpcExecutor {
       final int index = qindex + (i % qsize);
       String name = "RpcServer." + threadPrefix + ".handler=" + handlers.size() + ",queue=" + index
           + ",port=" + port;
-      Handler handler = getHandler(name, handlerFailureThreshhold, callQueues.get(index),
-        activeHandlerCount);
+      RpcHandler handler = getHandler(name, handlerFailureThreshhold, handlerCount,
+        callQueues.get(index), activeHandlerCount, failedHandlerCount, abortable);
       handler.start();
       handlers.add(handler);
     }
     LOG.debug("Started handlerCount={} with threadPrefix={}, numCallQueues={}, port={}",
         handlers.size(), threadPrefix, qsize, port);
-  }
-
-  /**
-   * Handler thread run the {@link CallRunner#run()} in.
-   */
-  protected class Handler extends Thread {
-    /**
-     * Q to find CallRunners to run in.
-     */
-    final BlockingQueue<CallRunner> q;
-
-    final double handlerFailureThreshhold;
-
-    // metrics (shared with other handlers)
-    final AtomicInteger activeHandlerCount;
-
-    Handler(final String name, final double handlerFailureThreshhold,
-        final BlockingQueue<CallRunner> q, final AtomicInteger activeHandlerCount) {
-      super(name);
-      setDaemon(true);
-      this.q = q;
-      this.handlerFailureThreshhold = handlerFailureThreshhold;
-      this.activeHandlerCount = activeHandlerCount;
-    }
-
-    /**
-     * @return A {@link CallRunner}
-     * @throws InterruptedException
-     */
-    protected CallRunner getCallRunner() throws InterruptedException {
-      return this.q.take();
-    }
-
-    @Override
-    public void run() {
-      boolean interrupted = false;
-      try {
-        while (running) {
-          try {
-            run(getCallRunner());
-          } catch (InterruptedException e) {
-            interrupted = true;
-          }
-        }
-      } catch (Exception e) {
-        LOG.warn(e.toString(), e);
-        throw e;
-      } finally {
-        if (interrupted) {
-          Thread.currentThread().interrupt();
-        }
-      }
-    }
-
-    private void run(CallRunner cr) {
-      MonitoredRPCHandler status = RpcServer.getStatus();
-      cr.setStatus(status);
-      try {
-        this.activeHandlerCount.incrementAndGet();
-        cr.run();
-      } catch (Throwable e) {
-        if (e instanceof Error) {
-          int failedCount = failedHandlerCount.incrementAndGet();
-          if (this.handlerFailureThreshhold >= 0
-              && failedCount > handlerCount * this.handlerFailureThreshhold) {
-            String message = "Number of failed RpcServer handler runs exceeded threshhold "
-                + this.handlerFailureThreshhold + "; reason: " + StringUtils.stringifyException(e);
-            if (abortable != null) {
-              abortable.abort(message, e);
-            } else {
-              LOG.error("Error but can't abort because abortable is null: "
-                  + StringUtils.stringifyException(e));
-              throw e;
-            }
-          } else {
-            LOG.warn("Handler errors " + StringUtils.stringifyException(e));
-          }
-        } else {
-          LOG.warn("Handler  exception " + StringUtils.stringifyException(e));
-        }
-      } finally {
-        this.activeHandlerCount.decrementAndGet();
-      }
-    }
   }
 
   public static abstract class QueueBalancer {
@@ -445,6 +378,35 @@ public abstract class RpcExecutor {
     return callQueueType.equals(CALL_QUEUE_TYPE_FIFO_CONF_VALUE);
   }
 
+  public static boolean isPluggableQueueType(String callQueueType) {
+    return callQueueType.equals(CALL_QUEUE_TYPE_PLUGGABLE_CONF_VALUE);
+  }
+
+  private Optional<Class<? extends BlockingQueue<CallRunner>>> getPluggableQueueClass() {
+    String queueClassName = conf.get(PLUGGABLE_CALL_QUEUE_CLASS_NAME);
+
+    if (queueClassName == null) {
+      LOG.error("Pluggable queue class config at " + PLUGGABLE_CALL_QUEUE_CLASS_NAME +
+        " was not found");
+      return Optional.empty();
+    }
+
+    try {
+      Class<?> clazz = Class.forName(queueClassName);
+
+      if (BlockingQueue.class.isAssignableFrom(clazz)) {
+        return Optional.of((Class<? extends BlockingQueue<CallRunner>>) clazz);
+      } else {
+        LOG.error("Pluggable Queue class " + queueClassName +
+          " does not extend BlockingQueue<CallRunner>");
+        return Optional.empty();
+      }
+    } catch (ClassNotFoundException exception) {
+      LOG.error("Could not find " + queueClassName + " on the classpath to load.");
+      return Optional.empty();
+    }
+  }
+
   public long getNumGeneralCallsDropped() {
     return numGeneralCallsDropped.longValue();
   }
@@ -522,6 +484,8 @@ public abstract class RpcExecutor {
       if (queue instanceof AdaptiveLifoCoDelCallQueue) {
         ((AdaptiveLifoCoDelCallQueue) queue).updateTunables(codelTargetDelay, codelInterval,
           codelLifoThreshold);
+      } else if (queue instanceof ConfigurationObserver) {
+        ((ConfigurationObserver)queue).onConfigurationChange(conf);
       }
     }
   }

@@ -30,9 +30,8 @@ import java.util.Locale;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
-import org.apache.hadoop.hbase.StartMiniClusterOption;
-import org.apache.hadoop.hbase.master.LoadBalancer;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
+import org.apache.hadoop.hbase.StartTestingClusterOption;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.util.DNS;
@@ -58,7 +57,7 @@ public class TestRegionServerHostname {
 
   private static final Logger LOG = LoggerFactory.getLogger(TestRegionServerHostname.class);
 
-  private HBaseTestingUtility TEST_UTIL;
+  private HBaseTestingUtil TEST_UTIL;
 
   private static final int NUM_MASTERS = 1;
   private static final int NUM_RS = 1;
@@ -66,7 +65,7 @@ public class TestRegionServerHostname {
   @Before
   public void setup() {
     Configuration conf = HBaseConfiguration.create();
-    TEST_UTIL = new HBaseTestingUtility(conf);
+    TEST_UTIL = new HBaseTestingUtil(conf);
   }
 
   @After
@@ -107,15 +106,13 @@ public class TestRegionServerHostname {
 
         TEST_UTIL.getConfiguration().set(DNS.MASTER_HOSTNAME_KEY, hostName);
         TEST_UTIL.getConfiguration().set(DNS.UNSAFE_RS_HOSTNAME_KEY, hostName);
-        StartMiniClusterOption option = StartMiniClusterOption.builder()
+        StartTestingClusterOption option = StartTestingClusterOption.builder()
             .numMasters(NUM_MASTERS).numRegionServers(NUM_RS).numDataNodes(NUM_RS).build();
         TEST_UTIL.startMiniCluster(option);
         try {
           ZKWatcher zkw = TEST_UTIL.getZooKeeperWatcher();
           List<String> servers = ZKUtil.listChildrenNoWatch(zkw, zkw.getZNodePaths().rsZNode);
-          // there would be NUM_RS+1 children - one for the master
-          assertTrue(servers.size() ==
-            NUM_RS + (LoadBalancer.isTablesOnMaster(TEST_UTIL.getConfiguration())? 1: 0));
+          assertEquals(NUM_RS, servers.size());
           for (String server : servers) {
             assertTrue("From zookeeper: " + server + " hostname: " + hostName,
               server.startsWith(hostName.toLowerCase(Locale.ROOT)+","));
@@ -172,7 +169,7 @@ public class TestRegionServerHostname {
         TEST_UTIL.getConfiguration().set(DNS.UNSAFE_RS_HOSTNAME_KEY, hostName);
         TEST_UTIL.getConfiguration().setBoolean(HRegionServer.UNSAFE_RS_HOSTNAME_DISABLE_MASTER_REVERSEDNS_KEY, true);
         try {
-          StartMiniClusterOption option = StartMiniClusterOption.builder()
+          StartTestingClusterOption option = StartTestingClusterOption.builder()
               .numMasters(NUM_MASTERS).numRegionServers(NUM_RS).numDataNodes(NUM_RS).build();
           TEST_UTIL.startMiniCluster(option);
         } catch (Exception e) {
@@ -194,11 +191,10 @@ public class TestRegionServerHostname {
   public void testRegionServerHostnameReportedToMaster() throws Exception {
     TEST_UTIL.getConfiguration().setBoolean(HRegionServer.UNSAFE_RS_HOSTNAME_DISABLE_MASTER_REVERSEDNS_KEY,
     true);
-    StartMiniClusterOption option = StartMiniClusterOption.builder()
+    StartTestingClusterOption option = StartTestingClusterOption.builder()
         .numMasters(NUM_MASTERS).numRegionServers(NUM_RS).numDataNodes(NUM_RS).build();
     TEST_UTIL.startMiniCluster(option);
-    boolean tablesOnMaster = LoadBalancer.isTablesOnMaster(TEST_UTIL.getConfiguration());
-    int expectedRS = NUM_RS + (tablesOnMaster? 1: 0);
+    int expectedRS = NUM_RS;
     try (ZKWatcher zkw = TEST_UTIL.getZooKeeperWatcher()) {
       List<String> servers = ZKUtil.listChildrenNoWatch(zkw, zkw.getZNodePaths().rsZNode);
       assertEquals(expectedRS, servers.size());

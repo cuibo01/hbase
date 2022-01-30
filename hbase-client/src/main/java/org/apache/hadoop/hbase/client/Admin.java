@@ -500,6 +500,31 @@ public interface Admin extends Abortable, Closeable {
       throws IOException;
 
   /**
+   * Change the store file tracker of the given table's given family.
+   * @param tableName the table you want to change
+   * @param family the family you want to change
+   * @param dstSFT the destination store file tracker
+   * @throws IOException if a remote or network exception occurs
+   */
+  default void modifyColumnFamilyStoreFileTracker(TableName tableName, byte[] family, String dstSFT)
+    throws IOException {
+    get(modifyColumnFamilyStoreFileTrackerAsync(tableName, family, dstSFT), getSyncWaitTimeout(),
+      TimeUnit.MILLISECONDS);
+  }
+
+  /**
+   * Change the store file tracker of the given table's given family.
+   * @param tableName the table you want to change
+   * @param family the family you want to change
+   * @param dstSFT the destination store file tracker
+   * @return the result of the async modify. You can use Future.get(long, TimeUnit) to wait on the
+   *         operation to complete
+   * @throws IOException if a remote or network exception occurs
+   */
+  Future<Void> modifyColumnFamilyStoreFileTrackerAsync(TableName tableName, byte[] family,
+    String dstSFT) throws IOException;
+
+  /**
    * Get all the online regions on a region server.
    *
    * @return List of {@link RegionInfo}
@@ -831,7 +856,20 @@ public interface Admin extends Abortable, Closeable {
    * @return <code>true</code> if balancer ran, <code>false</code> otherwise.
    * @throws IOException if a remote or network exception occurs
    */
-  boolean balance() throws IOException;
+  default boolean balance() throws IOException {
+    return balance(BalanceRequest.defaultInstance())
+      .isBalancerRan();
+  }
+
+  /**
+   * Invoke the balancer with the given balance request.  The BalanceRequest defines how the
+   * balancer will run. See {@link BalanceRequest} for more details.
+   *
+   * @param request defines how the balancer should run
+   * @return {@link BalanceResponse} with details about the results of the invocation.
+   * @throws IOException if a remote or network exception occurs
+   */
+  BalanceResponse balance(BalanceRequest request) throws IOException;
 
   /**
    * Invoke the balancer.  Will run the balancer and if regions to move, it will
@@ -841,8 +879,17 @@ public interface Admin extends Abortable, Closeable {
    * @param force whether we should force balance even if there is region in transition
    * @return <code>true</code> if balancer ran, <code>false</code> otherwise.
    * @throws IOException if a remote or network exception occurs
+   * @deprecated Since 2.5.0. Will be removed in 4.0.0.
+   * Use {@link #balance(BalanceRequest)} instead.
    */
-  boolean balance(boolean force) throws IOException;
+  @Deprecated
+  default boolean balance(boolean force) throws IOException {
+    return balance(
+      BalanceRequest.newBuilder()
+      .setIgnoreRegionsInTransition(force)
+      .build()
+    ).isBalancerRan();
+  }
 
   /**
    * Query the current state of the balancer.
@@ -1034,6 +1081,28 @@ public interface Admin extends Abortable, Closeable {
    *         operation to complete
    */
   Future<Void> modifyTableAsync(TableDescriptor td) throws IOException;
+
+  /**
+   * Change the store file tracker of the given table.
+   * @param tableName the table you want to change
+   * @param dstSFT the destination store file tracker
+   * @throws IOException if a remote or network exception occurs
+   */
+  default void modifyTableStoreFileTracker(TableName tableName, String dstSFT) throws IOException {
+    get(modifyTableStoreFileTrackerAsync(tableName, dstSFT), getSyncWaitTimeout(),
+      TimeUnit.MILLISECONDS);
+  }
+
+  /**
+   * Change the store file tracker of the given table.
+   * @param tableName the table you want to change
+   * @param dstSFT the destination store file tracker
+   * @return the result of the async modify. You can use Future.get(long, TimeUnit) to wait on the
+   *         operation to complete
+   * @throws IOException if a remote or network exception occurs
+   */
+  Future<Void> modifyTableStoreFileTrackerAsync(TableName tableName, String dstSFT)
+    throws IOException;
 
   /**
    * Shuts down the HBase cluster.
@@ -1598,7 +1667,7 @@ public interface Admin extends Abortable, Closeable {
    * @throws IllegalArgumentException if the restore request is formatted incorrectly
    */
   void restoreSnapshot(String snapshotName, boolean takeFailSafeSnapshot, boolean restoreAcl)
-      throws IOException, RestoreSnapshotException;
+    throws IOException, RestoreSnapshotException;
 
   /**
    * Create a new table by cloning the snapshot content.
@@ -1611,7 +1680,25 @@ public interface Admin extends Abortable, Closeable {
    */
   default void cloneSnapshot(String snapshotName, TableName tableName)
       throws IOException, TableExistsException, RestoreSnapshotException {
-    cloneSnapshot(snapshotName, tableName, false);
+    cloneSnapshot(snapshotName, tableName, false, null);
+  }
+
+  /**
+   * Create a new table by cloning the snapshot content.
+   * @param snapshotName name of the snapshot to be cloned
+   * @param tableName name of the table where the snapshot will be restored
+   * @param restoreAcl <code>true</code> to clone acl into newly created table
+   * @param customSFT specify the StoreFileTracker used for the table
+   * @throws IOException if a remote or network exception occurs
+   * @throws TableExistsException if table to be created already exists
+   * @throws RestoreSnapshotException if snapshot failed to be cloned
+   * @throws IllegalArgumentException if the specified table has not a valid name
+   */
+  default void cloneSnapshot(String snapshotName, TableName tableName, boolean restoreAcl,
+    String customSFT)
+    throws IOException, TableExistsException, RestoreSnapshotException {
+    get(cloneSnapshotAsync(snapshotName, tableName, restoreAcl, customSFT), getSyncWaitTimeout(),
+      TimeUnit.MILLISECONDS);
   }
 
   /**
@@ -1658,8 +1745,25 @@ public interface Admin extends Abortable, Closeable {
    * @throws RestoreSnapshotException if snapshot failed to be cloned
    * @throws IllegalArgumentException if the specified table has not a valid name
    */
-  Future<Void> cloneSnapshotAsync(String snapshotName, TableName tableName, boolean restoreAcl)
-      throws IOException, TableExistsException, RestoreSnapshotException;
+  default Future<Void> cloneSnapshotAsync(String snapshotName, TableName tableName,
+    boolean restoreAcl)
+      throws IOException, TableExistsException, RestoreSnapshotException {
+    return cloneSnapshotAsync(snapshotName, tableName, restoreAcl, null);
+  }
+
+  /**
+   * Create a new table by cloning the snapshot content.
+   * @param snapshotName name of the snapshot to be cloned
+   * @param tableName name of the table where the snapshot will be restored
+   * @param restoreAcl <code>true</code> to clone acl into newly created table
+   * @param customSFT specify the StroreFileTracker used for the table
+   * @throws IOException if a remote or network exception occurs
+   * @throws TableExistsException if table to be created already exists
+   * @throws RestoreSnapshotException if snapshot failed to be cloned
+   * @throws IllegalArgumentException if the specified table has not a valid name
+   */
+  Future<Void> cloneSnapshotAsync(String snapshotName, TableName tableName, boolean restoreAcl,
+    String customSFT) throws IOException, TableExistsException, RestoreSnapshotException;
 
   /**
    * Execute a distributed procedure on a cluster.
@@ -1844,6 +1948,14 @@ public interface Admin extends Abortable, Closeable {
    * @throws IOException if a remote or network exception occurs
    */
   void updateConfiguration() throws IOException;
+
+  /**
+   * Update the configuration and trigger an online config change
+   * on all the regionservers in the RSGroup.
+   * @param groupName the group name
+   * @throws IOException if a remote or network exception occurs
+   */
+  void updateConfiguration(String groupName) throws IOException;
 
   /**
    * Get the info port of the current master if one is available.
@@ -2486,10 +2598,20 @@ public interface Admin extends Abortable, Closeable {
   /**
    * Balance regions in the given RegionServer group
    * @param groupName the group name
-   * @return boolean Whether balance ran or not
+   * @return BalanceResponse details about the balancer run
    * @throws IOException if a remote or network exception occurs
    */
-  boolean balanceRSGroup(String groupName) throws IOException;
+  default BalanceResponse balanceRSGroup(String groupName) throws IOException {
+    return balanceRSGroup(groupName, BalanceRequest.defaultInstance());
+  }
+
+  /**
+   * Balance regions in the given RegionServer group, running based on
+   * the given {@link BalanceRequest}.
+   *
+   * @return BalanceResponse details about the balancer run
+   */
+  BalanceResponse balanceRSGroup(String groupName, BalanceRequest request) throws IOException;
 
   /**
    * Rename rsgroup

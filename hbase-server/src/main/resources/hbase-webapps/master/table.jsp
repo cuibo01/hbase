@@ -58,11 +58,13 @@
   import="org.apache.hadoop.hbase.http.InfoServer"
   import="org.apache.hadoop.hbase.master.HMaster"
   import="org.apache.hadoop.hbase.master.RegionState"
+  import="org.apache.hadoop.hbase.master.assignment.RegionStateNode"
   import="org.apache.hadoop.hbase.master.assignment.RegionStates"
-  import="org.apache.hadoop.hbase.master.webapp.MetaBrowser"
-  import="org.apache.hadoop.hbase.master.webapp.RegionReplicaInfo"
+  import="org.apache.hadoop.hbase.master.http.MetaBrowser"
+  import="org.apache.hadoop.hbase.master.http.RegionReplicaInfo"
   import="org.apache.hadoop.hbase.quotas.QuotaSettingsFactory"
-  import="org.apache.hadoop.hbase.quotas.QuotaTableUtil"%>
+  import="org.apache.hadoop.hbase.quotas.QuotaTableUtil"
+  import="org.apache.hadoop.hbase.NotAllMetaRegionsOnlineException" %>
 <%@ page import="org.apache.hadoop.hbase.quotas.SpaceQuotaSnapshot" %>
 <%@ page import="org.apache.hadoop.hbase.quotas.ThrottleSettings" %>
 <%@ page import="org.apache.hadoop.hbase.util.Bytes" %>
@@ -313,8 +315,12 @@
           for (int j = 0; j < numMetaReplicas; j++) {
             RegionInfo meta = RegionReplicaUtil.getRegionInfoForReplica(
                                     RegionInfoBuilder.FIRST_META_REGIONINFO, j);
-            ServerName metaLocation = MetaTableLocator.waitMetaRegionLocation(master.getZooKeeper(), j, 1);
+            //If a metaLocation is null, All of its info would be empty here to be displayed.
+            RegionStateNode rsn = master.getAssignmentManager().getRegionStates()
+              .getRegionStateNode(meta);
+            ServerName metaLocation = rsn != null ? rsn.getRegionLocation() : null;
             for (int i = 0; i < 1; i++) {
+              //If metaLocation is null, default value below would be displayed in UI.
               String hostAndPort = "";
               String readReq = "N/A";
               String writeReq = "N/A";
@@ -378,8 +384,12 @@
            for (int j = 0; j < numMetaReplicas; j++) {
              RegionInfo meta = RegionReplicaUtil.getRegionInfoForReplica(
                                      RegionInfoBuilder.FIRST_META_REGIONINFO, j);
-             ServerName metaLocation = MetaTableLocator.waitMetaRegionLocation(master.getZooKeeper(), j, 1);
+             //If a metaLocation is null, All of its info would be empty here to be displayed.
+             RegionStateNode rsn = master.getAssignmentManager().getRegionStates()
+              .getRegionStateNode(meta);
+             ServerName metaLocation = rsn != null ? rsn.getRegionLocation() : null;
              for (int i = 0; i < 1; i++) {
+               //If metaLocation is null, default value below would be displayed in UI.
                String hostAndPort = "";
                float locality = 0.0f;
                float localityForSsd = 0.0f;
@@ -426,8 +436,12 @@
           for (int j = 0; j < numMetaReplicas; j++) {
             RegionInfo meta = RegionReplicaUtil.getRegionInfoForReplica(
                                     RegionInfoBuilder.FIRST_META_REGIONINFO, j);
-            ServerName metaLocation = MetaTableLocator.waitMetaRegionLocation(master.getZooKeeper(), j, 1);
+            //If a metaLocation is null, All of its info would be empty here to be displayed.
+            RegionStateNode rsn = master.getAssignmentManager().getRegionStates()
+              .getRegionStateNode(meta);
+            ServerName metaLocation = rsn != null ? rsn.getRegionLocation() : null;
             for (int i = 0; i < 1; i++) {
+              //If metaLocation is null, default value below would be displayed in UI.
               String hostAndPort = "";
               long compactingCells = 0;
               long compactedCells = 0;
@@ -1089,9 +1103,18 @@
 </table>
 
 <% }
-} catch(Exception ex) {
+} catch(Exception ex) { %>
+  Unknown Issue with Regions
+  <div onclick="document.getElementById('closeStackTrace').style.display='block';document.getElementById('openStackTrace').style.display='none';">
+    <a id="openStackTrace" style="cursor:pointer;"> Show StackTrace</a>
+  </div>
+  <div id="closeStackTrace" style="display:none;clear:both;">
+    <div onclick="document.getElementById('closeStackTrace').style.display='none';document.getElementById('openStackTrace').style.display='block';">
+      <a style="cursor:pointer;"> Close StackTrace</a>
+    </div>
+  <%
   for(StackTraceElement element : ex.getStackTrace()) {
-    %><%= StringEscapeUtils.escapeHtml4(element.toString()) %><%
+    %><%= StringEscapeUtils.escapeHtml4(element.toString() + "\n") %><%
   }
 }
 } // end else
@@ -1240,7 +1263,9 @@ $(document).ready(function()
                 3: {sorter: 'separator'},
                 4: {sorter: 'filesize'},
                 5: {sorter: 'separator'},
-                6: {sorter: 'filesize'}
+                6: {sorter: 'filesize'},
+                7: {empty: 'emptyMin'},
+                8: {empty: 'emptyMax'}
             }
         });
         $("#metaTableBaseStatsTable").tablesorter({
@@ -1249,7 +1274,9 @@ $(document).ready(function()
                 3: {sorter: 'separator'},
                 4: {sorter: 'filesize'},
                 5: {sorter: 'separator'},
-                6: {sorter: 'filesize'}
+                6: {sorter: 'filesize'},
+                7: {empty: 'emptyMin'},
+                8: {empty: 'emptyMax'}
             }
         });
         $("#tableLocalityStatsTable").tablesorter({

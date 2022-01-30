@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseCommonTestingUtility;
+import org.apache.hadoop.hbase.HBaseCommonTestingUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNameTestRule;
 import org.apache.hadoop.hbase.Waiter;
@@ -93,7 +93,7 @@ public class TestRegionNormalizerWorker {
   @Mock
   private RegionNormalizer regionNormalizer;
 
-  private HBaseCommonTestingUtility testingUtility;
+  private HBaseCommonTestingUtil testingUtility;
   private RegionNormalizerWorkQueue<TableName> queue;
   private ExecutorService workerPool;
 
@@ -103,7 +103,7 @@ public class TestRegionNormalizerWorker {
   public void before() throws Exception {
     MockitoAnnotations.initMocks(this);
     when(masterServices.skipRegionManagementAction(any())).thenReturn(false);
-    testingUtility = new HBaseCommonTestingUtility();
+    testingUtility = new HBaseCommonTestingUtil();
     queue = new RegionNormalizerWorkQueue<>();
     workerThreadThrowable.set(null);
 
@@ -135,7 +135,7 @@ public class TestRegionNormalizerWorker {
     when(masterServices.getTableDescriptors().get(tn)).thenReturn(tnDescriptor);
     when(masterServices.mergeRegions(any(), anyBoolean(), anyLong(), anyLong()))
       .thenReturn(1L);
-    when(regionNormalizer.computePlansForTable(tn))
+    when(regionNormalizer.computePlansForTable(tnDescriptor))
       .thenReturn(singletonList(new MergeNormalizationPlan.Builder()
         .addTarget(RegionInfoBuilder.newBuilder(tn).build(), 10)
         .addTarget(RegionInfoBuilder.newBuilder(tn).build(), 20)
@@ -160,7 +160,7 @@ public class TestRegionNormalizerWorker {
     when(masterServices.getTableDescriptors().get(tn)).thenReturn(tnDescriptor);
     when(masterServices.splitRegion(any(), any(), anyLong(), anyLong()))
       .thenReturn(1L);
-    when(regionNormalizer.computePlansForTable(tn))
+    when(regionNormalizer.computePlansForTable(tnDescriptor))
       .thenReturn(singletonList(
         new SplitNormalizationPlan(RegionInfoBuilder.newBuilder(tn).build(), 10)));
 
@@ -192,7 +192,7 @@ public class TestRegionNormalizerWorker {
       .thenReturn(1L);
     when(masterServices.mergeRegions(any(), anyBoolean(), anyLong(), anyLong()))
       .thenReturn(1L);
-    when(regionNormalizer.computePlansForTable(tn))
+    when(regionNormalizer.computePlansForTable(tnDescriptor))
       .thenReturn(Arrays.asList(
         new SplitNormalizationPlan(splitRegionInfo, 2),
         new MergeNormalizationPlan.Builder()

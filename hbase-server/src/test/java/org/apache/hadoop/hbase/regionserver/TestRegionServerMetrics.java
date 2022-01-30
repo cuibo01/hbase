@@ -18,7 +18,6 @@
 package org.apache.hadoop.hbase.regionserver;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -27,15 +26,14 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CompatibilityFactory;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
-import org.apache.hadoop.hbase.MiniHBaseCluster;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
+import org.apache.hadoop.hbase.SingleProcessHBaseCluster;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Append;
@@ -55,7 +53,6 @@ import org.apache.hadoop.hbase.client.Scan.ReadType;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
-import org.apache.hadoop.hbase.master.LoadBalancer;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionContext;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionLifeCycleTracker;
 import org.apache.hadoop.hbase.regionserver.throttle.NoLimitThroughputController;
@@ -91,10 +88,10 @@ public class TestRegionServerMetrics {
   public TestName testName = new TestName();
 
   private static MetricsAssertHelper metricsHelper;
-  private static MiniHBaseCluster cluster;
+  private static SingleProcessHBaseCluster cluster;
   private static HRegionServer rs;
   private static Configuration conf;
-  private static HBaseTestingUtility TEST_UTIL;
+  private static HBaseTestingUtil TEST_UTIL;
   private static Connection connection;
   private static MetricsRegionServer metricsRegionServer;
   private static MetricsRegionServerSource serverSource;
@@ -105,13 +102,11 @@ public class TestRegionServerMetrics {
   private static byte[] qualifier = Bytes.toBytes("qual");
   private static byte[] val = Bytes.toBytes("val");
   private static Admin admin;
-  private static boolean TABLES_ON_MASTER;
 
   @BeforeClass
   public static void startCluster() throws Exception {
     metricsHelper = CompatibilityFactory.getInstance(MetricsAssertHelper.class);
-    TEST_UTIL = new HBaseTestingUtility();
-    TABLES_ON_MASTER = LoadBalancer.isTablesOnMaster(TEST_UTIL.getConfiguration());
+    TEST_UTIL = new HBaseTestingUtil();
     conf = TEST_UTIL.getConfiguration();
     conf.getLong("hbase.splitlog.max.resubmit", 0);
     // Make the failure test faster
@@ -232,7 +227,7 @@ public class TestRegionServerMetrics {
 
   @Test
   public void testRegionCount() throws Exception {
-    metricsHelper.assertGauge("regionCount", TABLES_ON_MASTER ? 1 : 2, serverSource);
+    metricsHelper.assertGauge("regionCount", 2, serverSource);
   }
 
   @Test
@@ -274,11 +269,6 @@ public class TestRegionServerMetrics {
     doNGets(10, true);  // true = batch
 
     metricsRegionServer.getRegionServerWrapper().forceRecompute();
-    if (TABLES_ON_MASTER) {
-      assertCounter("totalRequestCount", requests + 41);
-      assertCounter("totalRowActionRequestCount", rowActionRequests + 50);
-      assertCounter("readRequestCount", readRequests + 20);
-    }
 
 
     assertCounter("writeRequestCount", writeRequests + 30);
@@ -286,30 +276,15 @@ public class TestRegionServerMetrics {
     doNPuts(30, true);
 
     metricsRegionServer.getRegionServerWrapper().forceRecompute();
-    if (TABLES_ON_MASTER) {
-      assertCounter("totalRequestCount", requests + 42);
-      assertCounter("totalRowActionRequestCount", rowActionRequests + 80);
-      assertCounter("readRequestCount", readRequests + 20);
-    }
     assertCounter("writeRequestCount", writeRequests + 60);
 
     doScan(10, false); // test after batch put so we have enough lines
     metricsRegionServer.getRegionServerWrapper().forceRecompute();
-    if (TABLES_ON_MASTER) {
-      assertCounter("totalRequestCount", requests + 52);
-      assertCounter("totalRowActionRequestCount", rowActionRequests + 90);
-      assertCounter("readRequestCount", readRequests + 30);
-    }
     assertCounter("writeRequestCount", writeRequests + 60);
     numScanNext += 10;
 
     doScan(10, true); // true = caching
     metricsRegionServer.getRegionServerWrapper().forceRecompute();
-    if (TABLES_ON_MASTER) {
-      assertCounter("totalRequestCount", requests + 53);
-      assertCounter("totalRowActionRequestCount", rowActionRequests + 100);
-      assertCounter("readRequestCount", readRequests + 40);
-    }
     assertCounter("writeRequestCount", writeRequests + 60);
     numScanNext += 1;
   }
@@ -342,7 +317,7 @@ public class TestRegionServerMetrics {
     TEST_UTIL.getAdmin().flush(tableName);
 
     metricsRegionServer.getRegionServerWrapper().forceRecompute();
-    assertGauge("storeCount", TABLES_ON_MASTER ? 1 : 5);
+    assertGauge("storeCount", 5);
     assertGauge("storeFileCount", 1);
   }
 
@@ -423,9 +398,6 @@ public class TestRegionServerMetrics {
       }
       numScanNext += NUM_SCAN_NEXT;
       assertRegionMetrics("scanCount", NUM_SCAN_NEXT);
-      if (TABLES_ON_MASTER) {
-        assertCounter("ScanSize_num_ops", numScanNext);
-      }
     }
   }
 
@@ -443,9 +415,6 @@ public class TestRegionServerMetrics {
     }
     numScanNext += NUM_SCAN_NEXT;
     assertRegionMetrics("scanCount", NUM_SCAN_NEXT);
-    if (TABLES_ON_MASTER) {
-      assertCounter("ScanTime_num_ops", numScanNext);
-    }
   }
 
   @Test
@@ -457,17 +426,11 @@ public class TestRegionServerMetrics {
       for (int nextCount = 0; nextCount < NUM_SCAN_NEXT; nextCount++) {
         Result result = resultScanners.next();
         assertNotNull(result);
-        if (TABLES_ON_MASTER) {
-          assertEquals(1, result.size());
-        }
       }
       assertNull(resultScanners.next());
     }
     numScanNext += NUM_SCAN_NEXT;
     assertRegionMetrics("scanCount", NUM_SCAN_NEXT);
-    if (TABLES_ON_MASTER) {
-      assertCounter("ScanSize_num_ops", numScanNext);
-    }
   }
 
   @Test

@@ -48,7 +48,7 @@ To delete the 'f1' column family in table 'ns1:t1', use one of:
 
 You can also change table-scope attributes like MAX_FILESIZE, READONLY,
 MEMSTORE_FLUSHSIZE, NORMALIZATION_ENABLED, NORMALIZER_TARGET_REGION_COUNT,
-NORMALIZER_TARGET_REGION_SIZE(MB), DURABILITY, etc. These can be put at the end;
+NORMALIZER_TARGET_REGION_SIZE_MB, DURABILITY, etc. These can be put at the end;
 for example, to change the max size of a region to 128MB, do:
 
   hbase> alter 't1', MAX_FILESIZE => '134217728'
@@ -81,6 +81,18 @@ You can also remove a table-scope attribute:
   hbase> alter 't1', METHOD => 'table_att_unset', NAME => 'MAX_FILESIZE'
 
   hbase> alter 't1', METHOD => 'table_att_unset', NAME => 'coprocessor$1'
+
+Other than removing coprocessor from the table-scope attribute via 'table_att_unset', you can also
+use 'table_remove_coprocessor' by specifying the class name:
+
+  hbase> alter 't1', METHOD => 'table_remove_coprocessor', CLASSNAME =>
+           'org.apache.hadoop.hbase.coprocessor.SimpleRegionObserver'
+
+You can also remove multiple coprocessors at once:
+
+  hbase> alter 't1', METHOD => 'table_remove_coprocessor', CLASSNAME =>
+           ['org.apache.hadoop.hbase.coprocessor.SimpleRegionObserver',
+            'org.apache.hadoop.hbase.coprocessor.Export']
 
 You can also set REGION_REPLICATION:
 

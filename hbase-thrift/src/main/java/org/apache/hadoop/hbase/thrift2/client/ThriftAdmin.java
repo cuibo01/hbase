@@ -27,6 +27,7 @@ import java.util.concurrent.Future;
 import java.util.regex.Pattern;
 import org.apache.commons.lang3.NotImplementedException;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.client.BalanceRequest;
 import org.apache.hadoop.hbase.CacheEvictionStats;
 import org.apache.hadoop.hbase.ClusterMetrics;
 import org.apache.hadoop.hbase.HConstants;
@@ -38,6 +39,7 @@ import org.apache.hadoop.hbase.TableExistsException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.client.Admin;
+import org.apache.hadoop.hbase.client.BalanceResponse;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.CompactType;
 import org.apache.hadoop.hbase.client.CompactionState;
@@ -630,6 +632,11 @@ public class ThriftAdmin implements Admin {
   }
 
   @Override
+  public BalanceResponse balance(BalanceRequest request) throws IOException {
+    throw new NotImplementedException("balance not supported in ThriftAdmin");
+  }
+
+  @Override
   public boolean isBalancerEnabled() {
     throw new NotImplementedException("isBalancerEnabled not supported in ThriftAdmin");
   }
@@ -862,8 +869,8 @@ public class ThriftAdmin implements Admin {
   }
 
   @Override
-  public Future<Void> cloneSnapshotAsync(String snapshotName, TableName tableName, boolean cloneAcl)
-      throws IOException, TableExistsException, RestoreSnapshotException {
+  public Future<Void> cloneSnapshotAsync(String snapshotName, TableName tableName, boolean cloneAcl,
+    String customSFT) throws IOException, TableExistsException, RestoreSnapshotException {
     throw new NotImplementedException("cloneSnapshotAsync not supported in ThriftAdmin");
   }
 
@@ -941,6 +948,11 @@ public class ThriftAdmin implements Admin {
 
   @Override
   public void updateConfiguration() {
+    throw new NotImplementedException("updateConfiguration not supported in ThriftAdmin");
+  }
+
+  @Override
+  public void updateConfiguration(String groupName) {
     throw new NotImplementedException("updateConfiguration not supported in ThriftAdmin");
   }
 
@@ -1223,7 +1235,7 @@ public class ThriftAdmin implements Admin {
   }
 
   @Override
-  public boolean balanceRSGroup(String groupName) {
+  public BalanceResponse balanceRSGroup(String groupName, BalanceRequest request) {
     throw new NotImplementedException("balanceRSGroup not supported in ThriftAdmin");
   }
 
@@ -1284,5 +1296,19 @@ public class ThriftAdmin implements Admin {
       ServerType serverType, int limit, Map<String, Object> filterParams)
       throws IOException {
     throw new NotImplementedException("getLogEntries not supported in ThriftAdmin");
+  }
+
+  @Override
+  public Future<Void> modifyColumnFamilyStoreFileTrackerAsync(TableName tableName, byte[] family,
+    String dstSFT) throws IOException {
+    throw new NotImplementedException(
+      "modifyColumnFamilyStoreFileTrackerAsync not supported in ThriftAdmin");
+  }
+
+  @Override
+  public Future<Void> modifyTableStoreFileTrackerAsync(TableName tableName, String dstSFT)
+    throws IOException {
+    throw new NotImplementedException(
+      "modifyTableStoreFileTrackerAsync not supported in ThriftAdmin");
   }
 }

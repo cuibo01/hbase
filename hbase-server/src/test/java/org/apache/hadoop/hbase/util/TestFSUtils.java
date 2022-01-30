@@ -39,7 +39,7 @@ import org.apache.hadoop.fs.StreamCapabilities;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HDFSBlocksDistribution;
 import org.apache.hadoop.hbase.client.RegionInfoBuilder;
@@ -52,6 +52,7 @@ import org.apache.hadoop.hdfs.DFSHedgedReadMetrics;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.client.HdfsDataInputStream;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.ClassRule;
@@ -72,13 +73,13 @@ public class TestFSUtils {
 
   private static final Logger LOG = LoggerFactory.getLogger(TestFSUtils.class);
 
-  private HBaseTestingUtility htu;
+  private HBaseTestingUtil htu;
   private FileSystem fs;
   private Configuration conf;
 
   @Before
   public void setUp() throws IOException {
-    htu = new HBaseTestingUtility();
+    htu = new HBaseTestingUtil();
     fs = htu.getTestFileSystem();
     conf = htu.getConfiguration();
   }
@@ -105,7 +106,31 @@ public class TestFSUtils {
     out.close();
   }
 
-  @Test public void testcomputeHDFSBlocksDistribution() throws Exception {
+  @Test
+  public void testComputeHDFSBlocksDistributionByInputStream() throws Exception {
+    testComputeHDFSBlocksDistribution((fs, testFile) -> {
+      try (FSDataInputStream open = fs.open(testFile)) {
+        assertTrue(open instanceof HdfsDataInputStream);
+        return FSUtils.computeHDFSBlocksDistribution((HdfsDataInputStream) open);
+      }
+    });
+  }
+
+  @Test
+  public void testComputeHDFSBlockDistribution() throws Exception {
+    testComputeHDFSBlocksDistribution((fs, testFile) -> {
+      FileStatus status = fs.getFileStatus(testFile);
+      return FSUtils.computeHDFSBlocksDistribution(fs, status, 0, status.getLen());
+    });
+  }
+
+  @FunctionalInterface
+  interface HDFSBlockDistributionFunction {
+    HDFSBlocksDistribution getForPath(FileSystem fs, Path path) throws IOException;
+  }
+
+  private void testComputeHDFSBlocksDistribution(
+    HDFSBlockDistributionFunction fileToBlockDistribution) throws Exception {
     final int DEFAULT_BLOCK_SIZE = 1024;
     conf.setLong("dfs.blocksize", DEFAULT_BLOCK_SIZE);
     MiniDFSCluster cluster = null;
@@ -125,20 +150,21 @@ public class TestFSUtils {
       // given the default replication factor is 3, the same as the number of
       // datanodes; the locality index for each host should be 100%,
       // or getWeight for each host should be the same as getUniqueBlocksWeights
-      final long maxTime = System.currentTimeMillis() + 2000;
+      final long maxTime = EnvironmentEdgeManager.currentTime() + 2000;
       boolean ok;
       do {
         ok = true;
-        FileStatus status = fs.getFileStatus(testFile);
+
         HDFSBlocksDistribution blocksDistribution =
-          FSUtils.computeHDFSBlocksDistribution(fs, status, 0, status.getLen());
+          fileToBlockDistribution.getForPath(fs, testFile);
+
         long uniqueBlocksTotalWeight =
           blocksDistribution.getUniqueBlocksTotalWeight();
         for (String host : hosts) {
           long weight = blocksDistribution.getWeight(host);
           ok = (ok && uniqueBlocksTotalWeight == weight);
         }
-      } while (!ok && System.currentTimeMillis() < maxTime);
+      } while (!ok && EnvironmentEdgeManager.currentTime() < maxTime);
       assertTrue(ok);
       } finally {
       htu.shutdownMiniDFSCluster();
@@ -159,20 +185,20 @@ public class TestFSUtils {
       // given the default replication factor is 3, we will have total of 9
       // replica of blocks; thus the host with the highest weight should have
       // weight == 3 * DEFAULT_BLOCK_SIZE
-      final long maxTime = System.currentTimeMillis() + 2000;
+      final long maxTime = EnvironmentEdgeManager.currentTime() + 2000;
       long weight;
       long uniqueBlocksTotalWeight;
       do {
-        FileStatus status = fs.getFileStatus(testFile);
         HDFSBlocksDistribution blocksDistribution =
-          FSUtils.computeHDFSBlocksDistribution(fs, status, 0, status.getLen());
+          fileToBlockDistribution.getForPath(fs, testFile);
         uniqueBlocksTotalWeight = blocksDistribution.getUniqueBlocksTotalWeight();
 
         String tophost = blocksDistribution.getTopHosts().get(0);
         weight = blocksDistribution.getWeight(tophost);
 
         // NameNode is informed asynchronously, so we may have a delay. See HBASE-6175
-      } while (uniqueBlocksTotalWeight != weight && System.currentTimeMillis() < maxTime);
+      } while (uniqueBlocksTotalWeight != weight &&
+          EnvironmentEdgeManager.currentTime() < maxTime);
       assertTrue(uniqueBlocksTotalWeight == weight);
 
     } finally {
@@ -193,14 +219,14 @@ public class TestFSUtils {
 
       // given the default replication factor is 3, we will have total of 3
       // replica of blocks; thus there is one host without weight
-      final long maxTime = System.currentTimeMillis() + 2000;
+      final long maxTime = EnvironmentEdgeManager.currentTime() + 2000;
       HDFSBlocksDistribution blocksDistribution;
       do {
-        FileStatus status = fs.getFileStatus(testFile);
-        blocksDistribution = FSUtils.computeHDFSBlocksDistribution(fs, status, 0, status.getLen());
+        blocksDistribution = fileToBlockDistribution.getForPath(fs, testFile);
         // NameNode is informed asynchronously, so we may have a delay. See HBASE-6175
       }
-      while (blocksDistribution.getTopHosts().size() != 3 && System.currentTimeMillis() < maxTime);
+      while (blocksDistribution.getTopHosts().size() != 3 &&
+          EnvironmentEdgeManager.currentTime() < maxTime);
       assertEquals("Wrong number of hosts distributing blocks.", 3,
         blocksDistribution.getTopHosts().size());
     } finally {
@@ -362,7 +388,7 @@ public class TestFSUtils {
     out.close();
     assertTrue("The created file should be present", CommonFSUtils.isExists(fs, p));
 
-    long expect = System.currentTimeMillis() + 1000;
+    long expect = EnvironmentEdgeManager.currentTime() + 1000;
     assertNotEquals(expect, fs.getFileStatus(p).getModificationTime());
 
     ManualEnvironmentEdge mockEnv = new ManualEnvironmentEdge();

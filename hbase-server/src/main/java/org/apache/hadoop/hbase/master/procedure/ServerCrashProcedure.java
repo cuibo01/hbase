@@ -34,6 +34,7 @@ import org.apache.hadoop.hbase.master.SplitWALManager;
 import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
 import org.apache.hadoop.hbase.master.assignment.RegionStateNode;
 import org.apache.hadoop.hbase.master.assignment.TransitRegionStateProcedure;
+import org.apache.hadoop.hbase.master.replication.ClaimReplicationQueuesProcedure;
 import org.apache.hadoop.hbase.monitoring.MonitoredTask;
 import org.apache.hadoop.hbase.monitoring.TaskMonitor;
 import org.apache.hadoop.hbase.procedure2.Procedure;
@@ -64,6 +65,21 @@ public class ServerCrashProcedure
     extends StateMachineProcedure<MasterProcedureEnv, ServerCrashState>
     implements ServerProcedureInterface {
   private static final Logger LOG = LoggerFactory.getLogger(ServerCrashProcedure.class);
+
+  /**
+   * Configuration parameter to enable/disable the retain region assignment during
+   * ServerCrashProcedure.
+   * <p>
+   * By default retain assignment is disabled which makes the failover faster and improve the
+   * availability; useful for cloud scenario where region block locality is not important. Enable
+   * this when RegionServers are deployed on same host where Datanode are running, this will improve
+   * read performance due to local read.
+   * <p>
+   * see HBASE-24900 for more details.
+   */
+  public static final String MASTER_SCP_RETAIN_ASSIGNMENT = "hbase.master.scp.retain.assignment";
+  /** Default value of {@link #MASTER_SCP_RETAIN_ASSIGNMENT} */
+  public static final boolean DEFAULT_MASTER_SCP_RETAIN_ASSIGNMENT = false;
 
   /**
    * Name of the crashed server to process.
@@ -219,11 +235,15 @@ public class ServerCrashProcedure
             }
             assignRegions(env, regionsOnCrashedServer);
           }
-          setNextState(ServerCrashState.SERVER_CRASH_FINISH);
+          setNextState(ServerCrashState.SERVER_CRASH_CLAIM_REPLICATION_QUEUES);
           break;
         case SERVER_CRASH_HANDLE_RIT2:
           // Noop. Left in place because we used to call handleRIT here for a second time
           // but no longer necessary since HBASE-20634.
+          setNextState(ServerCrashState.SERVER_CRASH_CLAIM_REPLICATION_QUEUES);
+          break;
+        case SERVER_CRASH_CLAIM_REPLICATION_QUEUES:
+          addChildProcedure(new ClaimReplicationQueuesProcedure(serverName));
           setNextState(ServerCrashState.SERVER_CRASH_FINISH);
           break;
         case SERVER_CRASH_FINISH:
@@ -486,6 +506,8 @@ public class ServerCrashProcedure
    */
   private void assignRegions(MasterProcedureEnv env, List<RegionInfo> regions) throws IOException {
     AssignmentManager am = env.getMasterServices().getAssignmentManager();
+    boolean retainAssignment = env.getMasterConfiguration().getBoolean(MASTER_SCP_RETAIN_ASSIGNMENT,
+      DEFAULT_MASTER_SCP_RETAIN_ASSIGNMENT);
     for (RegionInfo region : regions) {
       RegionStateNode regionNode = am.getRegionStates().getOrCreateRegionStateNode(region);
       regionNode.lock();
@@ -512,7 +534,8 @@ public class ServerCrashProcedure
         }
         if (regionNode.getProcedure() != null) {
           LOG.info("{} found RIT {}; {}", this, regionNode.getProcedure(), regionNode);
-          regionNode.getProcedure().serverCrashed(env, regionNode, getServerName());
+          regionNode.getProcedure().serverCrashed(env, regionNode, getServerName(),
+            !retainAssignment);
           continue;
         }
         if (env.getMasterServices().getTableStateManager()
@@ -531,9 +554,8 @@ public class ServerCrashProcedure
           LOG.warn("Found table disabled for region {}, procDetails: {}", regionNode, this);
           continue;
         }
-        // force to assign to a new candidate server, see HBASE-23035 for more details.
         TransitRegionStateProcedure proc =
-          TransitRegionStateProcedure.assign(env, region, true, null);
+            TransitRegionStateProcedure.assign(env, region, !retainAssignment, null);
         regionNode.setProcedure(proc);
         addChildProcedure(proc);
       } finally {

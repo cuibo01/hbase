@@ -24,7 +24,6 @@ import java.io.ByteArrayInputStream;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -44,20 +43,20 @@ import org.apache.hadoop.hbase.TableExistsException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.client.Admin;
+import org.apache.hadoop.hbase.client.BalanceRequest;
+import org.apache.hadoop.hbase.client.BalanceResponse;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.CompactType;
 import org.apache.hadoop.hbase.client.CompactionState;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
-import org.apache.hadoop.hbase.client.ServerType;
 import org.apache.hadoop.hbase.client.LogEntry;
 import org.apache.hadoop.hbase.client.NormalizeTableFilterParams;
-import org.apache.hadoop.hbase.client.OnlineLogRecord;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.client.LogQueryFilter;
+import org.apache.hadoop.hbase.client.ServerType;
 import org.apache.hadoop.hbase.client.SnapshotDescription;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.TableDescriptor;
@@ -329,12 +328,8 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
     return admin.balancerSwitch(onOrOff, synchronous);
   }
 
-  public boolean balance() throws IOException {
-    return admin.balance();
-  }
-
-  public boolean balance(boolean force) throws IOException {
-    return admin.balance(force);
+  public BalanceResponse balance(BalanceRequest request) throws IOException {
+    return admin.balance(request);
   }
 
   public boolean isBalancerEnabled() throws IOException {
@@ -548,8 +543,9 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
   }
 
   public Future<Void> cloneSnapshotAsync(String snapshotName, TableName tableName,
-    boolean restoreAcl) throws IOException, TableExistsException, RestoreSnapshotException {
-    return admin.cloneSnapshotAsync(snapshotName, tableName, restoreAcl);
+    boolean restoreAcl, String customSFT)
+    throws IOException, TableExistsException, RestoreSnapshotException {
+    return admin.cloneSnapshotAsync(snapshotName, tableName, restoreAcl, customSFT);
   }
 
   public void execProcedure(String signature, String instance, Map<String, String> props)
@@ -615,6 +611,10 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
 
   public void updateConfiguration() throws IOException {
     admin.updateConfiguration();
+  }
+
+  public void updateConfiguration(String groupName) throws IOException {
+    admin.updateConfiguration(groupName);
   }
 
   public List<SecurityCapability> getSecurityCapabilities() throws IOException {
@@ -825,8 +825,8 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
     verify();
   }
 
-  public boolean balanceRSGroup(String groupName) throws IOException {
-    return admin.balanceRSGroup(groupName);
+  public BalanceResponse balanceRSGroup(String groupName, BalanceRequest request) throws IOException {
+    return admin.balanceRSGroup(groupName, request);
   }
 
   @Override
@@ -844,9 +844,8 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
 
   @Override
   public List<LogEntry> getLogEntries(Set<ServerName> serverNames, String logType,
-      ServerType serverType, int limit, Map<String, Object> filterParams)
-      throws IOException {
-    return Collections.emptyList();
+    ServerType serverType, int limit, Map<String, Object> filterParams) throws IOException {
+    return admin.getLogEntries(serverNames, logType, serverType, limit, filterParams);
   }
 
   private void verify() throws IOException {
@@ -919,13 +918,19 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
   }
 
   @Override
-  public List<OnlineLogRecord> getSlowLogResponses(Set<ServerName> serverNames,
-      LogQueryFilter logQueryFilter) throws IOException {
-    return null;
+  public List<Boolean> clearSlowLogResponses(Set<ServerName> serverNames) throws IOException {
+    return admin.clearSlowLogResponses(serverNames);
   }
 
   @Override
-  public List<Boolean> clearSlowLogResponses(Set<ServerName> serverNames) throws IOException {
-    return null;
+  public Future<Void> modifyColumnFamilyStoreFileTrackerAsync(TableName tableName, byte[] family,
+    String dstSFT) throws IOException {
+    return admin.modifyColumnFamilyStoreFileTrackerAsync(tableName, family, dstSFT);
+  }
+
+  @Override
+  public Future<Void> modifyTableStoreFileTrackerAsync(TableName tableName, String dstSFT)
+    throws IOException {
+    return admin.modifyTableStoreFileTrackerAsync(tableName, dstSFT);
   }
 }

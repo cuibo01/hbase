@@ -207,6 +207,8 @@ message CloneSnapshotStateData {
   required TableSchema table_schema = 3;
   repeated RegionInfo region_info = 4;
   repeated RestoreParentToChildRegionsPair parent_to_child_regions_pair_list = 5;
+  optional bool restore_acl = 6;
+  optional string customSFT = 7;
 }
 
 enum RestoreSnapshotState {
@@ -225,6 +227,7 @@ message RestoreSnapshotStateData {
   repeated RegionInfo region_info_for_remove = 5;
   repeated RegionInfo region_info_for_add = 6;
   repeated RestoreParentToChildRegionsPair parent_to_child_regions_pair_list = 7;
+  optional bool restore_acl = 8;
 }
 
 enum DispatchMergingRegionsState {
@@ -312,8 +315,9 @@ enum ServerCrashState {
   SERVER_CRASH_WAIT_ON_ASSIGN = 9;
   SERVER_CRASH_SPLIT_META_LOGS = 10;
   SERVER_CRASH_ASSIGN_META = 11;
-  SERVER_CRASH_DELETE_SPLIT_META_WALS_DIR=12;
-  SERVER_CRASH_DELETE_SPLIT_WALS_DIR=13;
+  SERVER_CRASH_DELETE_SPLIT_META_WALS_DIR = 12;
+  SERVER_CRASH_DELETE_SPLIT_WALS_DIR = 13;
+  SERVER_CRASH_CLAIM_REPLICATION_QUEUES = 14;
   SERVER_CRASH_HANDLE_RIT2 = 20[deprecated=true];
   SERVER_CRASH_FINISH = 100;
 }
@@ -623,4 +627,49 @@ enum SplitWALState{
   ACQUIRE_SPLIT_WAL_WORKER = 1;
   DISPATCH_WAL_TO_WORKER = 2;
   RELEASE_SPLIT_WORKER = 3;
+}
+
+message ClaimReplicationQueuesStateData {
+  required ServerName crashed_server = 1;
+}
+
+message ClaimReplicationQueueRemoteStateData {
+  required ServerName crashed_server = 1;
+  required string queue = 2;
+  required ServerName target_server = 3;
+}
+
+message ClaimReplicationQueueRemoteParameter {
+  required ServerName crashed_server = 1;
+  required string queue = 2;
+}
+
+enum ClaimReplicationQueuesState {
+  CLAIM_REPLICATION_QUEUES_DISPATCH = 1;
+  CLAIM_REPLICATION_QUEUES_FINISH = 2;
+}
+
+enum ModifyTableDescriptorState {
+  MODIFY_TABLE_DESCRIPTOR_PREPARE = 1;
+  MODIFY_TABLE_DESCRIPTOR_UPDATE = 2;
+}
+
+message ModifyTableDescriptorStateData {
+  required TableName table_name = 1;
+  optional TableSchema modified_table_schema = 2;
+}
+
+enum ModifyStoreFileTrackerState {
+  MODIFY_STORE_FILE_TRACKER_FINISH_PREVIOUS_MIGRATION = 1;
+  MODIFY_STORE_FILE_TRACKER_START_MIGRATION = 2;
+  MODIFY_STORE_FILE_TRACKER_FINISH_MIGRATION = 3;
+}
+
+message ModifyStoreFileTrackerStateData {
+  required TableName table_name = 1;
+  required string dst_sft = 2;
+}
+
+message ModifyColumnFamilyStoreFileTrackerStateData {
+  required bytes family = 1;
 }

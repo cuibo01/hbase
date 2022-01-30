@@ -33,7 +33,7 @@ import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.CompareOperator;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.ipc.HBaseRpcController;
@@ -68,7 +68,7 @@ public class TestMalformedCellFromClient {
   public static final HBaseClassTestRule CLASS_RULE =
     HBaseClassTestRule.forClass(TestMalformedCellFromClient.class);
 
-  private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+  private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static final byte[] FAMILY = Bytes.toBytes("testFamily");
   private static final int CELL_SIZE = 100;
   private static final TableName TABLE_NAME = TableName.valueOf("TestMalformedCellFromClient");
@@ -233,8 +233,8 @@ public class TestMalformedCellFromClient {
     builder.setAtomic(true);
     ClientProtos.Action.Builder actionBuilder = ClientProtos.Action.newBuilder();
     ClientProtos.MutationProto.Builder mutationBuilder = ClientProtos.MutationProto.newBuilder();
-    ClientProtos.Condition condition = RequestConverter
-      .buildCondition(rm.getRow(), FAMILY, null, CompareOperator.EQUAL, new byte[10], null, null);
+    ClientProtos.Condition condition = ProtobufUtil.toCondition(rm.getRow(), FAMILY, null,
+      CompareOperator.EQUAL, new byte[10], null, null);
     for (Mutation mutation : rm.getMutations()) {
       ClientProtos.MutationProto.MutationType mutateType = null;
       if (mutation instanceof Put) {

@@ -152,7 +152,7 @@ public enum EventType {
    * C_M_MERGE_REGION<br>
    * Client asking Master to merge regions.
    */
-  C_M_MERGE_REGION          (30, ExecutorType.MASTER_TABLE_OPERATIONS),
+  C_M_MERGE_REGION          (30, ExecutorType.MASTER_MERGE_OPERATIONS),
   /**
    * Messages originating from Client to Master.<br>
    * C_M_DELETE_TABLE<br>
@@ -294,7 +294,14 @@ public enum EventType {
    *
    * RS_REPLAY_SYNC_REPLICATION_WAL
    */
-  RS_REPLAY_SYNC_REPLICATION_WAL(85, ExecutorType.RS_REPLAY_SYNC_REPLICATION_WAL);
+  RS_REPLAY_SYNC_REPLICATION_WAL(85, ExecutorType.RS_REPLAY_SYNC_REPLICATION_WAL),
+
+  /**
+   * RS claim replication queue.<br>
+   *
+   * RS_CLAIM_REPLICATION_QUEUE
+   */
+  RS_CLAIM_REPLICATION_QUEUE(86, ExecutorType.RS_CLAIM_REPLICATION_QUEUE);
 
   private final int code;
   private final ExecutorType executor;

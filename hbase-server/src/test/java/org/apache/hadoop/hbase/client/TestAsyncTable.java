@@ -43,7 +43,7 @@ import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import org.apache.hadoop.hbase.CompareOperator;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotEnabledException;
 import org.apache.hadoop.hbase.filter.BinaryComparator;
@@ -56,6 +56,7 @@ import org.apache.hadoop.hbase.io.TimeRange;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Pair;
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -80,7 +81,7 @@ public class TestAsyncTable {
   public static final HBaseClassTestRule CLASS_RULE =
     HBaseClassTestRule.forClass(TestAsyncTable.class);
 
-  private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+  private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
 
   private static TableName TABLE_NAME = TableName.valueOf("async");
 
@@ -391,7 +392,7 @@ public class TestAsyncTable {
   @Deprecated
   public void testCheckAndMutateWithTimeRangeForOldApi() throws Exception {
     AsyncTable<?> table = getTable.get();
-    final long ts = System.currentTimeMillis() / 2;
+    final long ts = EnvironmentEdgeManager.currentTime() / 2;
     Put put = new Put(row);
     put.addColumn(FAMILY, QUALIFIER, ts, VALUE);
 
@@ -750,7 +751,7 @@ public class TestAsyncTable {
   @Test
   public void testCheckAndMutateWithTimeRange() throws Exception {
     AsyncTable<?> table = getTable.get();
-    final long ts = System.currentTimeMillis() / 2;
+    final long ts = EnvironmentEdgeManager.currentTime() / 2;
     Put put = new Put(row);
     put.addColumn(FAMILY, QUALIFIER, ts, VALUE);
 
@@ -1668,6 +1669,49 @@ public class TestAsyncTable {
     try {
       getTable.get()
         .put(new Put(Bytes.toBytes(0)).addColumn(FAMILY, QUALIFIER, new byte[MAX_KEY_VALUE_SIZE]));
+      fail("Should fail since the put exceeds the max key value size");
+    } catch (IllegalArgumentException e) {
+      assertThat(e.getMessage(), containsString("KeyValue size too large"));
+    }
+  }
+
+  @Test
+  public void testInvalidPutInRowMutations() throws IOException {
+    final byte[] row = Bytes.toBytes(0);
+    try {
+      getTable.get().mutateRow(new RowMutations(row).add(new Put(row)));
+      fail("Should fail since the put does not contain any cells");
+    } catch (IllegalArgumentException e) {
+      assertThat(e.getMessage(), containsString("No columns to insert"));
+    }
+
+    try {
+      getTable.get()
+        .mutateRow(new RowMutations(row).add(new Put(row)
+          .addColumn(FAMILY, QUALIFIER, new byte[MAX_KEY_VALUE_SIZE])));
+      fail("Should fail since the put exceeds the max key value size");
+    } catch (IllegalArgumentException e) {
+      assertThat(e.getMessage(), containsString("KeyValue size too large"));
+    }
+  }
+
+  @Test
+  public void testInvalidPutInRowMutationsInCheckAndMutate() throws IOException {
+    final byte[] row = Bytes.toBytes(0);
+    try {
+      getTable.get().checkAndMutate(CheckAndMutate.newBuilder(row)
+        .ifNotExists(FAMILY, QUALIFIER)
+        .build(new RowMutations(row).add(new Put(row))));
+      fail("Should fail since the put does not contain any cells");
+    } catch (IllegalArgumentException e) {
+      assertThat(e.getMessage(), containsString("No columns to insert"));
+    }
+
+    try {
+      getTable.get().checkAndMutate(CheckAndMutate.newBuilder(row)
+        .ifNotExists(FAMILY, QUALIFIER)
+        .build(new RowMutations(row).add(new Put(row)
+          .addColumn(FAMILY, QUALIFIER, new byte[MAX_KEY_VALUE_SIZE]))));
       fail("Should fail since the put exceeds the max key value size");
     } catch (IllegalArgumentException e) {
       assertThat(e.getMessage(), containsString("KeyValue size too large"));

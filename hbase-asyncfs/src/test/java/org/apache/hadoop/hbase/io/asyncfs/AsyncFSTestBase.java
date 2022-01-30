@@ -19,11 +19,9 @@ package org.apache.hadoop.hbase.io.asyncfs;
 
 import java.io.File;
 import java.io.IOException;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HBaseCommonTestingUtility;
-import org.apache.hadoop.hbase.trace.TraceUtil;
+import org.apache.hadoop.hbase.HBaseCommonTestingUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,7 +30,7 @@ public abstract class AsyncFSTestBase {
 
   private static final Logger LOG = LoggerFactory.getLogger(AsyncFSTestBase.class);
 
-  protected static final HBaseCommonTestingUtility UTIL = new HBaseCommonTestingUtility();
+  protected static final HBaseCommonTestingUtil UTIL = new HBaseCommonTestingUtil();
 
   protected static File CLUSTER_TEST_DIR;
 
@@ -51,7 +49,7 @@ public abstract class AsyncFSTestBase {
     // Using randomUUID ensures that multiple clusters can be launched by
     // a same test, if it stops & starts them
     Path testDir =
-      UTIL.getDataTestDir("cluster_" + HBaseCommonTestingUtility.getRandomUUID().toString());
+      UTIL.getDataTestDir("cluster_" + HBaseCommonTestingUtil.getRandomUUID().toString());
     CLUSTER_TEST_DIR = new File(testDir.toString()).getAbsoluteFile();
     // Have it cleaned up on exit
     boolean b = deleteOnExit();
@@ -98,13 +96,7 @@ public abstract class AsyncFSTestBase {
     createDirsAndSetProperties();
 
     Configuration conf = UTIL.getConfiguration();
-    // Error level to skip some warnings specific to the minicluster. See HBASE-4709
-    org.apache.log4j.Logger.getLogger(org.apache.hadoop.metrics2.util.MBeans.class)
-      .setLevel(org.apache.log4j.Level.ERROR);
-    org.apache.log4j.Logger.getLogger(org.apache.hadoop.metrics2.impl.MetricsSystemImpl.class)
-      .setLevel(org.apache.log4j.Level.ERROR);
 
-    TraceUtil.initTracer(conf);
     CLUSTER = new MiniDFSCluster.Builder(conf).numDataNodes(servers).build();
     CLUSTER.waitClusterUp();
   }

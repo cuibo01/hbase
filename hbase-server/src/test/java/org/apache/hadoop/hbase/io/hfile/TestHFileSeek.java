@@ -21,22 +21,25 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Random;
 import java.util.StringTokenizer;
-import junit.framework.TestCase;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RawLocalFileSystem;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.io.hfile.HFile.Reader;
 import org.apache.hadoop.hbase.io.hfile.HFile.Writer;
 import org.apache.hadoop.hbase.testclassification.IOTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.RandomDistribution;
 import org.apache.hadoop.io.BytesWritable;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.ClassRule;
+import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,8 +61,8 @@ import org.apache.hbase.thirdparty.org.apache.commons.cli.ParseException;
  * Remove after tfile is committed and use the tfile version of this class
  * instead.</p>
  */
-@Category({IOTests.class, SmallTests.class})
-public class TestHFileSeek extends TestCase {
+@Category({ IOTests.class, SmallTests.class })
+public class TestHFileSeek {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
@@ -79,7 +82,7 @@ public class TestHFileSeek extends TestCase {
 
   private static final Logger LOG = LoggerFactory.getLogger(TestHFileSeek.class);
 
-  @Override
+  @Before
   public void setUp() throws IOException {
     if (options == null) {
       options = new MyOptions(new String[0]);
@@ -111,7 +114,7 @@ public class TestHFileSeek extends TestCase {
             options.dictSize);
   }
 
-  @Override
+  @After
   public void tearDown() {
     try {
       fs.close();
@@ -189,7 +192,7 @@ public class TestHFileSeek extends TestCase {
     Reader reader = TestHFile.createReaderFromStream(context, new CacheConfig(conf), conf);
     KeySampler kSampler = new KeySampler(rng, ((KeyValue) reader.getFirstKey().get()).getKey(),
         ((KeyValue) reader.getLastKey().get()).getKey(), keyLenGen);
-    HFileScanner scanner = reader.getScanner(false, USE_PREAD);
+    HFileScanner scanner = reader.getScanner(conf, false, USE_PREAD);
     BytesWritable key = new BytesWritable();
     timer.reset();
     timer.start();
@@ -216,6 +219,7 @@ public class TestHFileSeek extends TestCase {
 
   }
 
+  @Test
   public void testSeeks() throws IOException {
     if (options.doCreate()) {
       createTFile();
@@ -263,7 +267,7 @@ public class TestHFileSeek extends TestCase {
     int minWordLen = 5;
     int maxWordLen = 20;
 
-    private HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+    private HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
     String rootDir =
       TEST_UTIL.getDataTestDir("TestTFileSeek").toString();
     String file = "TestTFileSeek";

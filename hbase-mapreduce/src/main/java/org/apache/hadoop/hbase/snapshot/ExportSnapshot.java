@@ -52,8 +52,10 @@ import org.apache.hadoop.hbase.io.WALLink;
 import org.apache.hadoop.hbase.io.hadoopbackport.ThrottledInputStream;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mob.MobUtils;
+import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
 import org.apache.hadoop.hbase.util.AbstractHBaseTool;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.HFileArchiveUtil;
 import org.apache.hadoop.hbase.util.Pair;
@@ -111,6 +113,7 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
   private static final String CONF_OUTPUT_ROOT = "snapshot.export.output.root";
   private static final String CONF_INPUT_ROOT = "snapshot.export.input.root";
   private static final String CONF_BUFFER_SIZE = "snapshot.export.buffer.size";
+  private static final String CONF_REPORT_SIZE = "snapshot.export.report.size";
   private static final String CONF_MAP_GROUP = "snapshot.export.default.map.group";
   private static final String CONF_BANDWIDTH_MB = "snapshot.export.map.bandwidth.mb";
   private static final String CONF_MR_JOB_NAME = "mapreduce.job.name";
@@ -171,6 +174,7 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
     private String filesUser;
     private short filesMode;
     private int bufferSize;
+    private int reportSize;
 
     private FileSystem outputFs;
     private Path outputArchive;
@@ -218,6 +222,7 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
       int defaultBlockSize = Math.max((int) outputFs.getDefaultBlockSize(outputRoot), BUFFER_SIZE);
       bufferSize = conf.getInt(CONF_BUFFER_SIZE, defaultBlockSize);
       LOG.info("Using bufferSize=" + StringUtils.humanReadableInt(bufferSize));
+      reportSize = conf.getInt(CONF_REPORT_SIZE, REPORT_SIZE);
 
       for (Counter c : Counter.values()) {
         context.getCounter(c).increment(0);
@@ -416,13 +421,13 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
         int reportBytes = 0;
         int bytesRead;
 
-        long stime = System.currentTimeMillis();
+        long stime = EnvironmentEdgeManager.currentTime();
         while ((bytesRead = in.read(buffer)) > 0) {
           out.write(buffer, 0, bytesRead);
           totalBytesWritten += bytesRead;
           reportBytes += bytesRead;
 
-          if (reportBytes >= REPORT_SIZE) {
+          if (reportBytes >= reportSize) {
             context.getCounter(Counter.BYTES_COPIED).increment(reportBytes);
             context.setStatus(String.format(statusMessage,
                               StringUtils.humanReadableInt(totalBytesWritten),
@@ -431,7 +436,7 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
             reportBytes = 0;
           }
         }
-        long etime = System.currentTimeMillis();
+        long etime = EnvironmentEdgeManager.currentTime();
 
         context.getCounter(Counter.BYTES_COPIED).increment(reportBytes);
         context.setStatus(String.format(statusMessage,
@@ -580,29 +585,37 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
         @Override
         public void storeFile(final RegionInfo regionInfo, final String family,
             final SnapshotRegionManifest.StoreFile storeFile) throws IOException {
-          // for storeFile.hasReference() case, copied as part of the manifest
+          Pair<SnapshotFileInfo, Long> snapshotFileAndSize = null;
           if (!storeFile.hasReference()) {
             String region = regionInfo.getEncodedName();
             String hfile = storeFile.getName();
-            Path path = HFileLink.createPath(table, region, family, hfile);
-
-            SnapshotFileInfo fileInfo = SnapshotFileInfo.newBuilder()
-              .setType(SnapshotFileInfo.Type.HFILE)
-              .setHfile(path.toString())
-              .build();
-
-            long size;
-            if (storeFile.hasFileSize()) {
-              size = storeFile.getFileSize();
-            } else {
-              size = HFileLink.buildFromHFileLinkPattern(conf, path).getFileStatus(fs).getLen();
-            }
-            files.add(new Pair<>(fileInfo, size));
+            snapshotFileAndSize = getSnapshotFileAndSize(fs, conf, table, region, family, hfile,
+              storeFile.hasFileSize() ? storeFile.getFileSize() : -1);
+          } else {
+            Pair<String, String> referredToRegionAndFile =
+                StoreFileInfo.getReferredToRegionAndFile(storeFile.getName());
+            String referencedRegion = referredToRegionAndFile.getFirst();
+            String referencedHFile = referredToRegionAndFile.getSecond();
+            snapshotFileAndSize = getSnapshotFileAndSize(fs, conf, table, referencedRegion, family,
+              referencedHFile, storeFile.hasFileSize() ? storeFile.getFileSize() : -1);
           }
+          files.add(snapshotFileAndSize);
         }
-    });
+      });
 
     return files;
+  }
+
+  private static Pair<SnapshotFileInfo, Long> getSnapshotFileAndSize(FileSystem fs,
+      Configuration conf, TableName table, String region, String family, String hfile, long size)
+      throws IOException {
+    Path path = HFileLink.createPath(table, region, family, hfile);
+    SnapshotFileInfo fileInfo = SnapshotFileInfo.newBuilder().setType(SnapshotFileInfo.Type.HFILE)
+        .setHfile(path.toString()).build();
+    if (size == -1) {
+      size = HFileLink.buildFromHFileLinkPattern(conf, path).getFileStatus(fs).getLen();
+    }
+    return new Pair<>(fileInfo, size);
   }
 
   /**
@@ -927,7 +940,7 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
     mappers = getOptionAsInt(cmd, Options.MAPPERS.getLongOpt(), mappers);
     filesUser = cmd.getOptionValue(Options.CHUSER.getLongOpt(), filesUser);
     filesGroup = cmd.getOptionValue(Options.CHGROUP.getLongOpt(), filesGroup);
-    filesMode = getOptionAsInt(cmd, Options.CHMOD.getLongOpt(), filesMode);
+    filesMode = getOptionAsInt(cmd, Options.CHMOD.getLongOpt(), filesMode, 8);
     bandwidthMB = getOptionAsInt(cmd, Options.BANDWIDTH.getLongOpt(), bandwidthMB);
     overwrite = cmd.hasOption(Options.OVERWRITE.getLongOpt());
     // And verifyChecksum and verifyTarget with values read from old args in processOldArgs(...).

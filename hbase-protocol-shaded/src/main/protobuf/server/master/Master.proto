@@ -293,11 +293,14 @@ message IsInMaintenanceModeResponse {
 }
 
 message BalanceRequest {
-  optional bool force = 1;
+  optional bool ignore_rit = 1;
+  optional bool dry_run = 2;
 }
 
 message BalanceResponse {
   required bool balancer_ran = 1;
+  optional uint32 moves_calculated = 2;
+  optional uint32 moves_executed = 3;
 }
 
 message SetBalancerRunningRequest {
@@ -459,6 +462,7 @@ message RestoreSnapshotRequest {
   optional uint64 nonce_group = 2 [default = 0];
   optional uint64 nonce = 3 [default = 0];
   optional bool restoreACL = 4 [default = false];
+  optional string customSFT = 5;
 }
 
 message RestoreSnapshotResponse {
@@ -707,6 +711,13 @@ message BalancerDecisionsRequest {
 }
 
 /**
+ * Same as BalancerDecision but used for BalancerRejection
+ */
+message BalancerRejectionsRequest {
+  optional uint32 limit = 1;
+}
+
+/**
  * BalancerDecision (LogEntry) use-case specific RPC response. This response payload will be
  * converted in bytes by servers and sent as response to generic RPC API: GetLogEntries
  * LogEntry message has two params:
@@ -715,6 +726,33 @@ message BalancerDecisionsRequest {
  */
 message BalancerDecisionsResponse {
   repeated BalancerDecision balancer_decision = 1;
+}
+
+message BalancerRejectionsResponse {
+  repeated BalancerRejection balancer_rejection = 1;
+}
+
+message ModifyTableStoreFileTrackerRequest {
+  required TableName table_Name = 1;
+  required string dst_sft = 2;
+  optional uint64 nonce_group = 3 [default = 0];
+  optional uint64 nonce = 4 [default = 0];
+}
+
+message ModifyTableStoreFileTrackerResponse {
+  optional uint64 proc_id = 1;
+}
+
+message ModifyColumnStoreFileTrackerRequest {
+  required TableName table_Name = 1;
+  required bytes family = 2;
+  required string dst_sft = 3;
+  optional uint64 nonce_group = 4 [default = 0];
+  optional uint64 nonce = 5 [default = 0];
+}
+
+message ModifyColumnStoreFileTrackerResponse {
+  optional uint64 proc_id = 1;
 }
 
 service MasterService {
@@ -1150,6 +1188,12 @@ service MasterService {
 
   rpc GetLogEntries(LogRequest)
     returns(LogEntry);
+
+  rpc ModifyTableStoreFileTracker(ModifyTableStoreFileTrackerRequest)
+    returns(ModifyTableStoreFileTrackerResponse);
+
+  rpc ModifyColumnStoreFileTracker(ModifyColumnStoreFileTrackerRequest)
+    returns(ModifyColumnStoreFileTrackerResponse);
 }
 
 // HBCK Service definitions.
@@ -1225,6 +1269,12 @@ message ScheduleServerCrashProcedureResponse {
   repeated uint64 pid = 1;
 }
 
+message ScheduleSCPsForUnknownServersRequest {}
+
+message ScheduleSCPsForUnknownServersResponse {
+  repeated uint64 pid = 1;
+}
+
 message FixMetaRequest {}
 
 message FixMetaResponse {}
@@ -1264,6 +1314,10 @@ service HbckService {
   rpc ScheduleServerCrashProcedure(ScheduleServerCrashProcedureRequest)
     returns(ScheduleServerCrashProcedureResponse);
 
+  /** Schedule a ServerCrashProcedure for unknown servers */
+  rpc ScheduleSCPsForUnknownServers(ScheduleSCPsForUnknownServersRequest)
+    returns(ScheduleSCPsForUnknownServersResponse);
+
   /**
    * Request HBCK chore to run at master side.
    */
@@ -1273,66 +1327,4 @@ service HbckService {
   /** Schedule a fix meta run. */
   rpc FixMeta(FixMetaRequest)
     returns(FixMetaResponse);
-}
-
-/** Request and response to get the clusterID for this cluster */
-message GetClusterIdRequest {
-}
-message GetClusterIdResponse {
-  /** Not set if cluster ID could not be determined. */
-  optional string cluster_id = 1;
-}
-
-/** Request and response to get the currently active master name for this cluster */
-message GetActiveMasterRequest {
-}
-message GetActiveMasterResponse {
-  /** Not set if an active master could not be determined. */
-  optional ServerName server_name = 1;
-}
-
-/** Request and response to get the current list of all registers master servers */
-message GetMastersRequest {
-}
-message GetMastersResponseEntry {
-  required ServerName server_name = 1;
-  required bool is_active = 2;
-}
-message GetMastersResponse {
-  repeated GetMastersResponseEntry master_servers = 1;
-}
-
-/** Request and response to get the current list of meta region locations */
-message GetMetaRegionLocationsRequest {
-}
-message GetMetaRegionLocationsResponse {
-  /** Not set if meta region locations could not be determined. */
-  repeated RegionLocation meta_locations = 1;
-}
-
-/**
- * Implements all the RPCs needed by clients to look up cluster meta information needed for
- * connection establishment.
- */
-service ClientMetaService {
-  /**
-   * Get Cluster ID for this cluster.
-   */
-  rpc GetClusterId(GetClusterIdRequest) returns(GetClusterIdResponse);
-
-  /**
-   * Get active master server name for this cluster. Retained for out of sync client and master
-   * rolling upgrades. Newer clients switched to GetMasters RPC request.
-   */
-  rpc GetActiveMaster(GetActiveMasterRequest) returns(GetActiveMasterResponse);
-
-  /**
-   * Get registered list of master servers in this cluster.
-   */
-  rpc GetMasters(GetMastersRequest) returns(GetMastersResponse);
-
-  /**
-   * Get current meta replicas' region locations.
-   */
-  rpc GetMetaRegionLocations(GetMetaRegionLocationsRequest) returns(GetMetaRegionLocationsResponse);
 }

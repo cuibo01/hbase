@@ -172,7 +172,14 @@ public class TableDescriptorBuilder {
       new Bytes(Bytes.toBytes(NORMALIZER_TARGET_REGION_COUNT));
 
   @InterfaceAudience.Private
+  public static final String NORMALIZER_TARGET_REGION_SIZE_MB = "NORMALIZER_TARGET_REGION_SIZE_MB";
+  private static final Bytes NORMALIZER_TARGET_REGION_SIZE_MB_KEY =
+      new Bytes(Bytes.toBytes(NORMALIZER_TARGET_REGION_SIZE_MB));
+  // TODO: Keeping backward compatability with HBASE-25651 change. Can be removed in later version
+  @InterfaceAudience.Private
+  @Deprecated
   public static final String NORMALIZER_TARGET_REGION_SIZE = "NORMALIZER_TARGET_REGION_SIZE";
+  @Deprecated
   private static final Bytes NORMALIZER_TARGET_REGION_SIZE_KEY =
       new Bytes(Bytes.toBytes(NORMALIZER_TARGET_REGION_SIZE));
 
@@ -216,11 +223,6 @@ public class TableDescriptorBuilder {
   public static final boolean DEFAULT_MERGE_ENABLED = true;
 
   /**
-   * Constant that denotes whether the table is normalized by default.
-   */
-  public static final boolean DEFAULT_NORMALIZATION_ENABLED = false;
-
-  /**
    * Constant that denotes the maximum default size of the memstore in bytes after which
    * the contents are flushed to the store files.
    */
@@ -241,7 +243,6 @@ public class TableDescriptorBuilder {
             String.valueOf(DEFAULT_MEMSTORE_FLUSH_SIZE));
     DEFAULT_VALUES.put(DURABILITY, DEFAULT_DURABLITY.name()); //use the enum name
     DEFAULT_VALUES.put(REGION_REPLICATION, String.valueOf(DEFAULT_REGION_REPLICATION));
-    DEFAULT_VALUES.put(NORMALIZATION_ENABLED, String.valueOf(DEFAULT_NORMALIZATION_ENABLED));
     DEFAULT_VALUES.put(PRIORITY, String.valueOf(DEFAULT_PRIORITY));
     DEFAULT_VALUES.keySet().stream()
             .map(s -> new Bytes(Bytes.toBytes(s))).forEach(RESERVED_KEYWORDS::add);
@@ -701,7 +702,7 @@ public class TableDescriptorBuilder {
               toBytesOrNull(value, Bytes::toBytes));
     }
 
-    /*
+    /**
      * @param key The key.
      * @param value The value. If null, removes the setting.
      */
@@ -710,14 +711,14 @@ public class TableDescriptorBuilder {
       return setValue(key, toBytesOrNull(value, Bytes::toBytes));
     }
 
-    /*
+    /**
      * Setter for storing metadata as a (key, value) pair in {@link #values} map
      *
      * @param key The key.
      * @param value The value. If null, removes the setting.
      */
     public ModifyableTableDescriptor setValue(final Bytes key, final Bytes value) {
-      if (value == null) {
+      if (value == null || value.getLength() == 0) {
         values.remove(key);
       } else {
         values.put(key, value);
@@ -858,12 +859,11 @@ public class TableDescriptorBuilder {
     /**
      * Check if normalization enable flag of the table is true. If flag is false
      * then no region normalizer won't attempt to normalize this table.
-     *
      * @return true if region normalization is enabled for this table
-     */
+     **/
     @Override
     public boolean isNormalizationEnabled() {
-      return getOrDefault(NORMALIZATION_ENABLED_KEY, Boolean::valueOf, DEFAULT_NORMALIZATION_ENABLED);
+      return getOrDefault(NORMALIZATION_ENABLED_KEY, Boolean::valueOf, false);
     }
 
     /**
@@ -884,7 +884,10 @@ public class TableDescriptorBuilder {
      */
     @Override
     public long getNormalizerTargetRegionSize() {
-      return getOrDefault(NORMALIZER_TARGET_REGION_SIZE_KEY, Long::valueOf, Long.valueOf(-1));
+      long target_region_size =
+        getOrDefault(NORMALIZER_TARGET_REGION_SIZE_MB_KEY, Long::valueOf, Long.valueOf(-1));
+      return target_region_size == Long.valueOf(-1) ? getOrDefault(
+        NORMALIZER_TARGET_REGION_SIZE_KEY, Long::valueOf, Long.valueOf(-1)) : target_region_size;
     }
 
     /**
@@ -912,7 +915,7 @@ public class TableDescriptorBuilder {
      * @return the modifyable TD
      */
     public ModifyableTableDescriptor setNormalizerTargetRegionSize(final long regionSize) {
-      return setValue(NORMALIZER_TARGET_REGION_SIZE_KEY, Long.toString(regionSize));
+      return setValue(NORMALIZER_TARGET_REGION_SIZE_MB_KEY, Long.toString(regionSize));
     }
 
     /**
@@ -1077,6 +1080,10 @@ public class TableDescriptorBuilder {
     public ModifyableTableDescriptor setColumnFamily(final ColumnFamilyDescriptor family) {
       if (family.getName() == null || family.getName().length <= 0) {
         throw new IllegalArgumentException("Family name cannot be null or empty");
+      }
+      int flength = family.getName() == null ? 0 : family.getName().length;
+      if (flength > Byte.MAX_VALUE) {
+        throw new IllegalArgumentException("The length of family name is bigger than " + Byte.MAX_VALUE);
       }
       if (hasColumnFamily(family.getName())) {
         throw new IllegalArgumentException("Family '"
@@ -1554,6 +1561,10 @@ public class TableDescriptorBuilder {
       // if we found a match, remove it
       if (match != null) {
         ModifyableTableDescriptor.this.removeValue(match);
+      } else {
+        throw new IllegalArgumentException(String
+          .format("coprocessor with class name %s was not found in the table attribute",
+            className));
       }
     }
 

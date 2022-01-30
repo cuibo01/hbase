@@ -21,15 +21,12 @@ package org.apache.hadoop.hbase.master;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.LocalHBaseCluster;
 import org.apache.hadoop.hbase.MasterNotRunningException;
 import org.apache.hadoop.hbase.ZNodeClearer;
 import org.apache.hadoop.hbase.ZooKeeperConnectionException;
-import org.apache.hadoop.hbase.trace.TraceUtil;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
@@ -37,8 +34,9 @@ import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.util.JVMClusterUtil;
 import org.apache.hadoop.hbase.util.ServerCommandLine;
 import org.apache.hadoop.hbase.zookeeper.MiniZooKeeperCluster;
-import org.apache.hadoop.hbase.zookeeper.ZKUtil;
+import org.apache.hadoop.hbase.zookeeper.ZKAuthentication;
 import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
+import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -167,8 +165,6 @@ public class HMasterCommandLine extends ServerCommandLine {
 
   private int startMaster() {
     Configuration conf = getConf();
-    TraceUtil.initTracer(conf);
-
     try {
       // If 'local', defer to LocalHBaseCluster instance.  Starts master
       // and regionserver both in the one JVM.
@@ -218,7 +214,7 @@ public class HMasterCommandLine extends ServerCommandLine {
         }
 
         // login the zookeeper server principal (if using security)
-        ZKUtil.loginServer(conf, HConstants.ZK_SERVER_KEYTAB_FILE,
+        ZKAuthentication.loginServer(conf, HConstants.ZK_SERVER_KEYTAB_FILE,
           HConstants.ZK_SERVER_KERBEROS_PRINCIPAL, null);
         int localZKClusterSessionTimeout =
           conf.getInt(HConstants.ZK_SESSION_TIMEOUT + ".localHBaseCluster", 10*1000);

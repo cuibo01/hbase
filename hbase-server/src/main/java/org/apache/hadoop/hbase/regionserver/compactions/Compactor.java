@@ -25,19 +25,24 @@ import static org.apache.hadoop.hbase.regionserver.ScanType.COMPACT_RETAIN_DELET
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-
+import java.util.stream.Collectors;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.PrivateCellUtil;
+import org.apache.hadoop.hbase.PrivateConstants;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.io.hfile.HFileInfo;
+import org.apache.hadoop.hbase.regionserver.AbstractMultiFileWriter;
 import org.apache.hadoop.hbase.regionserver.CellSink;
+import org.apache.hadoop.hbase.regionserver.CreateStoreFileWriterParams;
 import org.apache.hadoop.hbase.regionserver.HStore;
 import org.apache.hadoop.hbase.regionserver.HStoreFile;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
@@ -60,6 +65,7 @@ import org.apache.hadoop.util.StringUtils.TraditionalBinaryPrefix;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.apache.hbase.thirdparty.com.google.common.io.Closeables;
 
 /**
@@ -75,7 +81,8 @@ public abstract class Compactor<T extends CellSink> {
   protected final HStore store;
 
   protected final int compactionKVMax;
-  protected final Compression.Algorithm compactionCompression;
+  protected final Compression.Algorithm majorCompactionCompression;
+  protected final Compression.Algorithm minorCompactionCompression;
 
   /** specify how many days to keep MVCC values during major compaction **/
   protected int keepSeqIdPeriod;
@@ -89,14 +96,21 @@ public abstract class Compactor<T extends CellSink> {
   private final boolean dropCacheMajor;
   private final boolean dropCacheMinor;
 
+  // In compaction process only a single thread will access and write to this field, and
+  // getCompactionTargets is the only place we will access it other than the compaction thread, so
+  // make it volatile.
+  protected volatile T writer = null;
+
   //TODO: depending on Store is not good but, realistically, all compactors currently do.
   Compactor(Configuration conf, HStore store) {
     this.conf = conf;
     this.store = store;
     this.compactionKVMax =
       this.conf.getInt(HConstants.COMPACTION_KV_MAX, HConstants.COMPACTION_KV_MAX_DEFAULT);
-    this.compactionCompression = (this.store.getColumnFamilyDescriptor() == null) ?
-        Compression.Algorithm.NONE : this.store.getColumnFamilyDescriptor().getCompactionCompressionType();
+    this.majorCompactionCompression = (store.getColumnFamilyDescriptor() == null) ?
+        Compression.Algorithm.NONE : store.getColumnFamilyDescriptor().getMajorCompactionCompressionType();
+    this.minorCompactionCompression = (store.getColumnFamilyDescriptor() == null) ?
+        Compression.Algorithm.NONE : store.getColumnFamilyDescriptor().getMinorCompactionCompressionType();
     this.keepSeqIdPeriod = Math.max(this.conf.getInt(HConstants.KEEP_SEQID_PERIOD,
       HConstants.MIN_KEEP_SEQID_PERIOD), HConstants.MIN_KEEP_SEQID_PERIOD);
     this.dropCacheMajor = conf.getBoolean(MAJOR_COMPACTION_DROP_CACHE, true);
@@ -106,7 +120,7 @@ public abstract class Compactor<T extends CellSink> {
 
 
   protected interface CellSinkFactory<S> {
-    S createWriter(InternalScanner scanner, FileDetails fd, boolean shouldDropBehind)
+    S createWriter(InternalScanner scanner, FileDetails fd, boolean shouldDropBehind, boolean major)
         throws IOException;
   }
 
@@ -138,12 +152,13 @@ public abstract class Compactor<T extends CellSink> {
    * Extracts some details about the files to compact that are commonly needed by compactors.
    * @param filesToCompact Files.
    * @param allFiles Whether all files are included for compaction
+   * @parma major If major compaction
    * @return The result.
    */
   private FileDetails getFileDetails(
-      Collection<HStoreFile> filesToCompact, boolean allFiles) throws IOException {
+      Collection<HStoreFile> filesToCompact, boolean allFiles, boolean major) throws IOException {
     FileDetails fd = new FileDetails();
-    long oldestHFileTimestampToKeepMVCC = System.currentTimeMillis() -
+    long oldestHFileTimestampToKeepMVCC = EnvironmentEdgeManager.currentTime() -
       (1000L * 60 * 60 * 24 * this.keepSeqIdPeriod);
 
     for (HStoreFile file : filesToCompact) {
@@ -196,7 +211,7 @@ public abstract class Compactor<T extends CellSink> {
         if (tmp == null) {
           // There's a file with no information, must be an old one
           // assume we have very old puts
-          fd.earliestPutTs = earliestPutTs = HConstants.OLDEST_TIMESTAMP;
+          fd.earliestPutTs = earliestPutTs = PrivateConstants.OLDEST_TIMESTAMP;
         } else {
           earliestPutTs = Bytes.toLong(tmp);
           fd.earliestPutTs = Math.min(fd.earliestPutTs, earliestPutTs);
@@ -211,7 +226,7 @@ public abstract class Compactor<T extends CellSink> {
           r.getBloomFilterType().toString(),
           TraditionalBinaryPrefix.long2String(r.length(), "", 1),
           r.getHFileReader().getDataBlockEncoding(),
-          compactionCompression,
+          major ? majorCompactionCompression : minorCompactionCompression,
           seqNum,
           (allFiles? ", earliestPutTs=" + earliestPutTs: ""));
     }
@@ -256,27 +271,32 @@ public abstract class Compactor<T extends CellSink> {
     }
   };
 
-  /**
-   * Creates a writer for a new file in a temporary directory.
-   * @param fd The file details.
-   * @return Writer for a new StoreFile in the tmp dir.
-   * @throws IOException if creation failed
-   */
-  protected final StoreFileWriter createTmpWriter(FileDetails fd, boolean shouldDropBehind)
-      throws IOException {
-    // When all MVCC readpoints are 0, don't write them.
-    // See HBASE-8166, HBASE-12600, and HBASE-13389.
-    return store
-      .createWriterInTmp(fd.maxKeyCount, this.compactionCompression, true, fd.maxMVCCReadpoint > 0,
-        fd.maxTagsLength > 0, shouldDropBehind, fd.totalCompactedFilesSize,
-        HConstants.EMPTY_STRING);
+  protected final CreateStoreFileWriterParams createParams(FileDetails fd, boolean shouldDropBehind,
+    boolean major) {
+    return CreateStoreFileWriterParams.create().maxKeyCount(fd.maxKeyCount)
+      .compression(major ? majorCompactionCompression : minorCompactionCompression)
+      .isCompaction(true).includeMVCCReadpoint(fd.maxMVCCReadpoint > 0)
+      .includesTag(fd.maxTagsLength > 0).shouldDropBehind(shouldDropBehind)
+      .totalCompactedFilesSize(fd.totalCompactedFilesSize);
   }
 
-  protected final StoreFileWriter createTmpWriter(FileDetails fd, boolean shouldDropBehind,
-      String fileStoragePolicy) throws IOException {
-    return store
-      .createWriterInTmp(fd.maxKeyCount, this.compactionCompression, true, fd.maxMVCCReadpoint > 0,
-        fd.maxTagsLength > 0, shouldDropBehind, fd.totalCompactedFilesSize, fileStoragePolicy);
+  /**
+   * Creates a writer for a new file.
+   * @param fd The file details.
+   * @return Writer for a new StoreFile
+   * @throws IOException if creation failed
+   */
+  protected final StoreFileWriter createWriter(FileDetails fd, boolean shouldDropBehind,
+    boolean major) throws IOException {
+    // When all MVCC readpoints are 0, don't write them.
+    // See HBASE-8166, HBASE-12600, and HBASE-13389.
+    return store.getStoreEngine().createWriter(createParams(fd, shouldDropBehind, major));
+  }
+
+  protected final StoreFileWriter createWriter(FileDetails fd, boolean shouldDropBehind,
+    String fileStoragePolicy, boolean major) throws IOException {
+    return store.getStoreEngine()
+      .createWriter(createParams(fd, shouldDropBehind, major).fileStoragePolicy(fileStoragePolicy));
   }
 
   private ScanInfo preCompactScannerOpen(CompactionRequestImpl request, ScanType scanType,
@@ -307,13 +327,12 @@ public abstract class Compactor<T extends CellSink> {
   protected final List<Path> compact(final CompactionRequestImpl request,
       InternalScannerFactory scannerFactory, CellSinkFactory<T> sinkFactory,
       ThroughputController throughputController, User user) throws IOException {
-    FileDetails fd = getFileDetails(request.getFiles(), request.isAllFiles());
+    FileDetails fd = getFileDetails(request.getFiles(), request.isAllFiles(), request.isMajor());
     this.progress = new CompactionProgress(fd.maxKeyCount);
 
     // Find the smallest read point across all the Scanners.
     long smallestReadPoint = getSmallestReadPoint();
 
-    T writer = null;
     boolean dropCache;
     if (request.isMajor() || request.isAllFiles()) {
       dropCache = this.dropCacheMajor;
@@ -321,10 +340,10 @@ public abstract class Compactor<T extends CellSink> {
       dropCache = this.dropCacheMinor;
     }
 
-    List<StoreFileScanner> scanners =
-        createFileScanners(request.getFiles(), smallestReadPoint, dropCache);
     InternalScanner scanner = null;
     boolean finished = false;
+    List<StoreFileScanner> scanners =
+      createFileScanners(request.getFiles(), smallestReadPoint, dropCache);
     try {
       /* Include deletes, unless we are doing a major compaction */
       ScanType scanType = scannerFactory.getScanType(request);
@@ -337,34 +356,49 @@ public abstract class Compactor<T extends CellSink> {
         smallestReadPoint = Math.min(fd.minSeqIdToKeep, smallestReadPoint);
         cleanSeqId = true;
       }
-      writer = sinkFactory.createWriter(scanner, fd, dropCache);
-      finished = performCompaction(fd, scanner, writer, smallestReadPoint, cleanSeqId,
+      if (writer != null){
+        LOG.warn("Writer exists when it should not: " + getCompactionTargets().stream()
+          .map(n -> n.toString())
+          .collect(Collectors.joining(", ", "{ ", " }")));
+      }
+      writer = sinkFactory.createWriter(scanner, fd, dropCache, request.isMajor());
+      finished = performCompaction(fd, scanner, smallestReadPoint, cleanSeqId,
         throughputController, request.isAllFiles(), request.getFiles().size());
       if (!finished) {
         throw new InterruptedIOException("Aborting compaction of store " + store + " in region "
             + store.getRegionInfo().getRegionNameAsString() + " because it was interrupted.");
       }
     } finally {
-      Closeables.close(scanner, true);
+      // createScanner may fail when seeking hfiles encounter Exception, e.g. even only one hfile
+      // reader encounters java.io.IOException: Invalid HFile block magic:
+      // \x00\x00\x00\x00\x00\x00\x00\x00
+      // and then scanner will be null, but scanners for all the hfiles should be closed,
+      // or else we will find leak of ESTABLISHED sockets.
+      if (scanner == null) {
+        for (StoreFileScanner sfs : scanners) {
+          sfs.close();
+        }
+      } else {
+        Closeables.close(scanner, true);
+      }
       if (!finished && writer != null) {
-        abortWriter(writer);
+        abortWriter();
       }
     }
     assert finished : "We should have exited the method on all error paths";
     assert writer != null : "Writer should be non-null if no error";
-    return commitWriter(writer, fd, request);
+    return commitWriter(fd, request);
   }
 
-  protected abstract List<Path> commitWriter(T writer, FileDetails fd,
+  protected abstract List<Path> commitWriter(FileDetails fd,
       CompactionRequestImpl request) throws IOException;
 
-  protected abstract void abortWriter(T writer) throws IOException;
+  protected abstract void abortWriter() throws IOException;
 
   /**
    * Performs the compaction.
    * @param fd FileDetails of cell sink writer
    * @param scanner Where to read from.
-   * @param writer Where to write to.
    * @param smallestReadPoint Smallest read point.
    * @param cleanSeqId When true, remove seqId(used to be mvcc) value which is &lt;=
    *          smallestReadPoint
@@ -372,7 +406,7 @@ public abstract class Compactor<T extends CellSink> {
    * @param numofFilesToCompact the number of files to compact
    * @return Whether compaction ended; false if it was interrupted for some reason.
    */
-  protected boolean performCompaction(FileDetails fd, InternalScanner scanner, CellSink writer,
+  protected boolean performCompaction(FileDetails fd, InternalScanner scanner,
       long smallestReadPoint, boolean cleanSeqId, ThroughputController throughputController,
       boolean major, int numofFilesToCompact) throws IOException {
     assert writer instanceof ShipperListener;
@@ -433,25 +467,25 @@ public abstract class Compactor<T extends CellSink> {
             progress.cancel();
             return false;
           }
-          if (kvs != null && bytesWrittenProgressForShippedCall > shippedCallSizeLimit) {
-            if (lastCleanCell != null) {
-              // HBASE-16931, set back sequence id to avoid affecting scan order unexpectedly.
-              // ShipperListener will do a clone of the last cells it refer, so need to set back
-              // sequence id before ShipperListener.beforeShipped
-              PrivateCellUtil.setSequenceId(lastCleanCell, lastCleanCellSeqId);
-            }
-            // Clone the cells that are in the writer so that they are freed of references,
-            // if they are holding any.
-            ((ShipperListener) writer).beforeShipped();
-            // The SHARED block references, being read for compaction, will be kept in prevBlocks
-            // list(See HFileScannerImpl#prevBlocks). In case of scan flow, after each set of cells
-            // being returned to client, we will call shipped() which can clear this list. Here by
-            // we are doing the similar thing. In between the compaction (after every N cells
-            // written with collective size of 'shippedCallSizeLimit') we will call shipped which
-            // may clear prevBlocks list.
-            kvs.shipped();
-            bytesWrittenProgressForShippedCall = 0;
+        }
+        if (kvs != null && bytesWrittenProgressForShippedCall > shippedCallSizeLimit) {
+          if (lastCleanCell != null) {
+            // HBASE-16931, set back sequence id to avoid affecting scan order unexpectedly.
+            // ShipperListener will do a clone of the last cells it refer, so need to set back
+            // sequence id before ShipperListener.beforeShipped
+            PrivateCellUtil.setSequenceId(lastCleanCell, lastCleanCellSeqId);
           }
+          // Clone the cells that are in the writer so that they are freed of references,
+          // if they are holding any.
+          ((ShipperListener) writer).beforeShipped();
+          // The SHARED block references, being read for compaction, will be kept in prevBlocks
+          // list(See HFileScannerImpl#prevBlocks). In case of scan flow, after each set of cells
+          // being returned to client, we will call shipped() which can clear this list. Here by
+          // we are doing the similar thing. In between the compaction (after every N cells
+          // written with collective size of 'shippedCallSizeLimit') we will call shipped which
+          // may clear prevBlocks list.
+          kvs.shipped();
+          bytesWrittenProgressForShippedCall = 0;
         }
         if (lastCleanCell != null) {
           // HBASE-16931, set back sequence id to avoid affecting scan order unexpectedly
@@ -514,5 +548,24 @@ public abstract class Compactor<T extends CellSink> {
       byte[] dropDeletesFromRow, byte[] dropDeletesToRow) throws IOException {
     return new StoreScanner(store, scanInfo, scanners, smallestReadPoint, earliestPutTs,
         dropDeletesFromRow, dropDeletesToRow);
+  }
+
+  public List<Path> getCompactionTargets() {
+    T writer = this.writer;
+    if (writer == null) {
+      return Collections.emptyList();
+    }
+    if (writer instanceof StoreFileWriter) {
+      return Arrays.asList(((StoreFileWriter) writer).getPath());
+    }
+    return ((AbstractMultiFileWriter) writer).writers().stream().map(sfw -> sfw.getPath())
+      .collect(Collectors.toList());
+  }
+
+  /**
+   * Reset the Writer when the new storefiles were successfully added
+   */
+  public void resetWriter(){
+    writer = null;
   }
 }

@@ -202,7 +202,13 @@ module Hbase
       did_balancer_run = command(:balancer)
       assert(did_balancer_run == true)
       output = capture_stdout { command(:balancer, 'force') }
-      assert(output.include?('true'))
+      assert(output.include?('Balancer ran'))
+
+      command(:balance_switch, false)
+      output = capture_stdout { command(:balancer) }
+      assert(output.include?('Balancer did not run'))
+      output = capture_stdout { command(:balancer, 'dry_run') }
+      assert(output.include?('Balancer ran'))
     end
 
     #-------------------------------------------------------------------------------
@@ -917,6 +923,13 @@ module Hbase
       assert_match(/12345678/, admin.describe(@test_name))
     end
 
+    define_test 'alter should be able to set the TargetRegionSizeMB and TargetRegionCount' do
+      command(:alter, @test_name, 'NORMALIZER_TARGET_REGION_COUNT' => 156)
+      assert_match(/156/, admin.describe(@test_name))
+      command(:alter, @test_name, 'NORMALIZER_TARGET_REGION_SIZE_MB' => 234)
+      assert_match(/234/, admin.describe(@test_name))
+    end
+
     define_test 'alter should be able to set the TargetRegionSize and TargetRegionCount' do
       command(:alter, @test_name, 'NORMALIZER_TARGET_REGION_COUNT' => 156)
       assert_match(/156/, admin.describe(@test_name))
@@ -997,6 +1010,25 @@ module Hbase
       assert_no_match(eval("/" + key + "/"), admin.describe(@test_name))
     end
 
+    define_test "alter should be able to remove a coprocessor by class name" do
+      drop_test_table(@test_name)
+      create_test_table(@test_name)
+
+      cp_key = "coprocessor"
+      class_name = "org.apache.hadoop.hbase.coprocessor.SimpleRegionObserver"
+      cp_value = "|" + class_name + "|12|arg1=1,arg2=2"
+
+      command(:alter, @test_name, 'METHOD' => 'table_att', cp_key => cp_value)
+      describe_text = admin.describe(@test_name)
+      assert_match(eval("/" + class_name + "/"), describe_text)
+      assert_match(eval("/" + cp_key + "\\$(\\d+)/"), describe_text)
+      assert_match(/arg1=1,arg2=2/, describe_text)
+
+      command(:alter, @test_name, 'METHOD' => 'table_remove_coprocessor', 'CLASSNAME' => class_name)
+      describe_text = admin.describe(@test_name)
+      assert_no_match(eval("/" + class_name + "/"), describe_text)
+    end
+
     define_test "alter should be able to remove a list of table attributes" do
       drop_test_table(@test_name)
 
@@ -1013,6 +1045,21 @@ module Hbase
       assert_no_match(eval("/" + key_2 + "/"), admin.describe(@test_name))
     end
 
+    define_test "alter should be able to remove a list of table attributes when value is empty" do
+      drop_test_table(@test_name)
+
+      key_1 = "TestAttr1"
+      key_2 = "TestAttr2"
+      command(:create, @test_name, { NAME => 'i'}, METADATA => { key_1 => 1, key_2 => 2 })
+
+      # eval() is used to convert a string to regex
+      assert_match(eval("/" + key_1 + "/"), admin.describe(@test_name))
+      assert_match(eval("/" + key_2 + "/"), admin.describe(@test_name))
+
+      command(:alter, @test_name, METADATA => { key_1 => '', key_2 => '' })
+      assert_no_match(eval("/" + key_1 + "/"), admin.describe(@test_name))
+      assert_no_match(eval("/" + key_2 + "/"), admin.describe(@test_name))
+    end
 
     define_test "alter should raise error trying to remove nonexistent attributes" do
       drop_test_table(@test_name)
@@ -1060,6 +1107,38 @@ module Hbase
       assert_match(eval("/" + key_2 + "/"), admin.describe(@test_name))
 
       command(:alter, @test_name, 'METHOD' => 'table_conf_unset', 'NAME' => [ key_1, key_2 ])
+      assert_no_match(eval("/" + key_1 + "/"), admin.describe(@test_name))
+      assert_no_match(eval("/" + key_2 + "/"), admin.describe(@test_name))
+    end
+
+    define_test "alter should be able to remove a list of table configuration  when value is empty" do
+      drop_test_table(@test_name)
+
+      key_1 = "TestConf1"
+      key_2 = "TestConf2"
+      command(:create, @test_name, { NAME => 'i'}, CONFIGURATION => { key_1 => 1, key_2 => 2 })
+
+      # eval() is used to convert a string to regex
+      assert_match(eval("/" + key_1 + "/"), admin.describe(@test_name))
+      assert_match(eval("/" + key_2 + "/"), admin.describe(@test_name))
+
+      command(:alter, @test_name, CONFIGURATION => { key_1 => '', key_2 => '' })
+      assert_no_match(eval("/" + key_1 + "/"), admin.describe(@test_name))
+      assert_no_match(eval("/" + key_2 + "/"), admin.describe(@test_name))
+    end
+
+    define_test "alter should be able to remove a list of column family configuration when value is empty" do
+      drop_test_table(@test_name)
+
+      key_1 = "TestConf1"
+      key_2 = "TestConf2"
+      command(:create, @test_name, { NAME => 'i', CONFIGURATION => { key_1 => 1, key_2 => 2 }})
+
+      # eval() is used to convert a string to regex
+      assert_match(eval("/" + key_1 + "/"), admin.describe(@test_name))
+      assert_match(eval("/" + key_2 + "/"), admin.describe(@test_name))
+
+      command(:alter, @test_name, { NAME => 'i', CONFIGURATION => { key_1 => '', key_2 => '' }})
       assert_no_match(eval("/" + key_1 + "/"), admin.describe(@test_name))
       assert_no_match(eval("/" + key_2 + "/"), admin.describe(@test_name))
     end

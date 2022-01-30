@@ -20,10 +20,10 @@
 package org.apache.hadoop.hbase.coprocessor;
 
 import java.io.IOException;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
@@ -58,7 +58,7 @@ public class MetaTableMetrics implements RegionCoprocessor {
   private MetricRegistry registry;
   private LossyCounting<String> clientMetricsLossyCounting, regionMetricsLossyCounting;
   private boolean active = false;
-  private Set<String> metrics = new HashSet<>();
+  private Set<String> metrics = ConcurrentHashMap.newKeySet();
 
   enum MetaTableOps {
     GET, PUT, DELETE,
@@ -206,41 +206,37 @@ public class MetaTableMetrics implements RegionCoprocessor {
         return "";
       }
       MetaTableOps ops = opsNameMap.get(op.getClass());
-      String opWithClientMeterName = "";
+      if (ops == null) {
+        return "";
+      }
       switch (ops) {
         case GET:
-          opWithClientMeterName = String.format("MetaTable_client_%s_get_request", clientIP);
-          break;
+          return String.format("MetaTable_client_%s_get_request", clientIP);
         case PUT:
-          opWithClientMeterName = String.format("MetaTable_client_%s_put_request", clientIP);
-          break;
+          return String.format("MetaTable_client_%s_put_request", clientIP);
         case DELETE:
-          opWithClientMeterName = String.format("MetaTable_client_%s_delete_request", clientIP);
-          break;
+          return String.format("MetaTable_client_%s_delete_request", clientIP);
         default:
-          break;
+          return "";
       }
-      return opWithClientMeterName;
     }
 
     private String opMeterName(Object op) {
       // Extract meter name containing the access type
       MetaTableOps ops = opsNameMap.get(op.getClass());
-      String opMeterName = "";
+      if (ops == null) {
+        return "";
+      }
       switch (ops) {
         case GET:
-          opMeterName = "MetaTable_get_request";
-          break;
+          return "MetaTable_get_request";
         case PUT:
-          opMeterName = "MetaTable_put_request";
-          break;
+          return "MetaTable_put_request";
         case DELETE:
-          opMeterName = "MetaTable_delete_request";
-          break;
+          return "MetaTable_delete_request";
         default:
-          break;
+          return "";
       }
-      return opMeterName;
     }
 
     private String tableMeterName(String tableName) {

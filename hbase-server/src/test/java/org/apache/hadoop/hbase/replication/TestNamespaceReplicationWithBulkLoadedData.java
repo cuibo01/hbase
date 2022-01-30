@@ -27,7 +27,7 @@ import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.TableName;
@@ -44,7 +44,6 @@ import org.apache.hadoop.hbase.testclassification.ReplicationTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.zookeeper.MiniZooKeeperCluster;
 import org.apache.hadoop.hbase.zookeeper.RecoverableZooKeeper;
-import org.apache.hadoop.hbase.zookeeper.ZKUtil;
 import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 
 import org.junit.After;
@@ -68,7 +67,7 @@ public final class TestNamespaceReplicationWithBulkLoadedData extends TestBulkLo
   private static final Logger LOG =
       LoggerFactory.getLogger(TestNamespaceReplicationWithBulkLoadedData.class);
 
-  private static final HBaseTestingUtility UTIL4 = new HBaseTestingUtility();
+  private static final HBaseTestingUtil UTIL4 = new HBaseTestingUtil();
   private static final String PEER4_CLUSTER_ID = "peer4";
   private static final String PEER4_NS = "ns_peer1";
   private static final String PEER4_NS_TABLE = "ns_peer2";
@@ -101,7 +100,7 @@ public final class TestNamespaceReplicationWithBulkLoadedData extends TestBulkLo
 
     Connection connection4 = ConnectionFactory.createConnection(CONF4);
     try (Admin admin4 = connection4.getAdmin()) {
-      admin4.createTable(table, HBaseTestingUtility.KEYS_FOR_HBA_CREATE_TABLE);
+      admin4.createTable(table, HBaseTestingUtil.KEYS_FOR_HBA_CREATE_TABLE);
     }
     UTIL4.waitUntilAllRegionsAssigned(tableName);
   }
@@ -282,7 +281,7 @@ public final class TestNamespaceReplicationWithBulkLoadedData extends TestBulkLo
     // Verify hfile-refs for 1:ns_peer1, expect is empty
     MiniZooKeeperCluster zkCluster = UTIL1.getZkCluster();
     ZKWatcher watcher = new ZKWatcher(UTIL1.getConfiguration(), "TestZnodeHFiles-refs", null);
-    RecoverableZooKeeper zk = ZKUtil.connect(UTIL1.getConfiguration(), watcher);
+    RecoverableZooKeeper zk = RecoverableZooKeeper.connect(UTIL1.getConfiguration(), watcher);
     ZKReplicationQueueStorage replicationQueueStorage =
         new ZKReplicationQueueStorage(watcher, UTIL1.getConfiguration());
     Set<String> hfiles = replicationQueueStorage.getAllHFileRefs();

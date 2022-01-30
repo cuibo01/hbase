@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -511,8 +512,7 @@ public class ServerManager {
     ZKWatcher zkw = master.getZooKeeper();
     int onlineServersCt;
     while ((onlineServersCt = onlineServers.size()) > 0){
-
-      if (System.currentTimeMillis() > (previousLogTime + 1000)) {
+      if (EnvironmentEdgeManager.currentTime() > (previousLogTime + 1000)) {
         Set<ServerName> remainingServers = onlineServers.keySet();
         synchronized (onlineServers) {
           if (remainingServers.size() == 1 && remainingServers.contains(sn)) {
@@ -529,7 +529,7 @@ public class ServerManager {
           sb.append(key);
         }
         LOG.info("Waiting on regionserver(s) " + sb.toString());
-        previousLogTime = System.currentTimeMillis();
+        previousLogTime = EnvironmentEdgeManager.currentTime();
       }
 
       try {
@@ -702,8 +702,8 @@ public class ServerManager {
     if (timeout < 0) {
       return;
     }
-    long expiration = timeout + System.currentTimeMillis();
-    while (System.currentTimeMillis() < expiration) {
+    long expiration = timeout + EnvironmentEdgeManager.currentTime();
+    while (EnvironmentEdgeManager.currentTime() < expiration) {
       try {
         RegionInfo rsRegion = ProtobufUtil.toRegionInfo(FutureUtils
           .get(
@@ -735,18 +735,12 @@ public class ServerManager {
    */
   private int getMinToStart() {
     if (master.isInMaintenanceMode()) {
-      // If in maintenance mode, then master hosting meta will be the only server available
+      // If in maintenance mode, then in process region server hosting meta will be the only server
+      // available
       return 1;
     }
 
     int minimumRequired = 1;
-    if (LoadBalancer.isTablesOnMaster(master.getConfiguration()) &&
-        LoadBalancer.isSystemTablesOnlyOnMaster(master.getConfiguration())) {
-      // If Master is carrying regions it will show up as a 'server', but is not handling user-
-      // space regions, so we need a second server.
-      minimumRequired = 2;
-    }
-
     int minToStart = this.master.getConfiguration().getInt(WAIT_ON_REGIONSERVERS_MINTOSTART, -1);
     // Ensure we are never less than minimumRequired else stuff won't work.
     return Math.max(minToStart, minimumRequired);
@@ -781,7 +775,7 @@ public class ServerManager {
       maxToStart = Integer.MAX_VALUE;
     }
 
-    long now =  System.currentTimeMillis();
+    long now = EnvironmentEdgeManager.currentTime();
     final long startTime = now;
     long slept = 0;
     long lastLogTime = 0;
@@ -805,8 +799,9 @@ public class ServerManager {
         lastLogTime = now;
         String msg =
             "Waiting on regionserver count=" + count + "; waited="+
-                slept + "ms, expecting min=" + minToStart + " server(s), max="+ getStrForMax(maxToStart) +
-                " server(s), " + "timeout=" + timeout + "ms, lastChange=" + (lastCountChange - now) + "ms";
+                slept + "ms, expecting min=" + minToStart + " server(s), max="
+                + getStrForMax(maxToStart) + " server(s), " + "timeout=" + timeout
+                + "ms, lastChange=" + (now - lastCountChange) + "ms";
         LOG.info(msg);
         status.setStatus(msg);
       }
@@ -814,7 +809,7 @@ public class ServerManager {
       // We sleep for some time
       final long sleepTime = 50;
       Thread.sleep(sleepTime);
-      now =  System.currentTimeMillis();
+      now = EnvironmentEdgeManager.currentTime();
       slept = now - startTime;
 
       oldCount = count;
@@ -901,6 +896,17 @@ public class ServerManager {
     return serverName == null || deadservers.isDeadServer(serverName);
   }
 
+  /**
+   * Check if a server is unknown.  A server can be online,
+   * or known to be dead, or unknown to this manager (i.e, not online,
+   * not known to be dead either; it is simply not tracked by the
+   * master any more, for example, a very old previous instance).
+   */
+  public boolean isServerUnknown(ServerName serverName) {
+    return serverName == null
+      || (!onlineServers.containsKey(serverName) && !deadservers.isDeadServer(serverName));
+  }
+
   public void shutdownCluster() {
     String statusStr = "Cluster shutdown requested of master=" + this.master.getServerName();
     LOG.info(statusStr);
@@ -921,8 +927,13 @@ public class ServerManager {
   public void startChore() {
     Configuration c = master.getConfiguration();
     if (persistFlushedSequenceId) {
-      // when reach here, RegionStates should loaded, firstly, we call remove deleted regions
-      removeDeletedRegionFromLoadedFlushedSequenceIds();
+      new Thread(() -> {
+        // after AM#loadMeta, RegionStates should be loaded, and some regions are
+        // deleted by drop/split/merge during removeDeletedRegionFromLoadedFlushedSequenceIds,
+        // but these deleted regions are not added back to RegionStates,
+        // so we can safely remove deleted regions.
+        removeDeletedRegionFromLoadedFlushedSequenceIds();
+      }, "RemoveDeletedRegionSyncThread").start();
       int flushPeriod = c.getInt(FLUSHEDSEQUENCEID_FLUSHER_INTERVAL,
           FLUSHEDSEQUENCEID_FLUSHER_INTERVAL_DEFAULT);
       flushedSeqIdFlusher = new FlushedSequenceIdFlusher(
@@ -936,7 +947,7 @@ public class ServerManager {
    */
   public void stop() {
     if (flushedSeqIdFlusher != null) {
-      flushedSeqIdFlusher.cancel();
+      flushedSeqIdFlusher.shutdown();
     }
     if (persistFlushedSequenceId) {
       try {
@@ -950,11 +961,19 @@ public class ServerManager {
 
   /**
    * Creates a list of possible destinations for a region. It contains the online servers, but not
-   *  the draining or dying servers.
-   *  @param serversToExclude can be null if there is no server to exclude
+   * the draining or dying servers.
+   * @param serversToExclude can be null if there is no server to exclude
    */
-  public List<ServerName> createDestinationServersList(final List<ServerName> serversToExclude){
-    final List<ServerName> destServers = getOnlineServersList();
+  public List<ServerName> createDestinationServersList(final List<ServerName> serversToExclude) {
+    Set<ServerName> destServers = new HashSet<>();
+    onlineServers.forEach((sn, sm) -> {
+      if (sm.getLastReportTimestamp() > 0) {
+        // This means we have already called regionServerReport at leaset once, then let's include
+        // this server for region assignment. This is an optimization to avoid assigning regions to
+        // an uninitialized server. See HBASE-25032 for more details.
+        destServers.add(sn);
+      }
+    });
 
     if (serversToExclude != null) {
       destServers.removeAll(serversToExclude);
@@ -964,7 +983,7 @@ public class ServerManager {
     final List<ServerName> drainingServersCopy = getDrainingServersList();
     destServers.removeAll(drainingServersCopy);
 
-    return destServers;
+    return new ArrayList<>(destServers);
   }
 
   /**

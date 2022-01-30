@@ -20,17 +20,19 @@ package org.apache.hadoop.hbase.regionserver.wal;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.concurrent.atomic.AtomicLong;
-
 import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FSDataOutputStreamBuilder;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.StreamCapabilities;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.io.asyncfs.monitor.StreamSlowMonitor;
 import org.apache.hadoop.hbase.util.AtomicUtils;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.CommonFSUtils.StreamLacksCapabilityException;
 import org.apache.hadoop.hbase.wal.FSHLogProvider;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -104,9 +106,21 @@ public class ProtobufLogWriter extends AbstractProtobufLogWriter
 
   @Override
   protected void initOutput(FileSystem fs, Path path, boolean overwritable, int bufferSize,
-      short replication, long blockSize) throws IOException, StreamLacksCapabilityException {
-    this.output = CommonFSUtils.createForWal(fs, path, overwritable, bufferSize, replication,
-        blockSize, false);
+      short replication, long blockSize, StreamSlowMonitor monitor) throws IOException,
+      StreamLacksCapabilityException {
+    FSDataOutputStreamBuilder<?, ?> builder = fs
+      .createFile(path)
+      .overwrite(overwritable)
+      .bufferSize(bufferSize)
+      .replication(replication)
+      .blockSize(blockSize);
+    if (builder instanceof DistributedFileSystem.HdfsDataOutputStreamBuilder) {
+      this.output = ((DistributedFileSystem.HdfsDataOutputStreamBuilder) builder)
+        .replicate().build();
+    } else {
+      this.output = builder.build();
+    }
+
     if (fs.getConf().getBoolean(CommonFSUtils.UNSAFE_STREAM_CAPABILITY_ENFORCE, true)) {
       if (!output.hasCapability(StreamCapabilities.HFLUSH)) {
         throw new StreamLacksCapabilityException(StreamCapabilities.HFLUSH);

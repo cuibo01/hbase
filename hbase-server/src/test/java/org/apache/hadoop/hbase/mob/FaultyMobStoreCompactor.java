@@ -32,11 +32,11 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.io.hfile.CorruptHFileException;
-import org.apache.hadoop.hbase.regionserver.CellSink;
 import org.apache.hadoop.hbase.regionserver.HStore;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
 import org.apache.hadoop.hbase.regionserver.KeyValueScanner;
@@ -88,7 +88,7 @@ public class FaultyMobStoreCompactor extends DefaultMobStoreCompactor {
   }
 
   @Override
-  protected boolean performCompaction(FileDetails fd, InternalScanner scanner, CellSink writer,
+  protected boolean performCompaction(FileDetails fd, InternalScanner scanner,
       long smallestReadPoint, boolean cleanSeqId, ThroughputController throughputController,
       boolean major, int numofFilesToCompact) throws IOException {
 
@@ -156,7 +156,8 @@ public class FaultyMobStoreCompactor extends DefaultMobStoreCompactor {
     try {
       try {
         mobFileWriter = mobStore.createWriterInTmp(new Date(fd.latestPutTs), fd.maxKeyCount,
-          compactionCompression, store.getRegionInfo().getStartKey(), true);
+          major ? majorCompactionCompression : minorCompactionCompression,
+          store.getRegionInfo().getStartKey(), true);
         fileName = Bytes.toBytes(mobFileWriter.getPath().getName());
       } catch (IOException e) {
         // Bailing out
@@ -191,12 +192,13 @@ public class FaultyMobStoreCompactor extends DefaultMobStoreCompactor {
               // Added to support migration
               try {
                 mobCell = mobStore.resolve(c, true, false).getCell();
-              } catch (FileNotFoundException fnfe) {
-                if (discardMobMiss) {
-                  LOG.error("Missing MOB cell: file={} not found", fName);
+              } catch (DoNotRetryIOException e) {
+                if (discardMobMiss && e.getCause() != null
+                  && e.getCause() instanceof FileNotFoundException) {
+                  LOG.error("Missing MOB cell: file={} not found cell={}", fName, c);
                   continue;
                 } else {
-                  throw fnfe;
+                  throw e;
                 }
               }
 

@@ -48,7 +48,7 @@ import org.apache.hadoop.hbase.CellBuilderType;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.ExtendedCellBuilderFactory;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.ServerName;
@@ -62,6 +62,7 @@ import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.executor.ExecutorService;
+import org.apache.hadoop.hbase.executor.ExecutorType;
 import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.io.hfile.HFileContextBuilder;
 import org.apache.hadoop.hbase.regionserver.HRegion.FlushResultImpl;
@@ -111,6 +112,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos.StoreDescript
  * Tests of HRegion methods for replaying flush, compaction, region open, etc events for secondary
  * region replicas
  */
+@SuppressWarnings("deprecation")
 @Category(LargeTests.class)
 public class TestHRegionReplayEvents {
 
@@ -121,7 +123,7 @@ public class TestHRegionReplayEvents {
   private static final Logger LOG = LoggerFactory.getLogger(TestHRegion.class);
   @Rule public TestName name = new TestName();
 
-  private static HBaseTestingUtility TEST_UTIL;
+  private static HBaseTestingUtil TEST_UTIL;
 
   public static Configuration CONF;
   private String dir;
@@ -147,7 +149,7 @@ public class TestHRegionReplayEvents {
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
-    TEST_UTIL = new HBaseTestingUtility();
+    TEST_UTIL = new HBaseTestingUtil();
     TEST_UTIL.startMiniDFSCluster(1);
   }
 
@@ -173,7 +175,7 @@ public class TestHRegionReplayEvents {
     }
     htd = builder.build();
 
-    long time = System.currentTimeMillis();
+    long time = EnvironmentEdgeManager.currentTime();
     ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0,
       0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
     primaryHri =
@@ -192,8 +194,8 @@ public class TestHRegionReplayEvents {
     String string = org.apache.hadoop.hbase.executor.EventType.RS_COMPACTED_FILES_DISCHARGER
         .toString();
     ExecutorService es = new ExecutorService(string);
-    es.startExecutorService(
-      string+"-"+string, 1);
+    es.startExecutorService(es.new ExecutorConfig().setCorePoolSize(1).setExecutorType(
+        ExecutorType.RS_COMPACTED_FILES_DISCHARGER));
     when(rss.getExecutorService()).thenReturn(es);
     primaryRegion = HRegion.createHRegion(primaryHri, rootDir, CONF, htd, walPrimary);
     primaryRegion.close();
@@ -214,10 +216,10 @@ public class TestHRegionReplayEvents {
     }
 
     if (primaryRegion != null) {
-      HBaseTestingUtility.closeRegionAndWAL(primaryRegion);
+      HBaseTestingUtil.closeRegionAndWAL(primaryRegion);
     }
     if (secondaryRegion != null) {
-      HBaseTestingUtility.closeRegionAndWAL(secondaryRegion);
+      HBaseTestingUtil.closeRegionAndWAL(secondaryRegion);
     }
 
     EnvironmentEdgeManagerTestHelper.reset();

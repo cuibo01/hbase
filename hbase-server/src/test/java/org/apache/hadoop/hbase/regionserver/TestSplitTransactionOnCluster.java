@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import static org.apache.hadoop.hbase.client.TableDescriptorBuilder.SPLIT_POLICY;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -41,16 +42,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.Coprocessor;
 import org.apache.hadoop.hbase.CoprocessorEnvironment;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.MasterNotRunningException;
-import org.apache.hadoop.hbase.MiniHBaseCluster;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.ServerName;
-import org.apache.hadoop.hbase.StartMiniClusterOption;
+import org.apache.hadoop.hbase.SingleProcessHBaseCluster;
+import org.apache.hadoop.hbase.StartTestingClusterOption;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.UnknownRegionException;
 import org.apache.hadoop.hbase.ZooKeeperConnectionException;
@@ -74,9 +77,9 @@ import org.apache.hadoop.hbase.coprocessor.MasterCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.MasterCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.MasterObserver;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.io.HFileLink;
 import org.apache.hadoop.hbase.io.Reference;
 import org.apache.hadoop.hbase.master.HMaster;
-import org.apache.hadoop.hbase.master.LoadBalancer;
 import org.apache.hadoop.hbase.master.MasterRpcServices;
 import org.apache.hadoop.hbase.master.RegionState;
 import org.apache.hadoop.hbase.master.RegionState.State;
@@ -136,28 +139,30 @@ public class TestSplitTransactionOnCluster {
 
   private static final Logger LOG = LoggerFactory.getLogger(TestSplitTransactionOnCluster.class);
   private Admin admin = null;
-  private MiniHBaseCluster cluster = null;
+  private SingleProcessHBaseCluster cluster = null;
   private static final int NB_SERVERS = 3;
 
-  static final HBaseTestingUtility TESTING_UTIL =
-    new HBaseTestingUtility();
+  static final HBaseTestingUtil TESTING_UTIL = new HBaseTestingUtil();
 
   @Rule
   public TestName name = new TestName();
 
-  @BeforeClass public static void before() throws Exception {
+  @BeforeClass
+  public static void before() throws Exception {
     TESTING_UTIL.getConfiguration().setInt(HConstants.HBASE_BALANCER_PERIOD, 60000);
-    StartMiniClusterOption option = StartMiniClusterOption.builder()
+    StartTestingClusterOption option = StartTestingClusterOption.builder()
         .masterClass(MyMaster.class).numRegionServers(NB_SERVERS).
             numDataNodes(NB_SERVERS).build();
     TESTING_UTIL.startMiniCluster(option);
   }
 
-  @AfterClass public static void after() throws Exception {
+  @AfterClass
+  public static void after() throws Exception {
     TESTING_UTIL.shutdownMiniCluster();
   }
 
-  @Before public void setup() throws IOException {
+  @Before
+  public void setup() throws IOException {
     TESTING_UTIL.ensureSomeNonStoppedRegionServersAvailable(NB_SERVERS);
     this.admin = TESTING_UTIL.getAdmin();
     this.cluster = TESTING_UTIL.getMiniHBaseCluster();
@@ -358,6 +363,114 @@ public class TestSplitTransactionOnCluster {
     assertEquals(compactionContext.get().getRequest().getPriority(), Integer.MIN_VALUE + 10);
     admin.disableTable(tableName);
     admin.deleteTable(tableName);
+  }
+
+  @Test
+  public void testContinuousSplitUsingLinkFile() throws Exception {
+    final TableName tableName = TableName.valueOf(name.getMethodName());
+    // Create table then get the single region for our new table.
+    byte[] cf = Bytes.toBytes("cf");
+    TableDescriptorBuilder builder = TableDescriptorBuilder.newBuilder(tableName)
+      .setColumnFamily(ColumnFamilyDescriptorBuilder.of(cf));
+    String splitPolicy = ConstantSizeRegionSplitPolicy.class.getName();
+    builder.setValue(SPLIT_POLICY, splitPolicy);
+
+    admin.createTable(builder.build());
+    admin.compactionSwitch(false, new ArrayList<>());
+
+    assertNotEquals("Unable to retrieve regions of the table", -1,
+      TESTING_UTIL.waitFor(10000, () -> cluster.getRegions(tableName).size() == 1));
+    Table table = TESTING_UTIL.getConnection().getTable(tableName);
+    // insert data
+    insertData(tableName, admin, table, 10);
+    insertData(tableName, admin, table, 20);
+    insertData(tableName, admin, table, 40);
+    int rowCount = 3 * 4;
+    Scan scan = new Scan();
+    scanValidate(scan, rowCount, table);
+
+    // Split
+    admin.splitRegionAsync(cluster.getRegions(tableName).get(0).getRegionInfo().getRegionName(),
+      Bytes.toBytes("row14"));
+    // wait for the split to complete or get interrupted.  If the split completes successfully,
+    // the procedure will return true; if the split fails, the procedure would throw exception.
+    Thread.sleep(3000);
+    assertNotEquals("Table is not split properly?", -1,
+      TESTING_UTIL.waitFor(3000, () -> cluster.getRegions(tableName).size() == 2));
+    // we have 2 daughter regions
+    HRegion hRegion1 = cluster.getRegions(tableName).get(0);
+    HRegion hRegion2 = cluster.getRegions(tableName).get(1);
+    HStore hStore1 = hRegion1.getStore(cf);
+    HStore hStore2 = hRegion2.getStore(cf);
+    // the sum of store files of the two children should be equal to their parent
+    assertEquals(3, hStore1.getStorefilesCount() + hStore2.getStorefilesCount());
+    // both the two children should have link files
+    for (StoreFile sf : hStore1.getStorefiles()) {
+      assertTrue(HFileLink.isHFileLink(sf.getPath()));
+    }
+    for (StoreFile sf : hStore2.getStorefiles()) {
+      assertTrue(HFileLink.isHFileLink(sf.getPath()));
+    }
+    // validate children data
+    scan = new Scan();
+    scanValidate(scan, rowCount, table);
+
+    //Continuous Split
+    findRegionToSplit(tableName, "row24");
+    Thread.sleep(3000);
+    assertNotEquals("Table is not split properly?", -1,
+      TESTING_UTIL.waitFor(3000, () -> cluster.getRegions(tableName).size() == 3));
+    // now table has 3 region, each region should have one link file
+    for (HRegion newRegion : cluster.getRegions(tableName)) {
+      assertEquals(1, newRegion.getStore(cf).getStorefilesCount());
+      assertTrue(
+        HFileLink.isHFileLink(newRegion.getStore(cf).getStorefiles().iterator().next().getPath()));
+    }
+
+    scan = new Scan();
+    scanValidate(scan, rowCount, table);
+
+    //Continuous Split, random split HFileLink, generate Reference files.
+    //After this, can not continuous split, because there are reference files.
+    findRegionToSplit(tableName, "row11");
+    Thread.sleep(3000);
+    assertNotEquals("Table is not split properly?", -1,
+      TESTING_UTIL.waitFor(3000, () -> cluster.getRegions(tableName).size() == 4));
+
+    scan = new Scan();
+    scanValidate(scan, rowCount, table);
+  }
+
+  private void findRegionToSplit(TableName tableName, String splitRowKey) throws Exception {
+    HRegion toSplit = null;
+    byte[] toSplitKey = Bytes.toBytes(splitRowKey);
+    for(HRegion rg : cluster.getRegions(tableName)) {
+      LOG.debug("startKey=" +
+        Bytes.toStringBinary(rg.getRegionInfo().getStartKey()) + ", getEndKey()=" +
+        Bytes.toStringBinary(rg.getRegionInfo().getEndKey()) + ", row=" + splitRowKey);
+      if((rg.getRegionInfo().getStartKey().length==0||
+        CellComparator.getInstance().compare(
+          PrivateCellUtil.createFirstOnRow(rg.getRegionInfo().getStartKey()),
+          PrivateCellUtil.createFirstOnRow(toSplitKey)) <= 0) &&(
+        rg.getRegionInfo().getEndKey().length==0||
+          CellComparator.getInstance().compare(
+            PrivateCellUtil.createFirstOnRow(rg.getRegionInfo().getEndKey()),
+            PrivateCellUtil.createFirstOnRow(toSplitKey)) >= 0)){
+        toSplit = rg;
+      }
+    }
+    assertNotNull(toSplit);
+    admin.splitRegionAsync(toSplit.getRegionInfo().getRegionName(), toSplitKey);
+  }
+
+  private static void scanValidate(Scan scan, int expectedRowCount, Table table) throws IOException{
+    ResultScanner scanner = table.getScanner(scan);
+    int rows = 0;
+    for (Result result : scanner) {
+      rows++;
+    }
+    scanner.close();
+    assertEquals(expectedRowCount, rows);
   }
 
   public static class FailingSplitMasterObserver implements MasterCoprocessor, MasterObserver {
@@ -923,14 +1036,7 @@ public class TestSplitTransactionOnCluster {
     // hbase:meta  We don't want hbase:meta replay polluting our test when we later crash
     // the table region serving server.
     int metaServerIndex = cluster.getServerWithMeta();
-    boolean tablesOnMaster = LoadBalancer.isTablesOnMaster(TESTING_UTIL.getConfiguration());
-    if (tablesOnMaster) {
-      // Need to check master is supposed to host meta... perhaps it is not.
-      throw new UnsupportedOperationException();
-      // TODO: assertTrue(metaServerIndex == -1); // meta is on master now
-    }
-    HRegionServer metaRegionServer = tablesOnMaster?
-      cluster.getMaster(): cluster.getRegionServer(metaServerIndex);
+    HRegionServer metaRegionServer = cluster.getRegionServer(metaServerIndex);
     int tableRegionIndex = cluster.getServerWith(hri.getRegionName());
     assertTrue(tableRegionIndex != -1);
     HRegionServer tableRegionServer = cluster.getRegionServer(tableRegionIndex);
@@ -971,7 +1077,7 @@ public class TestSplitTransactionOnCluster {
    * @return A regionserver that is not <code>notThisOne</code> or null if none
    * found
    */
-  private HRegionServer getOtherRegionServer(final MiniHBaseCluster cluster,
+  private HRegionServer getOtherRegionServer(final SingleProcessHBaseCluster cluster,
       final HRegionServer notThisOne) {
     for (RegionServerThread rst: cluster.getRegionServerThreads()) {
       HRegionServer hrs = rst.getRegionServer();
@@ -1040,7 +1146,7 @@ public class TestSplitTransactionOnCluster {
     }
 
     @Override
-    protected RSRpcServices createRpcServices() throws IOException {
+    protected MasterRpcServices createRpcServices() throws IOException {
       return new MyMasterRpcServices(this);
     }
   }

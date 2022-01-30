@@ -24,36 +24,28 @@ import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.CellScanner;
-import org.apache.hadoop.hbase.ChoreService;
-import org.apache.hadoop.hbase.CoordinatedStateManager;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.Server;
-import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.client.AsyncClusterConnection;
-import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.regionserver.wal.DamagedWALException;
 import org.apache.hadoop.hbase.regionserver.wal.FSHLog;
-import org.apache.hadoop.hbase.regionserver.wal.WALActionsListener;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManagerTestHelper;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALEdit;
-import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.apache.hadoop.hbase.wal.WALProvider.Writer;
-import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -86,8 +78,7 @@ public class TestWALLockup {
   private static final String COLUMN_FAMILY = "MyCF";
   private static final byte [] COLUMN_FAMILY_BYTES = Bytes.toBytes(COLUMN_FAMILY);
 
-  HRegion region = null;
-  private static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+  private static HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static Configuration CONF ;
   private String dir;
 
@@ -239,7 +230,7 @@ public class TestWALLockup {
       Put put = new Put(bytes);
       put.addColumn(COLUMN_FAMILY_BYTES, Bytes.toBytes("1"), bytes);
       WALKeyImpl key = new WALKeyImpl(region.getRegionInfo().getEncodedNameAsBytes(),
-        TableName.META_TABLE_NAME, System.currentTimeMillis(), mvcc, scopes);
+        TableName.META_TABLE_NAME, EnvironmentEdgeManager.currentTime(), mvcc, scopes);
       WALEdit edit = new WALEdit();
       CellScanner CellScanner = put.cellScanner();
       assertTrue(CellScanner.advance());
@@ -450,111 +441,8 @@ public class TestWALLockup {
     }
   }
 
-
-  static class DummyServer implements Server {
-    private Configuration conf;
-    private String serverName;
-    private boolean isAborted = false;
-
-    public DummyServer(Configuration conf, String serverName) {
-      this.conf = conf;
-      this.serverName = serverName;
-    }
-
-    @Override
-    public Configuration getConfiguration() {
-      return conf;
-    }
-
-    @Override
-    public ZKWatcher getZooKeeper() {
-      return null;
-    }
-
-    @Override
-    public CoordinatedStateManager getCoordinatedStateManager() {
-      return null;
-    }
-
-    @Override
-    public Connection getConnection() {
-      return null;
-    }
-
-    @Override
-    public ServerName getServerName() {
-      return ServerName.valueOf(this.serverName);
-    }
-
-    @Override
-    public void abort(String why, Throwable e) {
-      LOG.info("Aborting " + serverName);
-      this.isAborted = true;
-    }
-
-    @Override
-    public boolean isAborted() {
-      return this.isAborted;
-    }
-
-    @Override
-    public void stop(String why) {
-      this.isAborted = true;
-    }
-
-    @Override
-    public boolean isStopped() {
-      return this.isAborted;
-    }
-
-    @Override
-    public ChoreService getChoreService() {
-      return null;
-    }
-
-    @Override
-    public FileSystem getFileSystem() {
-      return null;
-    }
-
-    @Override
-    public boolean isStopping() {
-      return false;
-    }
-
-    @Override
-    public Connection createConnection(Configuration conf) throws IOException {
-      return null;
-    }
-
-    @Override
-    public AsyncClusterConnection getAsyncClusterConnection() {
-      return null;
-    }
-  }
-
-  static class DummyWALActionsListener implements WALActionsListener {
-
-    @Override
-    public void visitLogEntryBeforeWrite(WALKey logKey, WALEdit logEdit)
-        throws IOException {
-      if (logKey.getTableName().getNameAsString().equalsIgnoreCase("sleep")) {
-        try {
-          Thread.sleep(1000);
-        } catch (InterruptedException e) {
-          e.printStackTrace();
-        }
-      }
-      if (logKey.getTableName().getNameAsString()
-          .equalsIgnoreCase("DamagedWALException")) {
-        throw new DamagedWALException("Failed appending");
-      }
-    }
-
-  }
-
   /**
-   * @return A region on which you must call {@link HBaseTestingUtility#closeRegionAndWAL(HRegion)}
+   * @return A region on which you must call {@link HBaseTestingUtil#closeRegionAndWAL(HRegion)}
    *         when done.
    */
   private static HRegion initHRegion(TableName tableName, byte[] startKey, byte[] stopKey,

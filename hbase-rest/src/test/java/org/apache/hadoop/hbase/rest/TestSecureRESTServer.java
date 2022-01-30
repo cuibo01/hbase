@@ -22,23 +22,18 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
-
 import java.io.File;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.Principal;
 import java.security.PrivilegedExceptionAction;
-
-import javax.ws.rs.core.MediaType;
-
 import org.apache.commons.io.FileUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
-import org.apache.hadoop.hbase.MiniHBaseCluster;
-import org.apache.hadoop.hbase.StartMiniClusterOption;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
+import org.apache.hadoop.hbase.SingleProcessHBaseCluster;
+import org.apache.hadoop.hbase.StartTestingClusterOption;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Connection;
@@ -99,6 +94,9 @@ import org.junit.experimental.categories.Category;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
+import org.apache.hbase.thirdparty.javax.ws.rs.core.MediaType;
+
 /**
  * Test class for SPNEGO authentication on the HttpServer. Uses Kerby's MiniKDC and Apache
  * HttpComponents to verify that a simple Servlet is reachable via SPNEGO and unreachable w/o.
@@ -111,9 +109,9 @@ public class TestSecureRESTServer {
       HBaseClassTestRule.forClass(TestSecureRESTServer.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestSecureRESTServer.class);
-  private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+  private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static final HBaseRESTTestingUtility REST_TEST = new HBaseRESTTestingUtility();
-  private static MiniHBaseCluster CLUSTER;
+  private static SingleProcessHBaseCluster CLUSTER;
 
   private static final String HOSTNAME = "localhost";
   private static final String CLIENT_PRINCIPAL = "client";
@@ -199,7 +197,7 @@ public class TestSecureRESTServer {
         restServerKeytab);
 
     // Start HDFS
-    TEST_UTIL.startMiniCluster(StartMiniClusterOption.builder()
+    TEST_UTIL.startMiniCluster(StartTestingClusterOption.builder()
         .numMasters(1)
         .numRegionServers(1)
         .numZkServers(1)

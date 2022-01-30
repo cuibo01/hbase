@@ -26,7 +26,6 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.List;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -34,7 +33,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Stoppable;
 import org.apache.hadoop.hbase.TableName;
@@ -67,7 +66,7 @@ public class TestStoreFileRefresherChore {
   public static final HBaseClassTestRule CLASS_RULE =
       HBaseClassTestRule.forClass(TestStoreFileRefresherChore.class);
 
-  private HBaseTestingUtility TEST_UTIL;
+  private HBaseTestingUtil TEST_UTIL;
   private Path testDir;
 
   @Rule
@@ -75,7 +74,7 @@ public class TestStoreFileRefresherChore {
 
   @Before
   public void setUp() throws IOException {
-    TEST_UTIL = new HBaseTestingUtility();
+    TEST_UTIL = new HBaseTestingUtil();
     testDir = TEST_UTIL.getDataTestDir("TestStoreFileRefresherChore");
     CommonFSUtils.setRootDir(TEST_UTIL.getConfiguration(), testDir);
   }
@@ -98,7 +97,7 @@ public class TestStoreFileRefresherChore {
     }
 
     @Override
-    public Collection<StoreFileInfo> getStoreFiles(String familyName) throws IOException {
+    public List<StoreFileInfo> getStoreFiles(String familyName) throws IOException {
       if (fail) {
         throw new IOException("simulating FS failure");
       }

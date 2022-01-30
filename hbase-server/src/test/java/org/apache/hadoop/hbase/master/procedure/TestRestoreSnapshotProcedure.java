@@ -41,6 +41,7 @@ import org.apache.hadoop.hbase.snapshot.SnapshotTestingUtils;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.ClassRule;
@@ -100,7 +101,7 @@ public class TestRestoreSnapshotProcedure extends TestTableDDLProcedureBase {
   }
 
   private void setupSnapshotAndUpdateTable() throws Exception {
-    long tid = System.currentTimeMillis();
+    long tid = EnvironmentEdgeManager.currentTime();
     final String snapshotName = "snapshot-" + tid;
     Admin admin = UTIL.getAdmin();
     // create Table
@@ -217,6 +218,25 @@ public class TestRestoreSnapshotProcedure extends TestTableDDLProcedureBase {
 
     resetProcExecutorTestingKillFlag();
     validateSnapshotRestore();
+  }
+
+  @Test
+  public void testRecoverWithRestoreAclFlag() throws Exception {
+    // This test is to solve the problems mentioned in HBASE-26462,
+    // this needs to simulate the case of RestoreSnapshotProcedure failure and recovery,
+    // and verify whether 'restoreAcl' flag can obtain the correct value.
+
+    final ProcedureExecutor<MasterProcedureEnv> procExec = getMasterProcedureExecutor();
+    ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdate(procExec, true);
+
+    // Start the Restore snapshot procedure (with restoreAcl 'true') && kill the executor
+    long procId = procExec.submitProcedure(
+      new RestoreSnapshotProcedure(procExec.getEnvironment(), snapshotHTD, snapshot, true));
+    MasterProcedureTestingUtility.testRecoveryAndDoubleExecution(procExec, procId);
+
+    RestoreSnapshotProcedure result = (RestoreSnapshotProcedure)procExec.getResult(procId);
+    // check whether the restoreAcl flag is true after deserialization from Pb.
+    assertEquals(true, result.getRestoreAcl());
   }
 
   private void validateSnapshotRestore() throws IOException {

@@ -35,6 +35,7 @@ public enum ExecutorType {
   MASTER_META_SERVER_OPERATIONS (6),
   M_LOG_REPLAY_OPS           (7),
   MASTER_SNAPSHOT_OPERATIONS (8),
+  MASTER_MERGE_OPERATIONS    (9),
 
   // RegionServer executor services
   RS_OPEN_REGION             (20),
@@ -51,7 +52,8 @@ public enum ExecutorType {
   RS_REFRESH_PEER(31),
   RS_REPLAY_SYNC_REPLICATION_WAL(32),
   RS_SWITCH_RPC_THROTTLE(33),
-  RS_IN_MEMORY_COMPACTION(34);
+  RS_IN_MEMORY_COMPACTION(34),
+  RS_CLAIM_REPLICATION_QUEUE(35);
 
   ExecutorType(int value) {
   }

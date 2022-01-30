@@ -184,7 +184,7 @@ public class MetricsAssertHelperImpl implements MetricsAssertHelper {
   @Override
   public void assertCounter(String name, long expected, BaseSource source) {
     long found = getCounter(name, source);
-    assertEquals("Metrics Counters should be equal", (long) Long.valueOf(expected), found);
+    assertEquals(name + "(" + found + ") should be equal", (long) Long.valueOf(expected), found);
   }
 
   @Override
@@ -211,9 +211,16 @@ public class MetricsAssertHelperImpl implements MetricsAssertHelper {
   public boolean checkCounterExists(String name, BaseSource source) {
     getMetrics(source);
     String cName = canonicalizeMetricName(name);
-    return (counters.get(cName) != null) ? true : false;
+    return counters.get(cName) != null;
   }
-  
+
+  @Override
+  public boolean checkGaugeExists(String name, BaseSource source) {
+    getMetrics(source);
+    String cName = canonicalizeMetricName(name);
+    return gauges.get(cName) != null;
+  }
+
   @Override
   public double getGaugeDouble(String name, BaseSource source) {
     getMetrics(source);

@@ -23,7 +23,7 @@ import java.io.IOException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Abortable;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Waiter;
 import org.apache.hadoop.hbase.ZooKeeperConnectionException;
@@ -64,7 +64,7 @@ public class TestMasterNoCluster {
 
   private static final Logger LOG = LoggerFactory.getLogger(TestMasterNoCluster.class);
 
-  private static final HBaseTestingUtility TESTUTIL = new HBaseTestingUtility();
+  private static final HBaseTestingUtil TESTUTIL = new HBaseTestingUtil();
 
   @Rule
   public TestName name = new TestName();
@@ -121,11 +121,10 @@ public class TestMasterNoCluster {
    * Test starting master then stopping it before its fully up.
    */
   @Test
-  public void testStopDuringStart()
-  throws IOException, KeeperException, InterruptedException {
+  public void testStopDuringStart() throws IOException, KeeperException, InterruptedException {
     HMaster master = new HMaster(TESTUTIL.getConfiguration());
     master.start();
-    // Immediately have it stop.  We used hang in assigning meta.
+    // Immediately have it stop. We used hang in assigning meta.
     master.stopMaster();
     master.join();
   }
@@ -150,9 +149,10 @@ public class TestMasterNoCluster {
     conf.set(HConstants.CLIENT_ZOOKEEPER_QUORUM, HConstants.LOCALHOST);
     conf.setInt(HConstants.CLIENT_ZOOKEEPER_CLIENT_PORT,
       TESTUTIL.getZkCluster().getClientPort() + 1);
+    // need to enable maintenance mode so we will start master and an in process region server
+    conf.setBoolean(HMaster.MAINTENANCE_MODE, true);
     // settings to allow us not to start additional RS
     conf.setInt(ServerManager.WAIT_ON_REGIONSERVERS_MINTOSTART, 1);
-    conf.setBoolean(LoadBalancer.TABLES_ON_MASTER, true);
     // main setting for this test case
     conf.setBoolean(HConstants.CLIENT_ZOOKEEPER_OBSERVER_MODE, true);
     HMaster master = new HMaster(conf);

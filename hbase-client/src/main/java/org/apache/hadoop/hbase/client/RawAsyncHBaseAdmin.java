@@ -147,14 +147,13 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.NameStringP
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.ProcedureDescription;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.RegionSpecifier.RegionSpecifierType;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.TableSchema;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.AbortProcedureRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.AbortProcedureResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.AddColumnRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.AddColumnResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.AssignRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.AssignRegionResponse;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.BalanceRequest;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.BalanceResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ClearDeadServersRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ClearDeadServersResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.CreateNamespaceRequest;
@@ -232,10 +231,14 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.MergeTable
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.MergeTableRegionsResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyColumnRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyColumnResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyColumnStoreFileTrackerRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyColumnStoreFileTrackerResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyNamespaceRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyNamespaceResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyTableRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyTableResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyTableStoreFileTrackerRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ModifyTableStoreFileTrackerResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.MoveRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.MoveRegionResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.NormalizeRequest;
@@ -663,6 +666,18 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
+  public CompletableFuture<Void> modifyTableStoreFileTracker(TableName tableName, String dstSFT) {
+    return this
+      .<ModifyTableStoreFileTrackerRequest, ModifyTableStoreFileTrackerResponse> procedureCall(
+        tableName,
+        RequestConverter.buildModifyTableStoreFileTrackerRequest(tableName, dstSFT,
+          ng.getNonceGroup(), ng.newNonce()),
+        (s, c, req, done) -> s.modifyTableStoreFileTracker(c, req, done),
+        (resp) -> resp.getProcId(),
+        new ModifyTableStoreFileTrackerProcedureBiConsumer(this, tableName));
+  }
+
+  @Override
   public CompletableFuture<Void> deleteTable(TableName tableName) {
     return this.<DeleteTableRequest, DeleteTableResponse> procedureCall(tableName,
       RequestConverter.buildDeleteTableRequest(tableName, ng.getNonceGroup(), ng.newNonce()),
@@ -808,6 +823,19 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       RequestConverter.buildModifyColumnRequest(tableName, columnFamily, ng.getNonceGroup(),
         ng.newNonce()), (s, c, req, done) -> s.modifyColumn(c, req, done),
       (resp) -> resp.getProcId(), new ModifyColumnFamilyProcedureBiConsumer(tableName));
+  }
+
+  @Override
+  public CompletableFuture<Void> modifyColumnFamilyStoreFileTracker(TableName tableName,
+    byte[] family, String dstSFT) {
+    return this
+      .<ModifyColumnStoreFileTrackerRequest, ModifyColumnStoreFileTrackerResponse> procedureCall(
+        tableName,
+        RequestConverter.buildModifyColumnStoreFileTrackerRequest(tableName, family, dstSFT,
+          ng.getNonceGroup(), ng.newNonce()),
+        (s, c, req, done) -> s.modifyColumnStoreFileTracker(c, req, done),
+        (resp) -> resp.getProcId(),
+        new ModifyColumnFamilyStoreFileTrackerProcedureBiConsumer(tableName));
   }
 
   @Override
@@ -1969,7 +1997,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         } else if (!exists) {
           // if table does not exist, then just clone snapshot into new table.
           completeConditionalOnFuture(future,
-            internalRestoreSnapshot(snapshotName, finalTableName, restoreAcl));
+            internalRestoreSnapshot(snapshotName, finalTableName, restoreAcl, null));
         } else {
           addListener(isTableDisabled(finalTableName), (disabled, err4) -> {
             if (err4 != null) {
@@ -2005,12 +2033,13 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
           future.completeExceptionally(err);
         } else {
           // Step.2 Restore snapshot
-          addListener(internalRestoreSnapshot(snapshotName, tableName, restoreAcl),
+          addListener(internalRestoreSnapshot(snapshotName, tableName, restoreAcl, null),
             (void2, err2) -> {
               if (err2 != null) {
                 // Step.3.a Something went wrong during the restore and try to rollback.
                 addListener(
-                  internalRestoreSnapshot(failSafeSnapshotSnapshotName, tableName, restoreAcl),
+                  internalRestoreSnapshot(failSafeSnapshotSnapshotName, tableName, restoreAcl,
+                    null),
                   (void3, err3) -> {
                     if (err3 != null) {
                       future.completeExceptionally(err3);
@@ -2038,7 +2067,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       });
       return future;
     } else {
-      return internalRestoreSnapshot(snapshotName, tableName, restoreAcl);
+      return internalRestoreSnapshot(snapshotName, tableName, restoreAcl, null);
     }
   }
 
@@ -2055,7 +2084,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> cloneSnapshot(String snapshotName, TableName tableName,
-      boolean restoreAcl) {
+      boolean restoreAcl, String customSFT) {
     CompletableFuture<Void> future = new CompletableFuture<>();
     addListener(tableExists(tableName), (exists, err) -> {
       if (err != null) {
@@ -2064,14 +2093,14 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         future.completeExceptionally(new TableExistsException(tableName));
       } else {
         completeConditionalOnFuture(future,
-          internalRestoreSnapshot(snapshotName, tableName, restoreAcl));
+          internalRestoreSnapshot(snapshotName, tableName, restoreAcl, customSFT));
       }
     });
     return future;
   }
 
   private CompletableFuture<Void> internalRestoreSnapshot(String snapshotName, TableName tableName,
-      boolean restoreAcl) {
+      boolean restoreAcl, String customSFT) {
     SnapshotProtos.SnapshotDescription snapshot = SnapshotProtos.SnapshotDescription.newBuilder()
       .setName(snapshotName).setTable(tableName.getNameAsString()).build();
     try {
@@ -2079,10 +2108,15 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     } catch (IllegalArgumentException e) {
       return failedFuture(e);
     }
+    RestoreSnapshotRequest.Builder builder =
+      RestoreSnapshotRequest.newBuilder().setSnapshot(snapshot).setNonceGroup(ng.getNonceGroup())
+        .setNonce(ng.newNonce()).setRestoreACL(restoreAcl);
+    if(customSFT != null){
+      builder.setCustomSFT(customSFT);
+    }
     return waitProcedureResult(this.<Long> newMasterCaller().action((controller, stub) -> this
       .<RestoreSnapshotRequest, RestoreSnapshotResponse, Long> call(controller, stub,
-        RestoreSnapshotRequest.newBuilder().setSnapshot(snapshot).setNonceGroup(ng.getNonceGroup())
-          .setNonce(ng.newNonce()).setRestoreACL(restoreAcl).build(),
+        builder.build(),
         (s, c, req, done) -> s.restoreSnapshot(c, req, done), (resp) -> resp.getProcId()))
       .call());
   }
@@ -2388,51 +2422,56 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     if (regionNameOrEncodedRegionName == null) {
       return failedFuture(new IllegalArgumentException("Passed region name can't be null"));
     }
-    try {
-      CompletableFuture<Optional<HRegionLocation>> future;
-      if (RegionInfo.isEncodedRegionName(regionNameOrEncodedRegionName)) {
-        String encodedName = Bytes.toString(regionNameOrEncodedRegionName);
-        if (encodedName.length() < RegionInfo.MD5_HEX_LENGTH) {
-          // old format encodedName, should be meta region
-          future = connection.registry.getMetaRegionLocations()
-            .thenApply(locs -> Stream.of(locs.getRegionLocations())
-              .filter(loc -> loc.getRegion().getEncodedName().equals(encodedName)).findFirst());
-        } else {
-          future = ClientMetaTableAccessor.getRegionLocationWithEncodedName(metaTable,
-            regionNameOrEncodedRegionName);
-        }
+
+    CompletableFuture<Optional<HRegionLocation>> future;
+    if (RegionInfo.isEncodedRegionName(regionNameOrEncodedRegionName)) {
+      String encodedName = Bytes.toString(regionNameOrEncodedRegionName);
+      if (encodedName.length() < RegionInfo.MD5_HEX_LENGTH) {
+        // old format encodedName, should be meta region
+        future = connection.registry.getMetaRegionLocations()
+          .thenApply(locs -> Stream.of(locs.getRegionLocations())
+            .filter(loc -> loc.getRegion().getEncodedName().equals(encodedName)).findFirst());
       } else {
-        RegionInfo regionInfo =
-          CatalogFamilyFormat.parseRegionInfoFromRegionName(regionNameOrEncodedRegionName);
-        if (regionInfo.isMetaRegion()) {
-          future = connection.registry.getMetaRegionLocations()
-            .thenApply(locs -> Stream.of(locs.getRegionLocations())
-              .filter(loc -> loc.getRegion().getReplicaId() == regionInfo.getReplicaId())
-              .findFirst());
-        } else {
-          future =
-            ClientMetaTableAccessor.getRegionLocation(metaTable, regionNameOrEncodedRegionName);
-        }
+        future = ClientMetaTableAccessor.getRegionLocationWithEncodedName(metaTable,
+          regionNameOrEncodedRegionName);
+      }
+    } else {
+      // Not all regionNameOrEncodedRegionName here is going to be a valid region name,
+      // it needs to throw out IllegalArgumentException in case tableName is passed in.
+      RegionInfo regionInfo;
+      try {
+        regionInfo = CatalogFamilyFormat.parseRegionInfoFromRegionName(
+          regionNameOrEncodedRegionName);
+      } catch (IOException ioe) {
+        return failedFuture(new IllegalArgumentException(ioe.getMessage()));
       }
 
-      CompletableFuture<HRegionLocation> returnedFuture = new CompletableFuture<>();
-      addListener(future, (location, err) -> {
-        if (err != null) {
-          returnedFuture.completeExceptionally(err);
-          return;
-        }
-        if (!location.isPresent() || location.get().getRegion() == null) {
-          returnedFuture.completeExceptionally(
-            new UnknownRegionException("Invalid region name or encoded region name: " +
-              Bytes.toStringBinary(regionNameOrEncodedRegionName)));
-        } else {
-          returnedFuture.complete(location.get());
-        }
-      });
-      return returnedFuture;
-    } catch (IOException e) {
-      return failedFuture(e);
+      if (regionInfo.isMetaRegion()) {
+        future = connection.registry.getMetaRegionLocations()
+          .thenApply(locs -> Stream.of(locs.getRegionLocations())
+            .filter(loc -> loc.getRegion().getReplicaId() == regionInfo.getReplicaId())
+            .findFirst());
+      } else {
+        future =
+          ClientMetaTableAccessor.getRegionLocation(metaTable, regionNameOrEncodedRegionName);
+      }
     }
+
+    CompletableFuture<HRegionLocation> returnedFuture = new CompletableFuture<>();
+    addListener(future, (location, err) -> {
+      if (err != null) {
+        returnedFuture.completeExceptionally(err);
+        return;
+      }
+      if (!location.isPresent() || location.get().getRegion() == null) {
+        returnedFuture.completeExceptionally(
+          new UnknownRegionException("Invalid region name or encoded region name: " +
+            Bytes.toStringBinary(regionNameOrEncodedRegionName)));
+      } else {
+        returnedFuture.complete(location.get());
+      }
+    });
+    return returnedFuture;
   }
 
   /**
@@ -2581,7 +2620,20 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
     @Override
     String getOperationType() {
-      return "ENABLE";
+      return "MODIFY";
+    }
+  }
+
+  private static class ModifyTableStoreFileTrackerProcedureBiConsumer
+    extends TableProcedureBiConsumer {
+
+    ModifyTableStoreFileTrackerProcedureBiConsumer(AsyncAdmin admin, TableName tableName) {
+      super(tableName);
+    }
+
+    @Override
+    String getOperationType() {
+      return "MODIFY_TABLE_STORE_FILE_TRACKER";
     }
   }
 
@@ -2672,6 +2724,19 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     @Override
     String getOperationType() {
       return "MODIFY_COLUMN_FAMILY";
+    }
+  }
+
+  private static class ModifyColumnFamilyStoreFileTrackerProcedureBiConsumer
+    extends TableProcedureBiConsumer {
+
+    ModifyColumnFamilyStoreFileTrackerProcedureBiConsumer(TableName tableName) {
+      super(tableName);
+    }
+
+    @Override
+    String getOperationType() {
+      return "MODIFY_COLUMN_FAMILY_STORE_FILE_TRACKER";
     }
   }
 
@@ -2895,6 +2960,42 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
                 future.complete(result);
               }
             });
+        }
+      });
+    return future;
+  }
+
+  @Override
+  public CompletableFuture<Void> updateConfiguration(String groupName) {
+    CompletableFuture<Void> future = new CompletableFuture<Void>();
+    addListener(
+      getRSGroup(groupName),
+      (rsGroupInfo, err) -> {
+        if (err != null) {
+          future.completeExceptionally(err);
+        } else if (rsGroupInfo == null) {
+          future.completeExceptionally(
+            new IllegalArgumentException("Group does not exist: " + groupName));
+        } else {
+          addListener(getClusterMetrics(EnumSet.of(Option.SERVERS_NAME)), (status, err2) -> {
+            if (err2 != null) {
+              future.completeExceptionally(err2);
+            } else {
+              List<CompletableFuture<Void>> futures = new ArrayList<>();
+              List<ServerName> groupServers = status.getServersName().stream().filter(
+                s -> rsGroupInfo.containsServer(s.getAddress())).collect(Collectors.toList());
+              groupServers.forEach(server -> futures.add(updateConfiguration(server)));
+              addListener(
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[futures.size()])),
+                (result, err3) -> {
+                  if (err3 != null) {
+                    future.completeExceptionally(err3);
+                  } else {
+                    future.complete(result);
+                  }
+                });
+            }
+          });
         }
       });
     return future;
@@ -3240,14 +3341,15 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
-  public CompletableFuture<Boolean> balance(boolean forcible) {
+  public CompletableFuture<BalanceResponse> balance(BalanceRequest request) {
     return this
-        .<Boolean> newMasterCaller()
+        .<BalanceResponse> newMasterCaller()
         .action(
-          (controller, stub) -> this.<BalanceRequest, BalanceResponse, Boolean> call(controller,
-            stub, RequestConverter.buildBalanceRequest(forcible),
-            (s, c, req, done) -> s.balance(c, req, done), (resp) -> resp.getBalancerRan())).call();
+          (controller, stub) -> this.<MasterProtos.BalanceRequest, MasterProtos.BalanceResponse, BalanceResponse> call(controller,
+            stub, ProtobufUtil.toBalanceRequest(request),
+            (s, c, req, done) -> s.balance(c, req, done), (resp) -> ProtobufUtil.toBalanceResponse(resp))).call();
   }
+
 
   @Override
   public CompletableFuture<Boolean> isBalancerEnabled() {
@@ -3958,13 +4060,13 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
-  public CompletableFuture<Boolean> balanceRSGroup(String groupName) {
-    return this.<Boolean> newMasterCaller()
-        .action((controller, stub) -> this.
-            <BalanceRSGroupRequest, BalanceRSGroupResponse, Boolean> call(controller, stub,
-                BalanceRSGroupRequest.newBuilder().setRSGroupName(groupName).build(),
-              (s, c, req, done) -> s.balanceRSGroup(c, req, done), resp -> resp.getBalanceRan()))
-        .call();
+  public CompletableFuture<BalanceResponse> balanceRSGroup(String groupName,
+    BalanceRequest request) {
+    return this.<BalanceResponse>newMasterCaller().action(
+        (controller, stub) -> this.<BalanceRSGroupRequest, BalanceRSGroupResponse, BalanceResponse>call(
+          controller, stub, ProtobufUtil.createBalanceRSGroupRequest(groupName, request),
+          MasterService.Interface::balanceRSGroup, ProtobufUtil::toBalanceResponse))
+      .call();
   }
 
   @Override
@@ -4197,6 +4299,15 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       .call();
   }
 
+  private CompletableFuture<List<LogEntry>> getBalancerRejections(final int limit) {
+    return this.<List<LogEntry>>newMasterCaller()
+      .action((controller, stub) ->
+        this.call(controller, stub,
+          ProtobufUtil.toBalancerRejectionRequest(limit),
+          MasterService.Interface::getLogEntries, ProtobufUtil::toBalancerRejectionResponse))
+      .call();
+  }
+
   @Override
   public CompletableFuture<List<LogEntry>> getLogEntries(Set<ServerName> serverNames,
       String logType, ServerType serverType, int limit,
@@ -4204,19 +4315,27 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     if (logType == null || serverType == null) {
       throw new IllegalArgumentException("logType and/or serverType cannot be empty");
     }
-    if (logType.equals("SLOW_LOG") || logType.equals("LARGE_LOG")) {
-      if (ServerType.MASTER.equals(serverType)) {
-        throw new IllegalArgumentException("Slow/Large logs are not maintained by HMaster");
-      }
-      return getSlowLogResponses(filterParams, serverNames, limit, logType);
-    } else if (logType.equals("BALANCER_DECISION")) {
-      if (ServerType.REGION_SERVER.equals(serverType)) {
-        throw new IllegalArgumentException(
-          "Balancer Decision logs are not maintained by HRegionServer");
-      }
-      return getBalancerDecisions(limit);
+    switch (logType){
+      case "SLOW_LOG":
+      case "LARGE_LOG":
+        if (ServerType.MASTER.equals(serverType)) {
+          throw new IllegalArgumentException("Slow/Large logs are not maintained by HMaster");
+        }
+        return getSlowLogResponses(filterParams, serverNames, limit, logType);
+      case "BALANCER_DECISION":
+        if (ServerType.REGION_SERVER.equals(serverType)) {
+          throw new IllegalArgumentException(
+            "Balancer Decision logs are not maintained by HRegionServer");
+        }
+        return getBalancerDecisions(limit);
+      case "BALANCER_REJECTION":
+        if (ServerType.REGION_SERVER.equals(serverType)) {
+          throw new IllegalArgumentException(
+            "Balancer Rejection logs are not maintained by HRegionServer");
+        }
+        return getBalancerRejections(limit);
+      default:
+        return CompletableFuture.completedFuture(Collections.emptyList());
     }
-    return CompletableFuture.completedFuture(Collections.emptyList());
   }
-
 }

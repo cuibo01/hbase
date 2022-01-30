@@ -40,11 +40,10 @@ import org.apache.hadoop.hbase.ClusterMetrics.Option;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.MiniHBaseCluster;
+import org.apache.hadoop.hbase.SingleProcessHBaseCluster;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNameTestRule;
 import org.apache.hadoop.hbase.coprocessor.MultiRowMutationEndpoint;
-import org.apache.hadoop.hbase.master.LoadBalancer;
 import org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
@@ -1242,7 +1241,7 @@ public class TestFromClientSide4 extends FromClientSideBase {
       }
 
       // stop the master
-      MiniHBaseCluster cluster = TEST_UTIL.getHBaseCluster();
+      SingleProcessHBaseCluster cluster = TEST_UTIL.getHBaseCluster();
       cluster.stopMaster(0, false);
       cluster.waitOnMaster(0);
 
@@ -1252,12 +1251,11 @@ public class TestFromClientSide4 extends FromClientSideBase {
 
       // test that the same unmanaged connection works with a new
       // Admin and can connect to the new master;
-      boolean tablesOnMaster = LoadBalancer.isTablesOnMaster(TEST_UTIL.getConfiguration());
       try (Admin admin = conn.getAdmin()) {
         assertTrue(admin.tableExists(tableName));
         assertEquals(
           admin.getClusterMetrics(EnumSet.of(Option.LIVE_SERVERS)).getLiveServerMetrics().size(),
-          SLAVES + (tablesOnMaster ? 1 : 0));
+          SLAVES);
       }
     }
   }

@@ -30,6 +30,8 @@ java_import org.apache.hadoop.hbase.client.CoprocessorDescriptorBuilder
 java_import org.apache.hadoop.hbase.client.TableDescriptorBuilder
 java_import org.apache.hadoop.hbase.HConstants
 
+require 'hbase/balancer_utils'
+
 # Wrapper for org.apache.hadoop.hbase.client.HBaseAdmin
 
 module Hbase
@@ -230,9 +232,10 @@ module Hbase
 
     #----------------------------------------------------------------------------------------------
     # Requests a cluster balance
-    # Returns true if balancer ran
-    def balancer(force)
-      @admin.balance(java.lang.Boolean.valueOf(force))
+    # Returns BalanceResponse with details of the balancer run
+    def balancer(*args)
+      request = ::Hbase::BalancerUtils.create_balance_request(args)
+      @admin.balance(request)
     end
 
     #----------------------------------------------------------------------------------------------
@@ -474,7 +477,7 @@ module Hbase
       )
       zk = @zk_wrapper.getRecoverableZooKeeper.getZooKeeper
       @zk_main = org.apache.zookeeper.ZooKeeperMain.new(zk)
-      org.apache.hadoop.hbase.zookeeper.ZKUtil.dump(@zk_wrapper)
+      org.apache.hadoop.hbase.zookeeper.ZKDump.dump(@zk_wrapper)
     end
 
     #----------------------------------------------------------------------------------------------
@@ -534,7 +537,7 @@ module Hbase
           File.foreach(splits_file) do |line|
             arg[SPLITS].push(line.chomp)
           end
-          tdb.setValue(SPLITS_FILE, arg[SPLITS_FILE])
+          tdb.setValue(SPLITS_FILE, splits_file)
         end
 
         if arg.key?(SPLITS)
@@ -819,6 +822,17 @@ module Hbase
                 raise ArgumentError, "Could not find attribute: #{name}"
               end
               tdb.removeValue(name)
+            end
+            hasTableUpdate = true
+          elsif method == 'table_remove_coprocessor'
+            classname = arg.delete(CLASSNAME)
+            raise(ArgumentError, 'CLASSNAME parameter missing for table_remove_coprocessor method') unless classname
+            if classname.is_a?(Array)
+              classname.each do |key|
+                tdb.removeCoprocessor(key)
+              end
+            else
+              tdb.removeCoprocessor(classname)
             end
             hasTableUpdate = true
           # Unset table configuration
@@ -1108,7 +1122,7 @@ module Hbase
       end
       cfdb.setTimeToLive(arg.delete(ColumnFamilyDescriptorBuilder::TTL)) if arg.include?(ColumnFamilyDescriptorBuilder::TTL)
       cfdb.setDataBlockEncoding(org.apache.hadoop.hbase.io.encoding.DataBlockEncoding.valueOf(arg.delete(ColumnFamilyDescriptorBuilder::DATA_BLOCK_ENCODING))) if arg.include?(ColumnFamilyDescriptorBuilder::DATA_BLOCK_ENCODING)
-      cfdb.setBlocksize(JInteger.valueOf(arg.delete(ColumnFamilyDescriptorBuilder::BLOCKSIZE))) if arg.include?(ColumnFamilyDescriptorBuilder::BLOCKSIZE)
+      cfdb.setBlocksize(arg.delete(ColumnFamilyDescriptorBuilder::BLOCKSIZE)) if arg.include?(ColumnFamilyDescriptorBuilder::BLOCKSIZE)
       cfdb.setMaxVersions(JInteger.valueOf(arg.delete(HConstants::VERSIONS))) if arg.include?(HConstants::VERSIONS)
       cfdb.setMinVersions(JInteger.valueOf(arg.delete(ColumnFamilyDescriptorBuilder::MIN_VERSIONS))) if arg.include?(ColumnFamilyDescriptorBuilder::MIN_VERSIONS)
       cfdb.setKeepDeletedCells(org.apache.hadoop.hbase.KeepDeletedCells.valueOf(arg.delete(ColumnFamilyDescriptorBuilder::KEEP_DELETED_CELLS).to_s.upcase)) if arg.include?(ColumnFamilyDescriptorBuilder::KEEP_DELETED_CELLS)
@@ -1148,6 +1162,22 @@ module Hbase
         compression = arg.delete(ColumnFamilyDescriptorBuilder::COMPRESSION_COMPACT).upcase.to_sym
         if org.apache.hadoop.hbase.io.compress.Compression::Algorithm.constants.include?(compression)
           cfdb.setCompactionCompressionType(org.apache.hadoop.hbase.io.compress.Compression::Algorithm.valueOf(compression))
+        else
+          raise(ArgumentError, "Compression #{compression} is not supported. Use one of " + org.apache.hadoop.hbase.io.compress.Compression::Algorithm.constants.join(' '))
+        end
+      end
+      if arg.include?(ColumnFamilyDescriptorBuilder::COMPRESSION_COMPACT_MAJOR)
+        compression = arg.delete(ColumnFamilyDescriptorBuilder::COMPRESSION_COMPACT_MAJOR).upcase.to_sym
+        if org.apache.hadoop.hbase.io.compress.Compression::Algorithm.constants.include?(compression)
+          cfdb.setMajorCompactionCompressionType(org.apache.hadoop.hbase.io.compress.Compression::Algorithm.valueOf(compression))
+        else
+          raise(ArgumentError, "Compression #{compression} is not supported. Use one of " + org.apache.hadoop.hbase.io.compress.Compression::Algorithm.constants.join(' '))
+        end
+      end
+      if arg.include?(ColumnFamilyDescriptorBuilder::COMPRESSION_COMPACT_MINOR)
+        compression = arg.delete(ColumnFamilyDescriptorBuilder::COMPRESSION_COMPACT_MINOR).upcase.to_sym
+        if org.apache.hadoop.hbase.io.compress.Compression::Algorithm.constants.include?(compression)
+          cfdb.setMinorCompactionCompressionType(org.apache.hadoop.hbase.io.compress.Compression::Algorithm.valueOf(compression))
         else
           raise(ArgumentError, "Compression #{compression} is not supported. Use one of " + org.apache.hadoop.hbase.io.compress.Compression::Algorithm.constants.join(' '))
         end
@@ -1206,6 +1236,9 @@ module Hbase
           ttl = ttl ? ttl.to_java(:long) : -1
           snapshot_props = java.util.HashMap.new
           snapshot_props.put("TTL", ttl)
+          max_filesize = arg[MAX_FILESIZE]
+          max_filesize = max_filesize ? max_filesize.to_java(:long) : -1
+          snapshot_props.put("MAX_FILESIZE", max_filesize)
           if arg[SKIP_FLUSH] == true
             @admin.snapshot(snapshot_name, table_name,
                             org.apache.hadoop.hbase.client.SnapshotType::SKIPFLUSH, snapshot_props)
@@ -1226,8 +1259,8 @@ module Hbase
 
     #----------------------------------------------------------------------------------------------
     # Create a new table by cloning the snapshot content
-    def clone_snapshot(snapshot_name, table, restore_acl = false)
-      @admin.cloneSnapshot(snapshot_name, TableName.valueOf(table), restore_acl)
+    def clone_snapshot(snapshot_name, table, restore_acl = false, clone_sft = nil)
+      @admin.cloneSnapshot(snapshot_name, TableName.valueOf(table), restore_acl, clone_sft)
     end
 
     #----------------------------------------------------------------------------------------------
@@ -1361,6 +1394,12 @@ module Hbase
     end
 
     #----------------------------------------------------------------------------------------------
+    # Updates the configuration of all the regionservers in the rsgroup.
+    def update_rsgroup_config(groupName)
+      @admin.updateConfiguration(groupName)
+    end
+
+    #----------------------------------------------------------------------------------------------
     # Returns namespace's structure description
     def describe_namespace(namespace_name)
       namespace = @admin.getNamespaceDescriptor(namespace_name)
@@ -1448,6 +1487,16 @@ module Hbase
     end
 
     #----------------------------------------------------------------------------------------------
+    # Get namespace's rsgroup
+    def get_namespace_rsgroup(namespace_name)
+      # Fail if namespace name is not a string
+      raise(ArgumentError, 'Namespace name must be of type String') unless namespace_name.is_a?(String)
+      nsd = @admin.getNamespaceDescriptor(namespace_name)
+      raise(ArgumentError, 'Namespace does not exist') unless nsd
+      nsd.getConfigurationValue("hbase.rsgroup.name")
+    end
+
+    #----------------------------------------------------------------------------------------------
     # Drops a table
     def drop_namespace(namespace_name)
       @admin.deleteNamespace(namespace_name)
@@ -1479,7 +1528,13 @@ module Hbase
       tdb.setMergeEnabled(JBoolean.valueOf(arg.delete(TableDescriptorBuilder::MERGE_ENABLED))) if arg.include?(TableDescriptorBuilder::MERGE_ENABLED)
       tdb.setNormalizationEnabled(JBoolean.valueOf(arg.delete(TableDescriptorBuilder::NORMALIZATION_ENABLED))) if arg.include?(TableDescriptorBuilder::NORMALIZATION_ENABLED)
       tdb.setNormalizerTargetRegionCount(JInteger.valueOf(arg.delete(TableDescriptorBuilder::NORMALIZER_TARGET_REGION_COUNT))) if arg.include?(TableDescriptorBuilder::NORMALIZER_TARGET_REGION_COUNT)
-      tdb.setNormalizerTargetRegionSize(JLong.valueOf(arg.delete(TableDescriptorBuilder::NORMALIZER_TARGET_REGION_SIZE))) if arg.include?(TableDescriptorBuilder::NORMALIZER_TARGET_REGION_SIZE)
+      # TODO: Keeping backward compatability for NORMALIZER_TARGET_REGION_SIZE with HBASE-25651 change. Can be removed in later version
+      if arg.include?(TableDescriptorBuilder::NORMALIZER_TARGET_REGION_SIZE)
+        warn 'Use of NORMALIZER_TARGET_REGION_SIZE has been deprecated and will be removed in future version, please use NORMALIZER_TARGET_REGION_SIZE_MB instead'
+        tdb.setNormalizerTargetRegionSize(JLong.valueOf(arg.delete(TableDescriptorBuilder::NORMALIZER_TARGET_REGION_SIZE)))
+      end
+      tdb.setNormalizerTargetRegionSize(JLong.valueOf(arg.delete(TableDescriptorBuilder::NORMALIZER_TARGET_REGION_SIZE_MB))) \
+        if arg.include?(TableDescriptorBuilder::NORMALIZER_TARGET_REGION_SIZE_MB)
       tdb.setMemStoreFlushSize(arg.delete(TableDescriptorBuilder::MEMSTORE_FLUSHSIZE)) if arg.include?(TableDescriptorBuilder::MEMSTORE_FLUSHSIZE)
       tdb.setDurability(org.apache.hadoop.hbase.client.Durability.valueOf(arg.delete(TableDescriptorBuilder::DURABILITY))) if arg.include?(TableDescriptorBuilder::DURABILITY)
       tdb.setPriority(JInteger.valueOf(arg.delete(TableDescriptorBuilder::PRIORITY))) if arg.include?(TableDescriptorBuilder::PRIORITY)
@@ -1729,6 +1784,25 @@ module Hbase
         balancer_decisions_resp_arr << balancer_dec_resp.toJsonPrettyPrint
       }
       balancer_decisions_resp_arr
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # Retrieve latest balancer rejections made by LoadBalancers
+    def get_balancer_rejections(args)
+      if args.key? 'LIMIT'
+        limit = args['LIMIT']
+      else
+        limit = 250
+      end
+
+      log_type = 'BALANCER_REJECTION'
+      log_dest = org.apache.hadoop.hbase.client.ServerType::MASTER
+      balancer_rejections_responses = @admin.getLogEntries(nil, log_type, log_dest, limit, nil)
+      balancer_rejections_resp_arr = []
+      balancer_rejections_responses.each { |balancer_dec_resp|
+        balancer_rejections_resp_arr << balancer_dec_resp.toJsonPrettyPrint
+      }
+      balancer_rejections_resp_arr
     end
 
     #----------------------------------------------------------------------------------------------

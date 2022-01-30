@@ -17,7 +17,6 @@
  */
 package org.apache.hadoop.hbase.master.snapshot;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.List;
@@ -26,11 +25,11 @@ import java.util.concurrent.CancellationException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.errorhandling.ForeignException;
 import org.apache.hadoop.hbase.errorhandling.ForeignExceptionDispatcher;
 import org.apache.hadoop.hbase.errorhandling.ForeignExceptionSnare;
@@ -49,7 +48,6 @@ import org.apache.hadoop.hbase.snapshot.SnapshotDescriptionUtils;
 import org.apache.hadoop.hbase.snapshot.SnapshotManifest;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.Pair;
-import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
@@ -139,11 +137,16 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
   }
 
   private TableDescriptor loadTableDescriptor()
-      throws FileNotFoundException, IOException {
+      throws IOException {
     TableDescriptor htd =
       this.master.getTableDescriptors().get(snapshotTable);
     if (htd == null) {
       throw new IOException("TableDescriptor missing for " + snapshotTable);
+    }
+    if (htd.getMaxFileSize()==-1 &&
+        this.snapshot.getMaxFileSize()>0) {
+      htd = TableDescriptorBuilder.newBuilder(htd).setValue(TableDescriptorBuilder.MAX_FILESIZE,
+        Long.toString(this.snapshot.getMaxFileSize())).build();
     }
     return htd;
   }
@@ -191,14 +194,8 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
       snapshotManifest.addTableDescriptor(this.htd);
       monitor.rethrowException();
 
-      List<Pair<RegionInfo, ServerName>> regionsAndLocations;
-      if (TableName.META_TABLE_NAME.equals(snapshotTable)) {
-        regionsAndLocations = MetaTableLocator.getMetaRegionsAndLocations(
-          server.getZooKeeper());
-      } else {
-        regionsAndLocations = MetaTableAccessor.getTableRegionsAndLocations(
-          server.getConnection(), snapshotTable, false);
-      }
+      List<Pair<RegionInfo, ServerName>> regionsAndLocations =
+        master.getAssignmentManager().getTableRegionsAndLocations(snapshotTable, false);
 
       // run the snapshot
       snapshotRegions(regionsAndLocations);

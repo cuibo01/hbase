@@ -26,8 +26,8 @@ import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
-import org.apache.hadoop.hbase.MiniHBaseCluster;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
+import org.apache.hadoop.hbase.SingleProcessHBaseCluster;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Connection;
@@ -35,7 +35,6 @@ import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
-import org.apache.hadoop.hbase.master.LoadBalancer;
 import org.apache.hadoop.hbase.regionserver.DefaultStoreEngine;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
@@ -68,7 +67,7 @@ public class TestFlushWithThroughputController {
       LoggerFactory.getLogger(TestFlushWithThroughputController.class);
   private static final double EPSILON = 1.3E-6;
 
-  private HBaseTestingUtility hbtu;
+  private HBaseTestingUtil hbtu;
   @Rule public TestName testName = new TestName();
   private TableName tableName;
   private final byte[] family = Bytes.toBytes("f");
@@ -76,7 +75,7 @@ public class TestFlushWithThroughputController {
 
   @Before
   public void setUp() {
-    hbtu = new HBaseTestingUtility();
+    hbtu = new HBaseTestingUtil();
     tableName = TableName.valueOf("Table-" + testName.getMethodName());
     hbtu.getConfiguration().set(
         FlushThroughputControllerFactory.HBASE_FLUSH_THROUGHPUT_CONTROLLER_KEY,
@@ -89,7 +88,7 @@ public class TestFlushWithThroughputController {
   }
 
   private HStore getStoreWithName(TableName tableName) {
-    MiniHBaseCluster cluster = hbtu.getMiniHBaseCluster();
+    SingleProcessHBaseCluster cluster = hbtu.getMiniHBaseCluster();
     List<JVMClusterUtil.RegionServerThread> rsts = cluster.getRegionServerThreads();
     for (int i = 0; i < cluster.getRegionServerThreads().size(); i++) {
       HRegionServer hrs = rsts.get(i).getRegionServer();
@@ -190,12 +189,6 @@ public class TestFlushWithThroughputController {
     // assertion here.
     assertTrue(regionServer.getFlushPressure() < pressure);
     Thread.sleep(5000);
-    boolean tablesOnMaster = LoadBalancer.isTablesOnMaster(hbtu.getConfiguration());
-    if (tablesOnMaster) {
-      // If no tables on the master, this math is off and I'm not sure what it is supposed to be
-      // when meta is on the regionserver and not on the master.
-      assertEquals(10L * 1024 * 1024, throughputController.getMaxThroughput(), EPSILON);
-    }
     Table table = conn.getTable(tableName);
     Random rand = new Random();
     for (int i = 0; i < 10; i++) {

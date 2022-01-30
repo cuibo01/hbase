@@ -88,7 +88,7 @@ public class SimpleRpcScheduler extends RpcScheduler implements ConfigurationObs
 
     if (callqReadShare > 0) {
       // at least 1 read handler and 1 write handler
-      callExecutor = new RWQueueRpcExecutor("default.RWQ", Math.max(2, handlerCount),
+      callExecutor = new FastPathRWQueueRpcExecutor("default.FPRWQ", Math.max(2, handlerCount),
         maxQueueLength, priority, conf, server);
     } else {
       if (RpcExecutor.isFifoQueueType(callQueueType) || RpcExecutor.isCodelQueueType(callQueueType)) {
@@ -154,7 +154,8 @@ public class SimpleRpcScheduler extends RpcScheduler implements ConfigurationObs
 
     String callQueueType = conf.get(RpcExecutor.CALL_QUEUE_TYPE_CONF_KEY,
       RpcExecutor.CALL_QUEUE_TYPE_CONF_DEFAULT);
-    if (RpcExecutor.isCodelQueueType(callQueueType)) {
+    if (RpcExecutor.isCodelQueueType(callQueueType) ||
+      RpcExecutor.isPluggableQueueType(callQueueType)) {
       callExecutor.onConfigurationChange(conf);
     }
   }

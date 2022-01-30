@@ -147,6 +147,11 @@ class AsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
+  public CompletableFuture<Void> modifyTableStoreFileTracker(TableName tableName, String dstSFT) {
+    return wrap(rawAdmin.modifyTableStoreFileTracker(tableName, dstSFT));
+  }
+
+  @Override
   public CompletableFuture<Void> deleteTable(TableName tableName) {
     return wrap(rawAdmin.deleteTable(tableName));
   }
@@ -196,6 +201,12 @@ class AsyncHBaseAdmin implements AsyncAdmin {
   public CompletableFuture<Void> modifyColumnFamily(TableName tableName,
       ColumnFamilyDescriptor columnFamily) {
     return wrap(rawAdmin.modifyColumnFamily(tableName, columnFamily));
+  }
+
+  @Override
+  public CompletableFuture<Void> modifyColumnFamilyStoreFileTracker(TableName tableName,
+    byte[] family, String dstSFT) {
+    return wrap(rawAdmin.modifyColumnFamilyStoreFileTracker(tableName, family, dstSFT));
   }
 
   @Override
@@ -488,14 +499,14 @@ class AsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> restoreSnapshot(String snapshotName, boolean takeFailSafeSnapshot,
-      boolean restoreAcl) {
+    boolean restoreAcl) {
     return wrap(rawAdmin.restoreSnapshot(snapshotName, takeFailSafeSnapshot, restoreAcl));
   }
 
   @Override
   public CompletableFuture<Void> cloneSnapshot(String snapshotName, TableName tableName,
-      boolean restoreAcl) {
-    return wrap(rawAdmin.cloneSnapshot(snapshotName, tableName, restoreAcl));
+      boolean restoreAcl, String customSFT) {
+    return wrap(rawAdmin.cloneSnapshot(snapshotName, tableName, restoreAcl, customSFT));
   }
 
   @Override
@@ -631,6 +642,11 @@ class AsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
+  public CompletableFuture<Void> updateConfiguration(String groupName) {
+    return wrap(rawAdmin.updateConfiguration(groupName));
+  }
+
+  @Override
   public CompletableFuture<Void> rollWALWriter(ServerName serverName) {
     return wrap(rawAdmin.rollWALWriter(serverName));
   }
@@ -689,8 +705,8 @@ class AsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
-  public CompletableFuture<Boolean> balance(boolean forcible) {
-    return wrap(rawAdmin.balance(forcible));
+  public CompletableFuture<BalanceResponse> balance(BalanceRequest request) {
+    return wrap(rawAdmin.balance(request));
   }
 
   @Override
@@ -878,8 +894,8 @@ class AsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
-  public CompletableFuture<Boolean> balanceRSGroup(String groupName) {
-    return wrap(rawAdmin.balanceRSGroup(groupName));
+  public CompletableFuture<BalanceResponse> balanceRSGroup(String groupName, BalanceRequest request) {
+    return wrap(rawAdmin.balanceRSGroup(groupName, request));
   }
 
   @Override

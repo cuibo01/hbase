@@ -29,6 +29,7 @@ import java.nio.ByteBuffer;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -46,6 +47,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.client.BalanceRequest;
 import org.apache.hadoop.hbase.ByteBufferExtendedCell;
 import org.apache.hadoop.hbase.CacheEvictionStats;
 import org.apache.hadoop.hbase.CacheEvictionStatsBuilder;
@@ -67,6 +69,8 @@ import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Append;
+import org.apache.hadoop.hbase.client.BalanceResponse;
+import org.apache.hadoop.hbase.client.BalancerRejection;
 import org.apache.hadoop.hbase.client.BalancerDecision;
 import org.apache.hadoop.hbase.client.CheckAndMutate;
 import org.apache.hadoop.hbase.client.ClientUtil;
@@ -99,6 +103,7 @@ import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.client.metrics.ScanMetrics;
 import org.apache.hadoop.hbase.client.security.SecurityCapability;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
+import org.apache.hadoop.hbase.filter.BinaryComparator;
 import org.apache.hadoop.hbase.filter.ByteArrayComparable;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.io.TimeRange;
@@ -115,6 +120,7 @@ import org.apache.hadoop.hbase.replication.ReplicationLoadSource;
 import org.apache.hadoop.hbase.rsgroup.RSGroupInfo;
 import org.apache.hadoop.hbase.security.visibility.Authorizations;
 import org.apache.hadoop.hbase.security.visibility.CellVisibility;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.RSGroupAdminProtos;
 import org.apache.hadoop.hbase.util.Addressing;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.DynamicClassLoader;
@@ -830,10 +836,7 @@ public final class ProtobufUtil {
           if (qv.hasQualifier()) {
             qualifier = qv.getQualifier().toByteArray();
           }
-          long ts = HConstants.LATEST_TIMESTAMP;
-          if (qv.hasTimestamp()) {
-            ts = qv.getTimestamp();
-          }
+          long ts = cellTimestampOrLatest(qv);
           if (deleteType == DeleteType.DELETE_ONE_VERSION) {
             delete.addColumn(family, qualifier, ts);
           } else if (deleteType == DeleteType.DELETE_MULTIPLE_VERSIONS) {
@@ -900,7 +903,7 @@ public final class ProtobufUtil {
                   .setRow(mutation.getRow())
                   .setFamily(family)
                   .setQualifier(qualifier)
-                  .setTimestamp(qv.getTimestamp())
+                  .setTimestamp(cellTimestampOrLatest(qv))
                   .setType(KeyValue.Type.Put.getCode())
                   .setValue(value)
                   .setTags(tags)
@@ -913,6 +916,14 @@ public final class ProtobufUtil {
       mutation.setAttribute(attribute.getName(), attribute.getValue().toByteArray());
     }
     return mutation;
+  }
+
+  private static long cellTimestampOrLatest(QualifierValue cell) {
+    if (cell.hasTimestamp()) {
+      return cell.getTimestamp();
+    } else {
+      return HConstants.LATEST_TIMESTAMP;
+    }
   }
 
   /**
@@ -964,6 +975,9 @@ public final class ProtobufUtil {
    */
   public static Mutation toMutation(final MutationProto proto) throws IOException {
     MutationType type = proto.getMutateType();
+    if (type == MutationType.INCREMENT) {
+      return toIncrement(proto, null);
+    }
     if (type == MutationType.APPEND) {
       return toAppend(proto, null);
     }
@@ -1019,9 +1033,6 @@ public final class ProtobufUtil {
     }
     if (scan.getMaxResultSize() > 0) {
       scanBuilder.setMaxResultSize(scan.getMaxResultSize());
-    }
-    if (scan.isSmall()) {
-      scanBuilder.setSmall(scan.isSmall());
     }
     if (scan.getAllowPartialResults()) {
       scanBuilder.setAllowPartialResults(scan.getAllowPartialResults());
@@ -1173,9 +1184,6 @@ public final class ProtobufUtil {
     if (proto.hasMaxResultSize()) {
       scan.setMaxResultSize(proto.getMaxResultSize());
     }
-    if (proto.hasSmall()) {
-      scan.setSmall(proto.getSmall());
-    }
     if (proto.hasAllowPartialResults()) {
       scan.setAllowPartialResults(proto.getAllowPartialResults());
     }
@@ -1206,9 +1214,7 @@ public final class ProtobufUtil {
     if (proto.hasMvccReadPoint()) {
       PackagePrivateFieldAccessor.setMvccReadPoint(scan, proto.getMvccReadPoint());
     }
-    if (scan.isSmall()) {
-      scan.setReadType(Scan.ReadType.PREAD);
-    } else if (proto.hasReadType()) {
+    if (proto.hasReadType()) {
       scan.setReadType(toReadType(proto.getReadType()));
     }
     if (proto.getNeedCursorResult()) {
@@ -2835,10 +2841,12 @@ public final class ProtobufUtil {
 
   public static ReplicationLoadSink toReplicationLoadSink(
       ClusterStatusProtos.ReplicationLoadSink rls) {
-    return new ReplicationLoadSink(rls.getAgeOfLastAppliedOp(),
-        rls.getTimeStampsOfLastAppliedOp(),
-        rls.hasTimestampStarted()? rls.getTimestampStarted(): -1L,
-        rls.hasTotalOpsProcessed()? rls.getTotalOpsProcessed(): -1L);
+    ReplicationLoadSink.ReplicationLoadSinkBuilder builder = ReplicationLoadSink.newBuilder();
+    builder.setAgeOfLastAppliedOp(rls.getAgeOfLastAppliedOp()).
+      setTimestampsOfLastAppliedOp(rls.getTimeStampsOfLastAppliedOp()).
+      setTimestampStarted(rls.hasTimestampStarted()? rls.getTimestampStarted(): -1L).
+      setTotalOpsProcessed(rls.hasTotalOpsProcessed()? rls.getTotalOpsProcessed(): -1L);
+    return builder.build();
   }
 
   public static ReplicationLoadSource toReplicationLoadSource(
@@ -3092,6 +3100,9 @@ public final class ProtobufUtil {
     if (snapshotDesc.getVersion() != -1) {
       builder.setVersion(snapshotDesc.getVersion());
     }
+    if (snapshotDesc.getMaxFileSize() != -1) {
+      builder.setMaxFileSize(snapshotDesc.getMaxFileSize());
+    }
     builder.setType(ProtobufUtil.createProtosSnapShotDescType(snapshotDesc.getType()));
     return builder.build();
   }
@@ -3107,6 +3118,7 @@ public final class ProtobufUtil {
       createSnapshotDesc(SnapshotProtos.SnapshotDescription snapshotDesc) {
     final Map<String, Object> snapshotProps = new HashMap<>();
     snapshotProps.put("TTL", snapshotDesc.getTtl());
+    snapshotProps.put(TableDescriptorBuilder.MAX_FILESIZE, snapshotDesc.getMaxFileSize());
     return new SnapshotDescription(snapshotDesc.getName(),
             snapshotDesc.hasTable() ? TableName.valueOf(snapshotDesc.getTable()) : null,
             createSnapshotType(snapshotDesc.getType()), snapshotDesc.getOwner(),
@@ -3605,14 +3617,48 @@ public final class ProtobufUtil {
     return clearSlowLogResponses.getIsCleaned();
   }
 
+  public static void populateBalanceRSGroupResponse(RSGroupAdminProtos.BalanceRSGroupResponse.Builder responseBuilder, BalanceResponse response) {
+    responseBuilder
+      .setBalanceRan(response.isBalancerRan())
+      .setMovesCalculated(response.getMovesCalculated())
+      .setMovesExecuted(response.getMovesExecuted());
+  }
+
+  public static BalanceResponse toBalanceResponse(RSGroupAdminProtos.BalanceRSGroupResponse response) {
+    return BalanceResponse.newBuilder()
+      .setBalancerRan(response.getBalanceRan())
+      .setMovesExecuted(response.hasMovesExecuted() ? response.getMovesExecuted() : 0)
+      .setMovesCalculated(response.hasMovesCalculated() ? response.getMovesCalculated() : 0)
+      .build();
+  }
+
+  public static RSGroupAdminProtos.BalanceRSGroupRequest createBalanceRSGroupRequest(String groupName, BalanceRequest request) {
+    return RSGroupAdminProtos.BalanceRSGroupRequest.newBuilder()
+      .setRSGroupName(groupName)
+      .setDryRun(request.isDryRun())
+      .setIgnoreRit(request.isIgnoreRegionsInTransition())
+      .build();
+  }
+
+  public static BalanceRequest toBalanceRequest(RSGroupAdminProtos.BalanceRSGroupRequest request) {
+    return BalanceRequest.newBuilder()
+      .setDryRun(request.hasDryRun() && request.getDryRun())
+      .setIgnoreRegionsInTransition(request.hasIgnoreRit() && request.getIgnoreRit())
+      .build();
+  }
+
   public static RSGroupInfo toGroupInfo(RSGroupProtos.RSGroupInfo proto) {
     RSGroupInfo rsGroupInfo = new RSGroupInfo(proto.getName());
-    for (HBaseProtos.ServerName el : proto.getServersList()) {
-      rsGroupInfo.addServer(Address.fromParts(el.getHostName(), el.getPort()));
-    }
-    for (HBaseProtos.TableName pTableName : proto.getTablesList()) {
-      rsGroupInfo.addTable(ProtobufUtil.toTableName(pTableName));
-    }
+
+    Collection<Address> addresses = proto.getServersList().parallelStream()
+      .map(serverName -> Address.fromParts(serverName.getHostName(), serverName.getPort()))
+      .collect(Collectors.toList());
+    rsGroupInfo.addAllServers(addresses);
+
+    Collection<TableName> tables = proto.getTablesList().parallelStream()
+      .map(ProtobufUtil::toTableName).collect(Collectors.toList());
+    rsGroupInfo.addAllTables(tables);
+
     proto.getConfigurationList().forEach(pair ->
         rsGroupInfo.setConfiguration(pair.getName(), pair.getValue()));
     return rsGroupInfo;
@@ -3713,6 +3759,37 @@ public final class ProtobufUtil {
     }
   }
 
+  public static ClientProtos.Condition toCondition(final byte[] row, final byte[] family,
+    final byte[] qualifier, final CompareOperator op, final byte[] value, final Filter filter,
+    final TimeRange timeRange) throws IOException {
+
+    ClientProtos.Condition.Builder builder = ClientProtos.Condition.newBuilder()
+      .setRow(UnsafeByteOperations.unsafeWrap(row));
+
+    if (filter != null) {
+      builder.setFilter(ProtobufUtil.toFilter(filter));
+    } else {
+      builder.setFamily(UnsafeByteOperations.unsafeWrap(family))
+        .setQualifier(UnsafeByteOperations.unsafeWrap(
+          qualifier == null ? HConstants.EMPTY_BYTE_ARRAY : qualifier))
+        .setComparator(ProtobufUtil.toComparator(new BinaryComparator(value)))
+        .setCompareType(HBaseProtos.CompareType.valueOf(op.name()));
+    }
+
+    return builder.setTimeRange(ProtobufUtil.toTimeRange(timeRange)).build();
+  }
+
+  public static ClientProtos.Condition toCondition(final byte[] row, final Filter filter,
+    final TimeRange timeRange) throws IOException {
+    return toCondition(row, null, null, null, null, filter, timeRange);
+  }
+
+  public static ClientProtos.Condition toCondition(final byte[] row, final byte[] family,
+    final byte[] qualifier, final CompareOperator op, final byte[] value,
+    final TimeRange timeRange) throws IOException {
+    return toCondition(row, family, qualifier, op, value, null, timeRange);
+  }
+
   public static List<LogEntry> toBalancerDecisionResponse(
       HBaseProtos.LogEntry logEntry) {
     try {
@@ -3724,6 +3801,25 @@ public final class ProtobufUtil {
           (MasterProtos.BalancerDecisionsResponse) method
             .invoke(null, logEntry.getLogMessage());
         return getBalancerDecisionEntries(response);
+      }
+    } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException
+      | InvocationTargetException e) {
+      throw new RuntimeException("Error while retrieving response from server");
+    }
+    throw new RuntimeException("Invalid response from server");
+  }
+
+  public static List<LogEntry> toBalancerRejectionResponse(
+    HBaseProtos.LogEntry logEntry) {
+    try {
+      final String logClassName = logEntry.getLogClassName();
+      Class<?> logClass = Class.forName(logClassName).asSubclass(Message.class);
+      Method method = logClass.getMethod("parseFrom", ByteString.class);
+      if (logClassName.contains("BalancerRejectionsResponse")) {
+        MasterProtos.BalancerRejectionsResponse response =
+          (MasterProtos.BalancerRejectionsResponse) method
+            .invoke(null, logEntry.getLogMessage());
+        return getBalancerRejectionEntries(response);
       }
     } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException
       | InvocationTargetException e) {
@@ -3748,12 +3844,64 @@ public final class ProtobufUtil {
       .collect(Collectors.toList());
   }
 
+  public static List<LogEntry> getBalancerRejectionEntries(
+    MasterProtos.BalancerRejectionsResponse response) {
+    List<RecentLogs.BalancerRejection> balancerRejections = response.getBalancerRejectionList();
+    if (CollectionUtils.isEmpty(balancerRejections)) {
+      return Collections.emptyList();
+    }
+    return balancerRejections.stream().map(balancerRejection -> new BalancerRejection.Builder()
+      .setReason(balancerRejection.getReason())
+      .setCostFuncInfoList(balancerRejection.getCostFuncInfoList())
+      .build())
+      .collect(Collectors.toList());
+  }
+
   public static HBaseProtos.LogRequest toBalancerDecisionRequest(int limit) {
     MasterProtos.BalancerDecisionsRequest balancerDecisionsRequest =
       MasterProtos.BalancerDecisionsRequest.newBuilder().setLimit(limit).build();
     return HBaseProtos.LogRequest.newBuilder()
       .setLogClassName(balancerDecisionsRequest.getClass().getName())
       .setLogMessage(balancerDecisionsRequest.toByteString())
+      .build();
+  }
+
+  public static HBaseProtos.LogRequest toBalancerRejectionRequest(int limit) {
+    MasterProtos.BalancerRejectionsRequest balancerRejectionsRequest =
+      MasterProtos.BalancerRejectionsRequest.newBuilder().setLimit(limit).build();
+    return HBaseProtos.LogRequest.newBuilder()
+      .setLogClassName(balancerRejectionsRequest.getClass().getName())
+      .setLogMessage(balancerRejectionsRequest.toByteString())
+      .build();
+  }
+
+  public static MasterProtos.BalanceRequest toBalanceRequest(BalanceRequest request) {
+    return MasterProtos.BalanceRequest.newBuilder()
+      .setDryRun(request.isDryRun())
+      .setIgnoreRit(request.isIgnoreRegionsInTransition())
+      .build();
+  }
+
+  public static BalanceRequest toBalanceRequest(MasterProtos.BalanceRequest request) {
+    return BalanceRequest.newBuilder()
+      .setDryRun(request.hasDryRun() && request.getDryRun())
+      .setIgnoreRegionsInTransition(request.hasIgnoreRit() && request.getIgnoreRit())
+      .build();
+  }
+
+  public static MasterProtos.BalanceResponse toBalanceResponse(BalanceResponse response) {
+    return MasterProtos.BalanceResponse.newBuilder()
+      .setBalancerRan(response.isBalancerRan())
+      .setMovesCalculated(response.getMovesCalculated())
+      .setMovesExecuted(response.getMovesExecuted())
+      .build();
+  }
+
+  public static BalanceResponse toBalanceResponse(MasterProtos.BalanceResponse response) {
+    return BalanceResponse.newBuilder()
+      .setBalancerRan(response.hasBalancerRan() && response.getBalancerRan())
+      .setMovesCalculated(response.hasMovesCalculated() ? response.getMovesExecuted() : 0)
+      .setMovesExecuted(response.hasMovesExecuted() ? response.getMovesExecuted() : 0)
       .build();
   }
 

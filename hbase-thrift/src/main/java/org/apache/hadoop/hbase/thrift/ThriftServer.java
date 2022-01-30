@@ -71,6 +71,8 @@ import static org.apache.hadoop.hbase.thrift.Constants.THRIFT_SSL_INCLUDE_PROTOC
 import static org.apache.hadoop.hbase.thrift.Constants.THRIFT_SSL_KEYSTORE_KEYPASSWORD_KEY;
 import static org.apache.hadoop.hbase.thrift.Constants.THRIFT_SSL_KEYSTORE_PASSWORD_KEY;
 import static org.apache.hadoop.hbase.thrift.Constants.THRIFT_SSL_KEYSTORE_STORE_KEY;
+import static org.apache.hadoop.hbase.thrift.Constants.THRIFT_SSL_KEYSTORE_TYPE_DEFAULT;
+import static org.apache.hadoop.hbase.thrift.Constants.THRIFT_SSL_KEYSTORE_TYPE_KEY;
 import static org.apache.hadoop.hbase.thrift.Constants.THRIFT_SUPPORT_PROXYUSER_KEY;
 import static org.apache.hadoop.hbase.thrift.Constants.USE_HTTP_CONF_KEY;
 
@@ -78,6 +80,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
+import java.security.PrivilegedAction;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -97,11 +100,13 @@ import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.filter.ParseFilter;
 import org.apache.hadoop.hbase.http.HttpServerUtil;
 import org.apache.hadoop.hbase.http.InfoServer;
+import org.apache.hadoop.hbase.log.HBaseMarkers;
 import org.apache.hadoop.hbase.security.SaslUtil;
 import org.apache.hadoop.hbase.security.SecurityUtil;
 import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.thrift.generated.Hbase;
 import org.apache.hadoop.hbase.util.DNS;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.JvmPauseMonitor;
 import org.apache.hadoop.hbase.util.Strings;
 import org.apache.hadoop.hbase.util.VersionInfo;
@@ -120,13 +125,13 @@ import org.apache.thrift.server.TNonblockingServer;
 import org.apache.thrift.server.TServer;
 import org.apache.thrift.server.TServlet;
 import org.apache.thrift.server.TThreadedSelectorServer;
-import org.apache.thrift.transport.TFramedTransport;
 import org.apache.thrift.transport.TNonblockingServerSocket;
 import org.apache.thrift.transport.TNonblockingServerTransport;
 import org.apache.thrift.transport.TSaslServerTransport;
 import org.apache.thrift.transport.TServerSocket;
 import org.apache.thrift.transport.TServerTransport;
 import org.apache.thrift.transport.TTransportFactory;
+import org.apache.thrift.transport.layered.TFramedTransport;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -297,7 +302,7 @@ public class ThriftServer  extends Configured implements Tool {
     int port = conf.getInt(THRIFT_INFO_SERVER_PORT , THRIFT_INFO_SERVER_PORT_DEFAULT);
 
     if (port >= 0) {
-      conf.setLong("startcode", System.currentTimeMillis());
+      conf.setLong("startcode", EnvironmentEdgeManager.currentTime());
       String a = conf
           .get(THRIFT_INFO_SERVER_BINDING_ADDRESS, THRIFT_INFO_SERVER_BINDING_ADDRESS_DEFAULT);
       infoServer = new InfoServer("thrift", a, port, false, conf);
@@ -422,6 +427,8 @@ public class ThriftServer  extends Configured implements Tool {
       sslCtxFactory.setKeyStorePath(keystore);
       sslCtxFactory.setKeyStorePassword(password);
       sslCtxFactory.setKeyManagerPassword(keyPassword);
+      sslCtxFactory.setKeyStoreType(conf.get(
+        THRIFT_SSL_KEYSTORE_TYPE_KEY, THRIFT_SSL_KEYSTORE_TYPE_DEFAULT));
 
       String[] excludeCiphers = conf.getStrings(
           THRIFT_SSL_EXCLUDE_CIPHER_SUITES_KEY, ArrayUtils.EMPTY_STRING_ARRAY);
@@ -481,7 +488,7 @@ public class ThriftServer  extends Configured implements Tool {
             + " doesn't work with framed transport yet");
       }
       transportFactory = new TFramedTransport.Factory(
-          conf.getInt(MAX_FRAME_SIZE_CONF_KEY, MAX_FRAME_SIZE_CONF_DEFAULT) * 1024 * 1024);
+        conf.getInt(MAX_FRAME_SIZE_CONF_KEY, MAX_FRAME_SIZE_CONF_DEFAULT) * 1024 * 1024);
       LOG.debug("Using framed transport");
     } else if (qop == null) {
       transportFactory = new TTransportFactory();
@@ -844,15 +851,30 @@ public class ThriftServer  extends Configured implements Tool {
   public int run(String[] strings) throws Exception {
     processOptions(strings);
     setupParamters();
-    startInfoServer();
     if (httpEnabled) {
       setupHTTPServer();
-      httpServer.start();
-      httpServer.join();
     } else {
       setupServer();
-      tserver.serve();
     }
+    serviceUGI.doAs(new PrivilegedAction<Object>() {
+      @Override
+      public Object run() {
+        try {
+          startInfoServer();
+          if (httpEnabled) {
+            httpServer.start();
+            httpServer.join();
+          } else {
+            tserver.serve();
+          }
+        } catch (Exception e) {
+          LOG.error(HBaseMarkers.FATAL, "Cannot run ThriftServer", e);
+
+          System.exit(-1);
+        }
+        return null;
+      }
+    });
     return 0;
   }
 

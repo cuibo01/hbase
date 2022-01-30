@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hbase.ipc;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
@@ -31,8 +33,10 @@ import org.apache.hadoop.hbase.io.ByteBuffAllocator;
 import org.apache.hadoop.hbase.io.ByteBufferListOutputStream;
 import org.apache.hadoop.hbase.ipc.RpcServer.CallCleanup;
 import org.apache.hadoop.hbase.security.User;
+import org.apache.hadoop.hbase.trace.TraceUtil;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.yetus.audience.InterfaceAudience;
 
@@ -93,11 +97,15 @@ public abstract class ServerCall<T extends ServerRpcConnection> implements RpcCa
   private long exceptionSize = 0;
   private final boolean retryImmediatelySupported;
 
-  // This is a dirty hack to address HBASE-22539. The lowest bit is for normal rpc cleanup, and the
-  // second bit is for WAL reference. We can only call release if both of them are zero. The reason
-  // why we can not use a general reference counting is that, we may call cleanup multiple times in
-  // the current implementation. We should fix this in the future.
-  private final AtomicInteger reference = new AtomicInteger(0b01);
+  // This is a dirty hack to address HBASE-22539. The highest bit is for rpc ref and cleanup, and
+  // the rest of the bits are for WAL reference count. We can only call release if all of them are
+  // zero. The reason why we can not use a general reference counting is that, we may call cleanup
+  // multiple times in the current implementation. We should fix this in the future.
+  // The refCount here will start as 0x80000000 and increment with every WAL reference and decrement
+  // from WAL side on release
+  private final AtomicInteger reference = new AtomicInteger(0x80000000);
+
+  private final Span span;
 
   @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "NP_NULL_ON_SOME_PATH",
       justification = "Can't figure why this complaint is happening... see below")
@@ -129,6 +137,7 @@ public abstract class ServerCall<T extends ServerRpcConnection> implements RpcCa
     this.bbAllocator = byteBuffAllocator;
     this.cellBlockBuilder = cellBlockBuilder;
     this.reqCleanup = reqCleanup;
+    this.span = Span.current();
   }
 
   /**
@@ -147,15 +156,17 @@ public abstract class ServerCall<T extends ServerRpcConnection> implements RpcCa
     // If the call was run successfuly, we might have already returned the BB
     // back to pool. No worries..Then inputCellBlock will be null
     cleanup();
+    span.end();
   }
 
-  private void release(int mask) {
+  @Override
+  public void cleanup() {
     for (;;) {
       int ref = reference.get();
-      if ((ref & mask) == 0) {
+      if ((ref & 0x80000000) == 0) {
         return;
       }
-      int nextRef = ref & (~mask);
+      int nextRef = ref & 0x7fffffff;
       if (reference.compareAndSet(ref, nextRef)) {
         if (nextRef == 0) {
           if (this.reqCleanup != null) {
@@ -167,23 +178,20 @@ public abstract class ServerCall<T extends ServerRpcConnection> implements RpcCa
     }
   }
 
-  @Override
-  public void cleanup() {
-    release(0b01);
-  }
-
   public void retainByWAL() {
-    for (;;) {
-      int ref = reference.get();
-      int nextRef = ref | 0b10;
-      if (reference.compareAndSet(ref, nextRef)) {
-        return;
-      }
-    }
+    reference.incrementAndGet();
   }
 
   public void releaseByWAL() {
-    release(0b10);
+    // Here this method of decrementAndGet for releasing WAL reference count will work in both
+    // cases - i.e. highest bit (cleanup) 1 or 0. We will be decrementing a negative or positive
+    // value respectively in these 2 cases, but the logic will work the same way
+    if (reference.decrementAndGet() == 0) {
+      if (this.reqCleanup != null) {
+        this.reqCleanup.run();
+      }
+    }
+
   }
 
   @Override
@@ -226,6 +234,9 @@ public abstract class ServerCall<T extends ServerRpcConnection> implements RpcCa
     }
     if (t != null) {
       this.isError = true;
+      TraceUtil.setError(span, t);
+    } else {
+      span.setStatus(StatusCode.OK);
     }
     BufferChain bc = null;
     try {
@@ -281,9 +292,6 @@ public abstract class ServerCall<T extends ServerRpcConnection> implements RpcCa
         }
       }
       bc = new BufferChain(responseBufs);
-      if (connection.useWrap) {
-        bc = wrapWithSasl(bc);
-      }
     } catch (IOException e) {
       RpcServer.LOG.warn("Exception while creating response " + e);
     }
@@ -425,7 +433,7 @@ public abstract class ServerCall<T extends ServerRpcConnection> implements RpcCa
   @Override
   public long disconnectSince() {
     if (!this.connection.isConnectionOpen()) {
-      return System.currentTimeMillis() - receiveTime;
+      return EnvironmentEdgeManager.currentTime() - receiveTime;
     } else {
       return -1L;
     }
@@ -547,6 +555,24 @@ public abstract class ServerCall<T extends ServerRpcConnection> implements RpcCa
 
   @Override
   public synchronized BufferChain getResponse() {
-    return response;
+    if (connection.useWrap) {
+      /*
+       * wrapping result with SASL as the last step just before sending it out, so
+       * every message must have the right increasing sequence number
+       */
+      try {
+        return wrapWithSasl(response);
+      } catch (IOException e) {
+        /* it is exactly the same what setResponse() does */
+        RpcServer.LOG.warn("Exception while creating response " + e);
+        return null;
+      }
+    } else {
+      return response;
+    }
+  }
+
+  public Span getSpan() {
+    return span;
   }
 }

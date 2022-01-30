@@ -17,7 +17,8 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import static org.apache.hadoop.hbase.HBaseTestingUtility.countRows;
+import static org.apache.hadoop.hbase.HBaseTestingUtil.countRows;
+import static org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerFactory.TRACKER_IMPL;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -39,7 +40,7 @@ import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableExistsException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
-import org.apache.hadoop.hbase.master.LoadBalancer;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerFactory;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -368,19 +369,11 @@ public class TestAdmin extends TestAdminBase {
       }
       regs.add(loc.getRegion());
     }
-    boolean tablesOnMaster = LoadBalancer.isTablesOnMaster(TEST_UTIL.getConfiguration());
-    if (tablesOnMaster) {
-      // Ignore the master region server,
-      // which contains less regions by intention.
-      numRS--;
-    }
     float average = (float) expectedRegions / numRS;
     int min = (int) Math.floor(average);
     int max = (int) Math.ceil(average);
     for (List<RegionInfo> regionList : server2Regions.values()) {
-      assertTrue(
-        "numRS=" + numRS + ", min=" + min + ", max=" + max + ", size=" + regionList.size() +
-          ", tablesOnMaster=" + tablesOnMaster,
+      assertTrue("numRS=" + numRS + ", min=" + min + ", max=" + max + ", size=" + regionList.size(),
         regionList.size() == min || regionList.size() == max);
     }
   }
@@ -432,6 +425,10 @@ public class TestAdmin extends TestAdminBase {
     assertEquals(BLOCK_SIZE, newTableDesc.getColumnFamily(FAMILY_1).getBlocksize());
     assertEquals(BLOCK_CACHE, newTableDesc.getColumnFamily(FAMILY_1).isBlockCacheEnabled());
     assertEquals(TTL, newTableDesc.getColumnFamily(FAMILY_1).getTimeToLive());
+    // HBASE-26246 introduced persist of store file tracker into table descriptor
+    tableDesc = TableDescriptorBuilder.newBuilder(tableDesc).setValue(TRACKER_IMPL,
+      StoreFileTrackerFactory.getStoreFileTrackerName(TEST_UTIL.getConfiguration())).
+      build();
     TEST_UTIL.verifyTableDescriptorIgnoreTableName(tableDesc, newTableDesc);
 
     if (preserveSplits) {

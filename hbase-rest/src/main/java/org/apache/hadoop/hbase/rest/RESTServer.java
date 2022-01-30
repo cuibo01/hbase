@@ -18,7 +18,6 @@
 
 package org.apache.hadoop.hbase.rest;
 
-import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -41,6 +40,7 @@ import org.apache.hadoop.hbase.rest.filter.GzipFilter;
 import org.apache.hadoop.hbase.rest.filter.RestCsrfPreventionFilter;
 import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.util.DNS;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.ReflectionUtils;
 import org.apache.hadoop.hbase.util.Strings;
@@ -49,6 +49,7 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
 import org.apache.hbase.thirdparty.org.apache.commons.cli.CommandLine;
 import org.apache.hbase.thirdparty.org.apache.commons.cli.HelpFormatter;
@@ -395,7 +396,7 @@ public class RESTServer implements Constants {
     // Put up info server.
     int port = conf.getInt("hbase.rest.info.port", 8085);
     if (port >= 0) {
-      conf.setLong("startcode", System.currentTimeMillis());
+      conf.setLong("startcode", EnvironmentEdgeManager.currentTime());
       String a = conf.get("hbase.rest.info.bindAddress", "0.0.0.0");
       this.infoServer = new InfoServer("rest", a, port, false, conf);
       this.infoServer.setAttribute("hbase.conf", conf);

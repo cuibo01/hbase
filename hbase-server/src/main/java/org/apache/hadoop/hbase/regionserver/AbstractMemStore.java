@@ -70,7 +70,9 @@ public abstract class AbstractMemStore implements MemStore {
 
   protected static void addToScanners(Segment segment, long readPt,
       List<KeyValueScanner> scanners) {
-    scanners.add(segment.getScanner(readPt));
+    if (!segment.isEmpty()) {
+      scanners.add(segment.getScanner(readPt));
+    }
   }
 
   protected AbstractMemStore(final Configuration conf, final CellComparator c,
@@ -156,7 +158,7 @@ public abstract class AbstractMemStore implements MemStore {
     }
   }
 
-  private void doAdd(MutableSegment currentActive, Cell cell, MemStoreSizing memstoreSizing) {
+  protected void doAdd(MutableSegment currentActive, Cell cell, MemStoreSizing memstoreSizing) {
     Cell toAdd = maybeCloneWithAllocator(currentActive, cell, false);
     boolean mslabUsed = (toAdd != cell);
     // This cell data is backed by the same byte[] where we read request in RPC(See
@@ -230,6 +232,8 @@ public abstract class AbstractMemStore implements MemStore {
   }
 
   /**
+   * This method is protected under {@link HStore#lock} write lock,<br/>
+   * and this method is used by {@link HStore#updateStorefiles} after flushing is completed.<br/>
    * The passed snapshot was successfully persisted; it can be let go.
    * @param id Id of the snapshot to clean out.
    * @see MemStore#snapshot()
@@ -243,6 +247,10 @@ public abstract class AbstractMemStore implements MemStore {
     }
     // OK. Passed in snapshot is same as current snapshot. If not-empty,
     // create a new snapshot and let the old one go.
+    doClearSnapShot();
+  }
+
+  protected void doClearSnapShot() {
     Segment oldSnapshot = this.snapshot;
     if (!this.snapshot.isEmpty()) {
       this.snapshot = SegmentFactory.instance().createImmutableSegment(this.comparator);

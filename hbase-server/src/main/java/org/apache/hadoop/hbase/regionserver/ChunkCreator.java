@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
+
 import org.apache.hadoop.hbase.regionserver.HeapMemoryManager.HeapMemoryTuneObserver;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.util.StringUtils;
@@ -77,6 +78,7 @@ public class ChunkCreator {
   static boolean chunkPoolDisabled = false;
   private MemStoreChunkPool dataChunksPool;
   private final int chunkSize;
+  private int indexChunkSize;
   private MemStoreChunkPool indexChunksPool;
 
   ChunkCreator(int chunkSize, boolean offheap, long globalMemStoreSize, float poolSizePercentage,
@@ -94,13 +96,14 @@ public class ChunkCreator {
                                HeapMemoryManager heapMemoryManager) {
     this.dataChunksPool = initializePool("data", globalMemStoreSize,
             (1 - indexChunkSizePercentage) * poolSizePercentage,
-            initialCountPercentage, chunkSize, heapMemoryManager);
+      initialCountPercentage, chunkSize, ChunkType.DATA_CHUNK, heapMemoryManager);
     // The index chunks pool is needed only when the index type is CCM.
     // Since the pools are not created at all when the index type isn't CCM,
     // we don't need to check it here.
+    this.indexChunkSize = (int) (indexChunkSizePercentage * chunkSize);
     this.indexChunksPool = initializePool("index", globalMemStoreSize,
             indexChunkSizePercentage * poolSizePercentage,
-            initialCountPercentage, (int) (indexChunkSizePercentage * chunkSize),
+      initialCountPercentage, this.indexChunkSize, ChunkType.INDEX_CHUNK,
             heapMemoryManager);
   }
 
@@ -132,45 +135,36 @@ public class ChunkCreator {
     return instance;
   }
 
-  /**
-   * Creates and inits a chunk. The default implementation for a specific chunk size.
-   * @return the chunk that was initialized
-   */
-  Chunk getChunk(ChunkType chunkType) {
-    return getChunk(CompactingMemStore.IndexType.ARRAY_MAP, chunkType);
-  }
 
   /**
-   * Creates and inits a chunk. The default implementation.
+   * Creates and inits a data chunk. The default implementation.
    * @return the chunk that was initialized
    */
   Chunk getChunk() {
-    return getChunk(CompactingMemStore.IndexType.ARRAY_MAP, ChunkType.DATA_CHUNK);
+    return getChunk(ChunkType.DATA_CHUNK);
   }
 
   /**
-   * Creates and inits a chunk. The default implementation for a specific index type.
+   * Creates and inits a chunk with specific type.
    * @return the chunk that was initialized
    */
-  Chunk getChunk(CompactingMemStore.IndexType chunkIndexType) {
-    return getChunk(chunkIndexType, ChunkType.DATA_CHUNK);
-  }
-
-  /**
-   * Creates and inits a chunk with specific index type and type.
-   * @return the chunk that was initialized
-   */
-  Chunk getChunk(CompactingMemStore.IndexType chunkIndexType, ChunkType chunkType) {
+  Chunk getChunk(ChunkType chunkType) {
     switch (chunkType) {
       case INDEX_CHUNK:
-        if (indexChunksPool != null) {
-          return getChunk(chunkIndexType, indexChunksPool.getChunkSize());
+        if (indexChunksPool == null) {
+          if (indexChunkSize <= 0) {
+            throw new IllegalArgumentException(
+                "chunkType is INDEX_CHUNK but indexChunkSize is:[" + this.indexChunkSize + "]");
+          }
+          return getChunk(chunkType, indexChunkSize);
+        } else {
+          return getChunk(chunkType, indexChunksPool.getChunkSize());
         }
       case DATA_CHUNK:
         if (dataChunksPool == null) {
-          return getChunk(chunkIndexType, chunkSize);
+          return getChunk(chunkType, chunkSize);
         } else {
-          return getChunk(chunkIndexType, dataChunksPool.getChunkSize());
+          return getChunk(chunkType, dataChunksPool.getChunkSize());
         }
       default:
         throw new IllegalArgumentException(
@@ -181,17 +175,16 @@ public class ChunkCreator {
   /**
    * Creates and inits a chunk.
    * @return the chunk that was initialized
-   * @param chunkIndexType whether the requested chunk is going to be used with CellChunkMap index
    * @param size the size of the chunk to be allocated, in bytes
    */
-  Chunk getChunk(CompactingMemStore.IndexType chunkIndexType, int size) {
+  Chunk getChunk(ChunkType chunkType, int size) {
     Chunk chunk = null;
     MemStoreChunkPool pool = null;
 
-    // if the size is suitable for one of the pools
-    if (dataChunksPool != null && size == dataChunksPool.getChunkSize()) {
+    // if it is one of the pools
+    if (dataChunksPool != null && chunkType == ChunkType.DATA_CHUNK) {
       pool = dataChunksPool;
-    } else if (indexChunksPool != null && size == indexChunksPool.getChunkSize()) {
+    } else if (indexChunksPool != null && chunkType == ChunkType.INDEX_CHUNK) {
       pool = indexChunksPool;
     }
 
@@ -209,9 +202,7 @@ public class ChunkCreator {
     }
 
     if (chunk == null) {
-      // the second parameter explains whether CellChunkMap index is requested,
-      // in that case, put allocated on demand chunk mapping into chunkIdMap
-      chunk = createChunk(false, chunkIndexType, size);
+      chunk = createChunk(false, chunkType, size);
     }
 
     // now we need to actually do the expensive memory allocation step in case of a new chunk,
@@ -228,48 +219,67 @@ public class ChunkCreator {
    */
   Chunk getJumboChunk(int jumboSize) {
     int allocSize = jumboSize + SIZEOF_CHUNK_HEADER;
-    if (allocSize <= dataChunksPool.getChunkSize()) {
+
+    if (allocSize <= this.getChunkSize(ChunkType.DATA_CHUNK)) {
       LOG.warn("Jumbo chunk size " + jumboSize + " must be more than regular chunk size "
-              + dataChunksPool.getChunkSize() + ". Converting to regular chunk.");
-      return getChunk(CompactingMemStore.IndexType.CHUNK_MAP);
+          + this.getChunkSize(ChunkType.DATA_CHUNK) + ". Converting to regular chunk.");
+      return getChunk();
     }
     // the new chunk is going to hold the jumbo cell data and needs to be referenced by
-    // a strong map. Therefore the CCM index type
-    return getChunk(CompactingMemStore.IndexType.CHUNK_MAP, allocSize);
+    // a strong map.
+    return getChunk(ChunkType.JUMBO_CHUNK, allocSize);
   }
 
   /**
    * Creates the chunk either onheap or offheap
    * @param pool indicates if the chunks have to be created which will be used by the Pool
-   * @param chunkIndexType whether the requested chunk is going to be used with CellChunkMap index
+   * @param chunkType whether the requested chunk is data chunk or index chunk.
    * @param size the size of the chunk to be allocated, in bytes
    * @return the chunk
    */
-  private Chunk createChunk(boolean pool, CompactingMemStore.IndexType chunkIndexType, int size) {
+  private Chunk createChunk(boolean pool, ChunkType chunkType, int size) {
     Chunk chunk = null;
     int id = chunkID.getAndIncrement();
     assert id > 0;
     // do not create offheap chunk on demand
     if (pool && this.offheap) {
-      chunk = new OffheapChunk(size, id, pool);
+      chunk = new OffheapChunk(size, id, chunkType, pool);
     } else {
-      chunk = new OnheapChunk(size, id, pool);
+      chunk = new OnheapChunk(size, id, chunkType, pool);
     }
-    if (pool || (chunkIndexType == CompactingMemStore.IndexType.CHUNK_MAP)) {
-      // put the pool chunk into the chunkIdMap so it is not GC-ed
-      this.chunkIdMap.put(chunk.getId(), chunk);
-    }
+
+    /**
+     * Here we always put the chunk into the {@link ChunkCreator#chunkIdMap} no matter whether the
+     * chunk is pooled or not. <br/>
+     * For {@link CompactingMemStore},because the chunk could only be acquired from
+     * {@link ChunkCreator} through {@link MemStoreLABImpl}, and
+     * {@link CompactingMemStore#indexType} could only be {@link IndexType.CHUNK_MAP} when using
+     * {@link MemStoreLABImpl}, so we must put chunk into this {@link ChunkCreator#chunkIdMap} to
+     * make sure the chunk could be got by chunkId.
+     * <p>
+     * For {@link DefaultMemStore},it is also reasonable to put the chunk in
+     * {@link ChunkCreator#chunkIdMap} because: <br/>
+     * 1.When the {@link MemStoreLAB} which created the chunk is not closed, this chunk is used by
+     * the {@link Segment} which references this {@link MemStoreLAB}, so this chunk certainly should
+     * not be GC-ed, putting the chunk in {@link ChunkCreator#chunkIdMap} does not prevent useless
+     * chunk to be GC-ed. <br/>
+     * 2.When the {@link MemStoreLAB} which created the chunk is closed, and if the chunk is not
+     * pooled, {@link ChunkCreator#removeChunk} is invoked to remove the chunk from this
+     * {@link ChunkCreator#chunkIdMap}, so there is no memory leak.
+     */
+    this.chunkIdMap.put(chunk.getId(), chunk);
+
     return chunk;
   }
 
-  // Chunks from pool are created covered with strong references anyway
-  // TODO: change to CHUNK_MAP if it is generally defined
-  private Chunk createChunkForPool(CompactingMemStore.IndexType chunkIndexType, int chunkSize) {
+  // Chunks from pool are created covered with strong references anyway.
+  private Chunk createChunkForPool(ChunkType chunkType,
+      int chunkSize) {
     if (chunkSize != dataChunksPool.getChunkSize() &&
             chunkSize != indexChunksPool.getChunkSize()) {
       return null;
     }
-    return createChunk(true, chunkIndexType, chunkSize);
+    return createChunk(true, chunkType, chunkSize);
   }
 
   // Used to translate the ChunkID into a chunk ref
@@ -309,6 +319,7 @@ public class ChunkCreator {
    */
   private  class MemStoreChunkPool implements HeapMemoryTuneObserver {
     private final int chunkSize;
+    private final ChunkType chunkType;
     private int maxCount;
 
     // A queue of reclaimed chunks
@@ -323,15 +334,18 @@ public class ChunkCreator {
     private final LongAdder reusedChunkCount = new LongAdder();
     private final String label;
 
-    MemStoreChunkPool(String label, int chunkSize, int maxCount, int initialCount,
+    MemStoreChunkPool(String label, int chunkSize, ChunkType chunkType, int maxCount,
+        int initialCount,
         float poolSizePercentage) {
       this.label = label;
       this.chunkSize = chunkSize;
+      this.chunkType = chunkType;
       this.maxCount = maxCount;
       this.poolSizePercentage = poolSizePercentage;
       this.reclaimedChunks = new LinkedBlockingQueue<>();
       for (int i = 0; i < initialCount; i++) {
-        Chunk chunk = createChunk(true, CompactingMemStore.IndexType.ARRAY_MAP, chunkSize);
+        Chunk chunk =
+            createChunk(true, chunkType, chunkSize);
         chunk.init();
         reclaimedChunks.add(chunk);
       }
@@ -353,10 +367,6 @@ public class ChunkCreator {
      * @see #putbackChunks(Chunk)
      */
     Chunk getChunk() {
-      return getChunk(CompactingMemStore.IndexType.ARRAY_MAP);
-    }
-
-    Chunk getChunk(CompactingMemStore.IndexType chunkIndexType) {
       Chunk chunk = reclaimedChunks.poll();
       if (chunk != null) {
         chunk.reset();
@@ -367,7 +377,7 @@ public class ChunkCreator {
           long created = this.chunkCount.get();
           if (created < this.maxCount) {
             if (this.chunkCount.compareAndSet(created, created + 1)) {
-              chunk = createChunkForPool(chunkIndexType, chunkSize);
+              chunk = createChunkForPool(chunkType, chunkSize);
               break;
             }
           } else {
@@ -465,7 +475,7 @@ public class ChunkCreator {
   }
 
   private MemStoreChunkPool initializePool(String label, long globalMemStoreSize,
-      float poolSizePercentage, float initialCountPercentage, int chunkSize,
+      float poolSizePercentage, float initialCountPercentage, int chunkSize, ChunkType chunkType,
       HeapMemoryManager heapMemoryManager) {
     if (poolSizePercentage <= 0) {
       LOG.info("{} poolSizePercentage is less than 0. So not using pool", label);
@@ -486,8 +496,8 @@ public class ChunkCreator {
     int initialCount = (int) (initialCountPercentage * maxCount);
     LOG.info("Allocating {} MemStoreChunkPool with chunk size {}, max count {}, initial count {}",
         label, StringUtils.byteDesc(chunkSize), maxCount, initialCount);
-    MemStoreChunkPool memStoreChunkPool = new MemStoreChunkPool(label, chunkSize, maxCount,
-            initialCount, poolSizePercentage);
+    MemStoreChunkPool memStoreChunkPool = new MemStoreChunkPool(label, chunkSize, chunkType,
+        maxCount, initialCount, poolSizePercentage);
     if (heapMemoryManager != null && memStoreChunkPool != null) {
       // Register with Heap Memory manager
       heapMemoryManager.registerTuneObserver(memStoreChunkPool);
@@ -544,7 +554,7 @@ public class ChunkCreator {
 
   boolean isChunkInPool(int chunkId) {
     Chunk c = getChunk(chunkId);
-    if (c==null) {
+    if (c == null) {
       return false;
     }
 
@@ -578,6 +588,8 @@ public class ChunkCreator {
       case INDEX_CHUNK:
         if (indexChunksPool != null) {
           return indexChunksPool.getChunkSize();
+        } else {
+          return indexChunkSize;
         }
       case DATA_CHUNK:
         if (dataChunksPool != null) {
@@ -606,7 +618,7 @@ public class ChunkCreator {
       if (chunk != null) {
         if (chunk.isFromPool() && chunk.isIndexChunk()) {
           indexChunksPool.putbackChunks(chunk);
-        } else if (chunk.isFromPool() && chunk.size == dataChunksPool.getChunkSize()) {
+        } else if (chunk.isFromPool() && chunk.isDataChunk()) {
           dataChunksPool.putbackChunks(chunk);
         } else {
           // chunks which are not from one of the pools
@@ -619,6 +631,14 @@ public class ChunkCreator {
       // so we have nothing to do on its release
     }
     return;
+  }
+
+  MemStoreChunkPool getIndexChunksPool() {
+    return this.indexChunksPool;
+  }
+
+  MemStoreChunkPool getDataChunksPool() {
+    return this.dataChunksPool;
   }
 
 }

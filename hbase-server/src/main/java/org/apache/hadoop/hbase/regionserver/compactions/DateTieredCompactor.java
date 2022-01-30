@@ -68,19 +68,21 @@ public class DateTieredCompactor extends AbstractMultiOutputCompactor<DateTiered
 
         @Override
         public DateTieredMultiFileWriter createWriter(InternalScanner scanner, FileDetails fd,
-            boolean shouldDropBehind) throws IOException {
+            boolean shouldDropBehind, boolean major) throws IOException {
           DateTieredMultiFileWriter writer = new DateTieredMultiFileWriter(lowerBoundaries,
               lowerBoundariesPolicies,
               needEmptyFile(request));
-          initMultiWriter(writer, scanner, fd, shouldDropBehind);
+          initMultiWriter(writer, scanner, fd, shouldDropBehind, major);
           return writer;
         }
       }, throughputController, user);
   }
 
   @Override
-  protected List<Path> commitWriter(DateTieredMultiFileWriter writer, FileDetails fd,
+  protected List<Path> commitWriter(FileDetails fd,
       CompactionRequestImpl request) throws IOException {
-    return writer.commitWriters(fd.maxSeqId, request.isAllFiles(), request.getFiles());
+    List<Path> pathList =
+      writer.commitWriters(fd.maxSeqId, request.isAllFiles(), request.getFiles());
+    return pathList;
   }
 }

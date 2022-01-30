@@ -25,7 +25,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -155,6 +154,21 @@ public final class HConstants {
 
   /** Default value for the balancer period */
   public static final int DEFAULT_HBASE_BALANCER_PERIOD = 300000;
+
+  /**
+   * Config key for enable/disable automatically separate child regions to different region servers
+   * in the procedure of split regions. One child will be kept to the server where parent
+   * region is on, and the other child will be assigned to a random server.
+   * See HBASE-25518.
+   */
+  public static final String HBASE_ENABLE_SEPARATE_CHILD_REGIONS =
+    "hbase.master.auto.separate.child.regions.after.split.enabled";
+
+  /**
+   * Default value for automatically separate child regions to different region servers
+   * (set to "false" to keep all child regions to the server where parent region is on)
+   */
+  public static final boolean DEFAULT_HBASE_ENABLE_SEPARATE_CHILD_REGIONS = false;
 
   /** The name of the ensemble table */
   public static final TableName ENSEMBLE_TABLE_NAME = TableName.valueOf("hbase:ensemble");
@@ -658,16 +672,6 @@ public final class HConstants {
   public static final long LATEST_TIMESTAMP = Long.MAX_VALUE;
 
   /**
-   * Timestamp to use when we want to refer to the oldest cell.
-   * Special! Used in fake Cells only. Should never be the timestamp on an actual Cell returned to
-   * a client.
-   * @deprecated Should not be public since hbase-1.3.0. For internal use only. Move internal to
-   *   Scanners flagged as special timestamp value never to be returned as timestamp on a Cell.
-   */
-  @Deprecated
-  public static final long OLDEST_TIMESTAMP = Long.MIN_VALUE;
-
-  /**
    * LATEST_TIMESTAMP in bytes form
    */
   public static final byte [] LATEST_TIMESTAMP_BYTES = {
@@ -930,14 +934,6 @@ public final class HConstants {
       "hbase.client.scanner.timeout.period";
 
   /**
-   * Use {@link #HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD} instead.
-   * @deprecated This config option is deprecated. Will be removed at later releases after 0.96.
-   */
-  @Deprecated
-  public static final String HBASE_REGIONSERVER_LEASE_PERIOD_KEY =
-      "hbase.regionserver.lease.period";
-
-  /**
    * Default value of {@link #HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD}.
    */
   public static final int DEFAULT_HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD = 60000;
@@ -1053,47 +1049,23 @@ public final class HConstants {
 
   public static final float HFILE_BLOCK_CACHE_SIZE_DEFAULT = 0.4f;
 
+  /**
+   * Configuration key for setting the fix size of the block size, default do nothing and it should
+   * be explicitly set by user or only used within ClientSideRegionScanner. if it's set less than
+   * current max on heap size, it overrides the max size of block cache
+   */
+  public static final String HFILE_ONHEAP_BLOCK_CACHE_FIXED_SIZE_KEY =
+    "hfile.onheap.block.cache.fixed.size";
+  public static final long HFILE_ONHEAP_BLOCK_CACHE_FIXED_SIZE_DEFAULT = 0L;
+  public static final long HBASE_CLIENT_SCANNER_ONHEAP_BLOCK_CACHE_FIXED_SIZE_DEFAULT =
+    32 * 1024 * 1024L;
+
   /*
     * Minimum percentage of free heap necessary for a successful cluster startup.
     */
   public static final float HBASE_CLUSTER_MINIMUM_MEMORY_THRESHOLD = 0.2f;
 
-  /**
-   * @deprecated  It is used internally. As of release 2.0.0, this will be removed in HBase 3.0.0.
-   */
-  @Deprecated
-  public static final Pattern CP_HTD_ATTR_KEY_PATTERN =
-      Pattern.compile("^coprocessor\\$([0-9]+)$", Pattern.CASE_INSENSITIVE);
 
-  /**
-   * <pre>
-   * Pattern that matches a coprocessor specification. Form is:
-   * {@code <coprocessor jar file location> '|' <class name> ['|' <priority> ['|' <arguments>]]}
-   * where arguments are {@code <KEY> '=' <VALUE> [,...]}
-   * For example: {@code hdfs:///foo.jar|com.foo.FooRegionObserver|1001|arg1=1,arg2=2}
-   * </pre>
-   * @deprecated  It is used internally. As of release 2.0.0, this will be removed in HBase 3.0.0.
-   */
-  @Deprecated
-  public static final Pattern CP_HTD_ATTR_VALUE_PATTERN =
-      Pattern.compile("(^[^\\|]*)\\|([^\\|]+)\\|[\\s]*([\\d]*)[\\s]*(\\|.*)?$");
-  /**
-   * @deprecated  It is used internally. As of release 2.0.0, this will be removed in HBase 3.0.0.
-   */
-  @Deprecated
-  public static final String CP_HTD_ATTR_VALUE_PARAM_KEY_PATTERN = "[^=,]+";
-  /**
-   * @deprecated  It is used internally. As of release 2.0.0, this will be removed in HBase 3.0.0.
-   */
-  @Deprecated
-  public static final String CP_HTD_ATTR_VALUE_PARAM_VALUE_PATTERN = "[^,]+";
-  /**
-   * @deprecated  It is used internally. As of release 2.0.0, this will be removed in HBase 3.0.0.
-   */
-  @Deprecated
-  public static final Pattern CP_HTD_ATTR_VALUE_PARAM_PATTERN = Pattern.compile(
-      "(" + CP_HTD_ATTR_VALUE_PARAM_KEY_PATTERN + ")=(" +
-      CP_HTD_ATTR_VALUE_PARAM_VALUE_PATTERN + "),?");
   public static final String CP_HTD_ATTR_INCLUSION_KEY =
       "hbase.coprocessor.classloader.included.classes";
 
@@ -1220,17 +1192,17 @@ public final class HConstants {
   public static final int PRIORITY_UNSET = -1;
   public static final int NORMAL_QOS = 0;
   public static final int REPLICATION_QOS = 5;
+  /**
+   * @deprecated since 3.0.0, will be removed in 4.0.0. DLR has been purged for a long time and
+   *             region replication has its own 'replay' method.
+   */
+  @Deprecated
   public static final int REPLAY_QOS = 6;
+  public static final int REGION_REPLICATION_QOS = REPLAY_QOS;
   public static final int QOS_THRESHOLD = 10;
   public static final int ADMIN_QOS = 100;
   public static final int HIGH_QOS = 200;
   public static final int SYSTEMTABLE_QOS = HIGH_QOS;
-  /**
-   * @deprecated the name "META_QOS" is a bit ambiguous, actually only meta region transition can
-   *             use this priority, and you should not use this directly. Will be removed in 3.0.0.
-   */
-  @Deprecated
-  public static final int META_QOS = 300;
 
   /** Directory under /hbase where archived hfiles are stored */
   public static final String HFILE_ARCHIVE_DIRECTORY = "archive";
@@ -1605,6 +1577,13 @@ public final class HConstants {
       "hbase.master.executor.serverops.threads";
   public static final int MASTER_SERVER_OPERATIONS_THREADS_DEFAULT = 5;
 
+  /**
+   * Number of threads used to dispatch merge operations to the regionservers.
+   */
+  public static final String MASTER_MERGE_DISPATCH_THREADS =
+      "hbase.master.executor.merge.dispatch.threads";
+  public static final int MASTER_MERGE_DISPATCH_THREADS_DEFAULT = 2;
+
   public static final String MASTER_META_SERVER_OPERATIONS_THREADS =
       "hbase.master.executor.meta.serverops.threads";
   public static final int MASTER_META_SERVER_OPERATIONS_THREADS_DEFAULT = 5;
@@ -1628,6 +1607,11 @@ public final class HConstants {
   public static final String SLOW_LOG_SYS_TABLE_ENABLED_KEY =
     "hbase.regionserver.slowlog.systable.enabled";
   public static final boolean DEFAULT_SLOW_LOG_SYS_TABLE_ENABLED_KEY = false;
+
+  public static final String SHELL_TIMESTAMP_FORMAT_EPOCH_KEY =
+      "hbase.shell.timestamp.format.epoch";
+
+  public static final boolean DEFAULT_SHELL_TIMESTAMP_FORMAT_EPOCH = false;
 
   /**
    * Number of rows in a batch operation above which a warning will be logged.

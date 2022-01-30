@@ -20,17 +20,22 @@ package org.apache.hadoop.hbase.snapshot;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseCommonTestingUtility;
+import org.apache.hadoop.hbase.HBaseCommonTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.master.snapshot.SnapshotManager;
+import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
 import org.apache.hadoop.hbase.snapshot.SnapshotTestingUtils.SnapshotMock;
 import org.apache.hadoop.hbase.testclassification.MapReduceTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.Pair;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
@@ -51,7 +56,7 @@ public class TestExportSnapshotV1NoCluster {
       HBaseClassTestRule.forClass(TestExportSnapshotV1NoCluster.class);
   private static final Logger LOG = LoggerFactory.getLogger(TestExportSnapshotV1NoCluster.class);
 
-  private HBaseCommonTestingUtility testUtil = new HBaseCommonTestingUtility();
+  private HBaseCommonTestingUtil testUtil = new HBaseCommonTestingUtil();
   private Path testDir;
   private FileSystem fs;
 
@@ -69,7 +74,7 @@ public class TestExportSnapshotV1NoCluster {
    * Setup for test. Returns path to test data dir. Sets configuration into the passed
    * hctu.getConfiguration.
    */
-  static Path setup(FileSystem fs, HBaseCommonTestingUtility hctu) throws IOException {
+  static Path setup(FileSystem fs, HBaseCommonTestingUtil hctu) throws IOException {
     Path testDir = hctu.getDataTestDir().makeQualified(fs.getUri(), fs.getWorkingDirectory());
     hctu.getConfiguration().setBoolean(SnapshotManager.HBASE_SNAPSHOT_ENABLED, true);
     hctu.getConfiguration().setInt("hbase.regionserver.msginterval", 100);
@@ -98,12 +103,25 @@ public class TestExportSnapshotV1NoCluster {
    * and then it will run the export and verification.
    */
   static void testSnapshotWithRefsExportFileSystemState(FileSystem fs,
-     SnapshotMock.SnapshotBuilder builder, HBaseCommonTestingUtility testUtil, Path testDir)
+     SnapshotMock.SnapshotBuilder builder, HBaseCommonTestingUtil testUtil, Path testDir)
         throws Exception {
     Path[] r1Files = builder.addRegion();
     Path[] r2Files = builder.addRegion();
     builder.commit();
-    int snapshotFilesCount = r1Files.length + r2Files.length;
+    // remove references, only keep data files
+    Set<String> dataFiles = new HashSet<>();
+    for (Path[] files: new Path[][]{r1Files, r2Files}) {
+      for (Path file : files) {
+        if (StoreFileInfo.isReference(file.getName())) {
+          Pair<String, String> referredToRegionAndFile =
+            StoreFileInfo.getReferredToRegionAndFile(file.getName());
+          dataFiles.add(referredToRegionAndFile.getSecond());
+        } else {
+          dataFiles.add(file.getName());
+        }
+      }
+    }
+    int snapshotFilesCount = dataFiles.size();
     String snapshotName = builder.getSnapshotDescription().getName();
     TableName tableName = builder.getTableDescriptor().getTableName();
     TestExportSnapshot.testExportFileSystemState(testUtil.getConfiguration(),
@@ -111,10 +129,10 @@ public class TestExportSnapshotV1NoCluster {
       testDir, getDestinationDir(fs, testUtil, testDir), false, null, true);
   }
 
-  static Path getDestinationDir(FileSystem fs, HBaseCommonTestingUtility hctu, Path testDir)
+  static Path getDestinationDir(FileSystem fs, HBaseCommonTestingUtil hctu, Path testDir)
       throws IOException {
     Path path = new Path(new Path(testDir, "export-test"),
-      "export-" + System.currentTimeMillis()).makeQualified(fs.getUri(),
+      "export-" + EnvironmentEdgeManager.currentTime()).makeQualified(fs.getUri(),
       fs.getWorkingDirectory());
     LOG.info("Export destination={}, fs={}, fsurl={}, fswd={}, testDir={}", path, fs, fs.getUri(),
       fs.getWorkingDirectory(), testDir);

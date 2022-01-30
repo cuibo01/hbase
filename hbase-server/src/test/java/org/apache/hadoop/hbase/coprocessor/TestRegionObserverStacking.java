@@ -17,14 +17,15 @@
  */
 package org.apache.hadoop.hbase.coprocessor;
 
+import static org.junit.Assert.assertTrue;
+
 import java.io.IOException;
 import java.util.Optional;
-import junit.framework.TestCase;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Coprocessor;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Durability;
@@ -41,20 +42,23 @@ import org.apache.hadoop.hbase.regionserver.RegionServerServices;
 import org.apache.hadoop.hbase.testclassification.CoprocessorTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.wal.WALEdit;
 import org.junit.ClassRule;
+import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.mockito.Mockito;
 
 @Category({CoprocessorTests.class, SmallTests.class})
-public class TestRegionObserverStacking extends TestCase {
+public class TestRegionObserverStacking {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
       HBaseClassTestRule.forClass(TestRegionObserverStacking.class);
 
-  private static HBaseTestingUtility TEST_UTIL
-    = new HBaseTestingUtility();
+  private static HBaseTestingUtil TEST_UTIL
+    = new HBaseTestingUtil();
   static final Path DIR = TEST_UTIL.getDataTestDir();
 
   public static class ObserverA implements RegionCoprocessor, RegionObserver {
@@ -70,11 +74,8 @@ public class TestRegionObserverStacking extends TestCase {
         final Put put, final WALEdit edit,
         final Durability durability)
         throws IOException {
-      id = System.currentTimeMillis();
-      try {
-        Thread.sleep(10);
-      } catch (InterruptedException ex) {
-      }
+      id = EnvironmentEdgeManager.currentTime();
+      Threads.sleepWithoutInterrupt(10);
     }
   }
 
@@ -91,11 +92,8 @@ public class TestRegionObserverStacking extends TestCase {
         final Put put, final WALEdit edit,
         final Durability durability)
         throws IOException {
-      id = System.currentTimeMillis();
-      try {
-        Thread.sleep(10);
-      } catch (InterruptedException ex) {
-      }
+      id = EnvironmentEdgeManager.currentTime();
+      Threads.sleepWithoutInterrupt(10);
     }
   }
 
@@ -112,11 +110,8 @@ public class TestRegionObserverStacking extends TestCase {
         final Put put, final WALEdit edit,
         final Durability durability)
         throws IOException {
-      id = System.currentTimeMillis();
-      try {
-        Thread.sleep(10);
-      } catch (InterruptedException ex) {
-      }
+      id = EnvironmentEdgeManager.currentTime();
+      Threads.sleepWithoutInterrupt(10);
     }
   }
 
@@ -132,7 +127,7 @@ public class TestRegionObserverStacking extends TestCase {
       0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
     RegionInfo info = RegionInfoBuilder.newBuilder(tableDescriptor.getTableName()).build();
     Path path = new Path(DIR + callingMethod);
-    HRegion r = HBaseTestingUtility.createRegionAndWAL(info, path, conf, tableDescriptor);
+    HRegion r = HBaseTestingUtil.createRegionAndWAL(info, path, conf, tableDescriptor);
     // this following piece is a hack. currently a coprocessorHost
     // is secretly loaded at OpenRegionHandler. we don't really
     // start a region server here, so just manually create cphost
@@ -143,6 +138,7 @@ public class TestRegionObserverStacking extends TestCase {
     return r;
   }
 
+  @Test
   public void testRegionObserverStacking() throws Exception {
     byte[] ROW = Bytes.toBytes("testRow");
     byte[] TABLE = Bytes.toBytes(this.getClass().getSimpleName());
@@ -170,6 +166,6 @@ public class TestRegionObserverStacking extends TestCase {
 
     assertTrue(idA < idB);
     assertTrue(idB < idC);
-    HBaseTestingUtility.closeRegionAndWAL(region);
+    HBaseTestingUtil.closeRegionAndWAL(region);
   }
 }

@@ -19,7 +19,6 @@ package org.apache.hadoop.hbase.client;
 
 import static org.apache.hadoop.hbase.HConstants.HBASE_CLIENT_META_OPERATION_TIMEOUT;
 import static org.apache.hadoop.hbase.io.ByteBuffAllocator.MAX_BUFFER_COUNT_KEY;
-import static org.apache.hadoop.hbase.master.LoadBalancer.TABLES_ON_MASTER;
 import static org.junit.Assert.assertEquals;
 
 import java.io.IOException;
@@ -37,7 +36,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.MemoryCompactionPolicy;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
@@ -49,7 +48,6 @@ import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.RetryCounter;
 import org.apache.hadoop.hbase.util.Threads;
-import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
@@ -60,6 +58,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.common.io.Closeables;
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 /**
  * Will split the table, and move region randomly when testing.
@@ -73,7 +72,7 @@ public class TestAsyncTableGetMultiThreaded {
 
   private static final Logger LOG = LoggerFactory.getLogger(TestAsyncTableGetMultiThreaded.class);
 
-  private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
+  private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
 
   private static final TableName TABLE_NAME = TableName.valueOf("async");
   private static final byte[] FAMILY = Bytes.toBytes("cf");
@@ -92,7 +91,6 @@ public class TestAsyncTableGetMultiThreaded {
   }
 
   protected static void setUp(MemoryCompactionPolicy memoryCompaction) throws Exception {
-    TEST_UTIL.getConfiguration().set(TABLES_ON_MASTER, "none");
     TEST_UTIL.getConfiguration().setLong(HBASE_CLIENT_META_OPERATION_TIMEOUT, 60000L);
     TEST_UTIL.getConfiguration().setInt(MAX_BUFFER_COUNT_KEY, 100);
     TEST_UTIL.getConfiguration().set(CompactingMemStore.COMPACTING_MEMSTORE_TYPE_KEY,
@@ -198,7 +196,7 @@ public class TestAsyncTableGetMultiThreaded {
       }
       Thread.sleep(5000);
       LOG.info("====== Balancing cluster ======");
-      admin.balance(true);
+      admin.balance(BalanceRequest.newBuilder().setIgnoreRegionsInTransition(true).build());
       LOG.info("====== Balance cluster done ======");
       Thread.sleep(5000);
       ServerName metaServer = TEST_UTIL.getHBaseCluster().getServerHoldingMeta();

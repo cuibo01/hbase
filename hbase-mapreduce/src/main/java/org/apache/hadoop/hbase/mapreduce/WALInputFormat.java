@@ -45,6 +45,7 @@ import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.RecordReader;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.security.TokenCache;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -217,8 +218,9 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
         }
         return res;
       } catch (IOException e) {
-        Path archivedLog = AbstractFSWALProvider.getArchivedLogPath(logFile, conf);
-        if (logFile != archivedLog) {
+        Path archivedLog = AbstractFSWALProvider.findArchivedLog(logFile, conf);
+        // archivedLog can be null if unable to locate in archiveDir.
+        if (archivedLog != null) {
           openReader(archivedLog);
           // Try call again in recursion
           return nextKeyValue();
@@ -273,6 +275,8 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
     Configuration conf = context.getConfiguration();
     boolean ignoreMissing = conf.getBoolean(WALPlayer.IGNORE_MISSING_FILES, false);
     Path[] inputPaths = getInputPaths(conf);
+    // get delegation token for the filesystem
+    TokenCache.obtainTokensForNamenodes(context.getCredentials(), inputPaths, conf);
     long startTime = conf.getLong(startKey, Long.MIN_VALUE);
     long endTime = conf.getLong(endKey, Long.MAX_VALUE);
 

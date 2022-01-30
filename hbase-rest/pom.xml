@@ -23,7 +23,7 @@
   <parent>
     <artifactId>hbase-build-configuration</artifactId>
     <groupId>org.apache.hbase</groupId>
-    <version>3.0.0-SNAPSHOT</version>
+    <version>3.0.0-alpha-3-SNAPSHOT</version>
     <relativePath>../hbase-build-configuration</relativePath>
   </parent>
   <artifactId>hbase-rest</artifactId>
@@ -202,6 +202,10 @@
       <artifactId>hbase-testing-util</artifactId>
       <scope>test</scope>
       <exclusions>
+        <exclusion>
+         <groupId>com.sun.jersey</groupId>
+         <artifactId>jersey-server</artifactId>
+        </exclusion>
         <!--This dependency pulls in hadoop-minicluster
              which pulls in the below. It messes up
         this build at assembly time. See HBASE-22029 -->
@@ -261,10 +265,6 @@
       <artifactId>javax.activation</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.fasterxml.jackson.jaxrs</groupId>
-      <artifactId>jackson-jaxrs-json-provider</artifactId>
-    </dependency>
-    <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-annotations</artifactId>
     </dependency>
@@ -275,6 +275,10 @@
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hbase.thirdparty</groupId>
+      <artifactId>hbase-shaded-jackson-jaxrs-json-provider</artifactId>
     </dependency>
     <dependency>
       <!-- We *might* need this for XMLStreamReader use in RemoteAdmin
@@ -354,13 +358,23 @@
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>slf4j-log4j12</artifactId>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-api</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>log4j</groupId>
-      <artifactId>log4j</artifactId>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-slf4j-impl</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-1.2-api</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -422,24 +436,13 @@
             <exclusions>
               <exclusion>
                 <groupId>com.sun.jersey</groupId>
-                <artifactId>jersey-core</artifactId>
+                <artifactId>jersey-server</artifactId>
               </exclusion>
             </exclusions>
           </dependency>
         </dependencies>
       </dependencyManagement>
       <dependencies>
-        <dependency>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-mapreduce-client-core</artifactId>
-          <scope>test</scope>
-          <exclusions>
-            <exclusion>
-             <groupId>com.google.guava</groupId>
-             <artifactId>guava</artifactId>
-            </exclusion>
-          </exclusions>
-        </dependency>
         <dependency>
           <groupId>org.apache.hadoop</groupId>
           <artifactId>hadoop-annotations</artifactId>

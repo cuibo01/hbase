@@ -20,6 +20,7 @@ package org.apache.hadoop.hbase.regionserver;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalDouble;
@@ -27,6 +28,7 @@ import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hbase.CompatibilitySingletonFactory;
 import org.apache.hadoop.hbase.HConstants;
@@ -35,6 +37,7 @@ import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.io.ByteBuffAllocator;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
+import org.apache.hadoop.hbase.io.asyncfs.monitor.ExcludeDatanodeManager;
 import org.apache.hadoop.hbase.io.hfile.BlockCache;
 import org.apache.hadoop.hbase.io.hfile.CacheStats;
 import org.apache.hadoop.hbase.io.hfile.CombinedBlockCache;
@@ -130,10 +133,13 @@ class MetricsRegionServerWrapperImpl
    */
   private DFSHedgedReadMetrics dfsHedgedReadMetrics;
 
+  private final ExcludeDatanodeManager excludeDatanodeManager;
+
   public MetricsRegionServerWrapperImpl(final HRegionServer regionServer) {
     this.regionServer = regionServer;
     initBlockCache();
     initMobFileCache();
+    this.excludeDatanodeManager = this.regionServer.getWalFactory().getExcludeDatanodeManager();
 
     this.period = regionServer.getConfiguration().getLong(HConstants.REGIONSERVER_METRICS_PERIOD,
       HConstants.DEFAULT_REGIONSERVER_METRICS_PERIOD);
@@ -225,7 +231,7 @@ class MetricsRegionServerWrapperImpl
 
   @Override
   public long getTotalRequestCount() {
-    return regionServer.rpcServices.requestCount.sum();
+    return regionServer.getRpcServices().requestCount.sum();
   }
 
   @Override
@@ -235,37 +241,26 @@ class MetricsRegionServerWrapperImpl
 
   @Override
   public int getSplitQueueSize() {
-    if (this.regionServer.compactSplitThread == null) {
-      return 0;
-    }
-    return this.regionServer.compactSplitThread.getSplitQueueSize();
+    final CompactSplit compactSplit = regionServer.getCompactSplitThread();
+    return compactSplit == null ? 0 : compactSplit.getSplitQueueSize();
   }
 
   @Override
   public int getCompactionQueueSize() {
-    //The thread could be zero.  if so assume there is no queue.
-    if (this.regionServer.compactSplitThread == null) {
-      return 0;
-    }
-    return this.regionServer.compactSplitThread.getCompactionQueueSize();
+    final CompactSplit compactSplit = regionServer.getCompactSplitThread();
+    return compactSplit == null ? 0 : compactSplit.getCompactionQueueSize();
   }
 
   @Override
   public int getSmallCompactionQueueSize() {
-    //The thread could be zero.  if so assume there is no queue.
-    if (this.regionServer.compactSplitThread == null) {
-      return 0;
-    }
-    return this.regionServer.compactSplitThread.getSmallCompactionQueueSize();
+    final CompactSplit compactSplit = regionServer.getCompactSplitThread();
+    return compactSplit == null ? 0 : compactSplit.getSmallCompactionQueueSize();
   }
 
   @Override
   public int getLargeCompactionQueueSize() {
-    //The thread could be zero.  if so assume there is no queue.
-    if (this.regionServer.compactSplitThread == null) {
-      return 0;
-    }
-    return this.regionServer.compactSplitThread.getLargeCompactionQueueSize();
+    final CompactSplit compactSplit = regionServer.getCompactSplitThread();
+    return compactSplit == null ? 0 : compactSplit.getLargeCompactionQueueSize();
   }
 
   @Override
@@ -410,6 +405,17 @@ class MetricsRegionServerWrapperImpl
   }
 
   @Override
+  public List<String> getWALExcludeDNs() {
+    if (excludeDatanodeManager == null) {
+      return Collections.emptyList();
+    }
+    return excludeDatanodeManager.getExcludeDNs().entrySet()
+      .stream()
+      .map(e -> e.getKey().toString() + ", " + e.getValue())
+      .collect(Collectors.toList());
+  }
+
+  @Override
   public long getNumWALSlowAppend() {
     return metricsWALSource.getSlowAppendCount();
   }
@@ -490,27 +496,27 @@ class MetricsRegionServerWrapperImpl
 
   @Override
   public long getRpcGetRequestsCount() {
-    return regionServer.rpcServices.rpcGetRequestCount.sum();
+    return regionServer.getRpcServices().rpcGetRequestCount.sum();
   }
 
   @Override
   public long getRpcScanRequestsCount() {
-    return regionServer.rpcServices.rpcScanRequestCount.sum();
+    return regionServer.getRpcServices().rpcScanRequestCount.sum();
   }
 
   @Override
   public long getRpcFullScanRequestsCount() {
-    return regionServer.rpcServices.rpcFullScanRequestCount.sum();
+    return regionServer.getRpcServices().rpcFullScanRequestCount.sum();
   }
 
   @Override
   public long getRpcMultiRequestsCount() {
-    return regionServer.rpcServices.rpcMultiRequestCount.sum();
+    return regionServer.getRpcServices().rpcMultiRequestCount.sum();
   }
 
   @Override
   public long getRpcMutateRequestsCount() {
-    return regionServer.rpcServices.rpcMutateRequestCount.sum();
+    return regionServer.getRpcServices().rpcMutateRequestCount.sum();
   }
 
   @Override

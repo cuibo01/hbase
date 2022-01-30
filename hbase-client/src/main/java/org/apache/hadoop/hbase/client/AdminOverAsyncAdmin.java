@@ -230,8 +230,14 @@ class AdminOverAsyncAdmin implements Admin {
 
   @Override
   public Future<Void> modifyColumnFamilyAsync(TableName tableName,
-      ColumnFamilyDescriptor columnFamily) throws IOException {
+    ColumnFamilyDescriptor columnFamily) throws IOException {
     return admin.modifyColumnFamily(tableName, columnFamily);
+  }
+
+  @Override
+  public Future<Void> modifyColumnFamilyStoreFileTrackerAsync(TableName tableName, byte[] family,
+    String dstSFT) throws IOException {
+    return admin.modifyColumnFamilyStoreFileTracker(tableName, family, dstSFT);
   }
 
   @Override
@@ -374,6 +380,11 @@ class AdminOverAsyncAdmin implements Admin {
     return get(admin.balancerSwitch(onOrOff, synchronous));
   }
 
+
+  public BalanceResponse balance(BalanceRequest request) throws IOException {
+    return get(admin.balance(request));
+  }
+
   @Override
   public boolean balance() throws IOException {
     return get(admin.balance());
@@ -468,6 +479,12 @@ class AdminOverAsyncAdmin implements Admin {
   @Override
   public Future<Void> modifyTableAsync(TableDescriptor td) throws IOException {
     return admin.modifyTable(td);
+  }
+
+  @Override
+  public Future<Void> modifyTableStoreFileTrackerAsync(TableName tableName, String dstSFT)
+    throws IOException {
+    return admin.modifyTableStoreFileTracker(tableName, dstSFT);
   }
 
   @Override
@@ -639,14 +656,15 @@ class AdminOverAsyncAdmin implements Admin {
 
   @Override
   public void restoreSnapshot(String snapshotName, boolean takeFailSafeSnapshot, boolean restoreAcl)
-      throws IOException, RestoreSnapshotException {
+    throws IOException, RestoreSnapshotException {
     get(admin.restoreSnapshot(snapshotName, takeFailSafeSnapshot, restoreAcl));
   }
 
   @Override
   public Future<Void> cloneSnapshotAsync(String snapshotName, TableName tableName,
-      boolean restoreAcl) throws IOException, TableExistsException, RestoreSnapshotException {
-    return admin.cloneSnapshot(snapshotName, tableName, restoreAcl);
+    boolean restoreAcl, String customSFT)
+    throws IOException, TableExistsException, RestoreSnapshotException {
+    return admin.cloneSnapshot(snapshotName, tableName, restoreAcl, customSFT);
   }
 
   @Override
@@ -779,6 +797,11 @@ class AdminOverAsyncAdmin implements Admin {
   @Override
   public void updateConfiguration() throws IOException {
     get(admin.updateConfiguration());
+  }
+
+  @Override
+  public void updateConfiguration(String groupName) throws IOException {
+    get(admin.updateConfiguration(groupName));
   }
 
   @Override
@@ -1001,8 +1024,8 @@ class AdminOverAsyncAdmin implements Admin {
   }
 
   @Override
-  public boolean balanceRSGroup(String groupName) throws IOException {
-    return get(admin.balanceRSGroup(groupName));
+  public BalanceResponse balanceRSGroup(String groupName, BalanceRequest request) throws IOException {
+    return get(admin.balanceRSGroup(groupName, request));
   }
 
   @Override

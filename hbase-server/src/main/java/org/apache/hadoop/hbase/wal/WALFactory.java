@@ -21,12 +21,12 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Abortable;
 import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.io.asyncfs.monitor.ExcludeDatanodeManager;
 import org.apache.hadoop.hbase.regionserver.wal.MetricsWAL;
 import org.apache.hadoop.hbase.regionserver.wal.ProtobufLogReader;
 import org.apache.hadoop.hbase.util.CancelableProgressable;
@@ -105,6 +105,8 @@ public class WALFactory {
 
   private final Configuration conf;
 
+  private final ExcludeDatanodeManager excludeDatanodeManager;
+
   // Used for the singleton WALFactory, see below.
   private WALFactory(Configuration conf) {
     // this code is duplicated here so we can keep our members final.
@@ -121,6 +123,7 @@ public class WALFactory {
     provider = null;
     factoryId = SINGLETON_ID;
     this.abortable = null;
+    this.excludeDatanodeManager = new ExcludeDatanodeManager(conf);
   }
 
   Providers getDefaultProvider() {
@@ -197,6 +200,7 @@ public class WALFactory {
       AbstractFSWALProvider.Reader.class);
     this.conf = conf;
     this.factoryId = factoryId;
+    this.excludeDatanodeManager = new ExcludeDatanodeManager(conf);
     this.abortable = abortable;
     // end required early initialization
     if (conf.getBoolean(WAL_ENABLED, true)) {
@@ -336,7 +340,9 @@ public class WALFactory {
           reader = lrClass.getDeclaredConstructor().newInstance();
           reader.init(fs, path, conf, null);
           return reader;
-        } catch (IOException e) {
+        } catch (Exception e) {
+          // catch Exception so that we close reader for all exceptions. If we don't
+          // close the reader, we leak a socket.
           if (reader != null) {
             try {
               reader.close();
@@ -346,34 +352,38 @@ public class WALFactory {
             }
           }
 
-          String msg = e.getMessage();
-          if (msg != null
-              && (msg.contains("Cannot obtain block length")
-                  || msg.contains("Could not obtain the last block") || msg
-                    .matches("Blocklist for [^ ]* has changed.*"))) {
-            if (++nbAttempt == 1) {
-              LOG.warn("Lease should have recovered. This is not expected. Will retry", e);
-            }
-            if (reporter != null && !reporter.progress()) {
-              throw new InterruptedIOException("Operation is cancelled");
-            }
-            if (nbAttempt > 2 && openTimeout < EnvironmentEdgeManager.currentTime()) {
-              LOG.error("Can't open after " + nbAttempt + " attempts and "
-                  + (EnvironmentEdgeManager.currentTime() - startWaiting) + "ms " + " for " + path);
-            } else {
-              try {
-                Thread.sleep(nbAttempt < 3 ? 500 : 1000);
-                continue; // retry
-              } catch (InterruptedException ie) {
-                InterruptedIOException iioe = new InterruptedIOException();
-                iioe.initCause(ie);
-                throw iioe;
+          // Only inspect the Exception to consider retry when it's an IOException
+          if (e instanceof IOException) {
+            String msg = e.getMessage();
+            if (msg != null
+                && (msg.contains("Cannot obtain block length")
+                    || msg.contains("Could not obtain the last block") || msg
+                      .matches("Blocklist for [^ ]* has changed.*"))) {
+              if (++nbAttempt == 1) {
+                LOG.warn("Lease should have recovered. This is not expected. Will retry", e);
               }
+              if (reporter != null && !reporter.progress()) {
+                throw new InterruptedIOException("Operation is cancelled");
+              }
+              if (nbAttempt > 2 && openTimeout < EnvironmentEdgeManager.currentTime()) {
+                LOG.error("Can't open after " + nbAttempt + " attempts and "
+                    + (EnvironmentEdgeManager.currentTime() - startWaiting) + "ms " + " for " + path);
+              } else {
+                try {
+                  Thread.sleep(nbAttempt < 3 ? 500 : 1000);
+                  continue; // retry
+                } catch (InterruptedException ie) {
+                  InterruptedIOException iioe = new InterruptedIOException();
+                  iioe.initCause(ie);
+                  throw iioe;
+                }
+              }
+              throw new LeaseNotRecoveredException(e);
             }
-            throw new LeaseNotRecoveredException(e);
-          } else {
-            throw e;
           }
+
+          // Rethrow the original exception if we are not retrying due to HDFS-isms.
+          throw e;
         }
       }
     } catch (IOException ie) {
@@ -495,5 +505,9 @@ public class WALFactory {
    */
   public final WALProvider getMetaWALProvider() {
     return this.metaProvider.get();
+  }
+
+  public ExcludeDatanodeManager getExcludeDatanodeManager() {
+    return excludeDatanodeManager;
   }
 }

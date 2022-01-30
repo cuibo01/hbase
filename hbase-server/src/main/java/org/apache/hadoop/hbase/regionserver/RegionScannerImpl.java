@@ -46,6 +46,7 @@ import org.apache.hadoop.hbase.ipc.RpcServer;
 import org.apache.hadoop.hbase.regionserver.Region.Operation;
 import org.apache.hadoop.hbase.regionserver.ScannerContext.LimitScope;
 import org.apache.hadoop.hbase.regionserver.ScannerContext.NextState;
+import org.apache.hadoop.hbase.trace.TraceUtil;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -88,6 +89,7 @@ class RegionScannerImpl implements RegionScanner, Shipper, RpcCallback {
   private final long maxResultSize;
   private final ScannerContext defaultScannerContext;
   private final FilterWrapper filter;
+  private final String operationId;
 
   private RegionServerServices rsServices;
 
@@ -120,6 +122,7 @@ class RegionScannerImpl implements RegionScanner, Shipper, RpcCallback {
     defaultScannerContext = ScannerContext.newBuilder().setBatchLimit(scan.getBatch()).build();
     this.stopRow = scan.getStopRow();
     this.includeStopRow = scan.includeStopRow();
+    this.operationId = scan.getId();
 
     // synchronize on scannerReadPoints so that nobody calculates
     // getSmallestReadPoint, before scannerReadPoints is updated.
@@ -214,6 +217,11 @@ class RegionScannerImpl implements RegionScanner, Shipper, RpcCallback {
     return this.defaultScannerContext.getBatchLimit();
   }
 
+  @Override
+  public String getOperationId() {
+    return operationId;
+  }
+
   /**
    * Reset both the filter and the old filter.
    * @throws IOException in case a filter raises an I/O exception.
@@ -269,14 +277,9 @@ class RegionScannerImpl implements RegionScanner, Shipper, RpcCallback {
       outResults.addAll(tmpList);
     }
 
-    if (!outResults.isEmpty()) {
-      region.addReadRequestsCount(1);
-      if (region.getMetrics() != null) {
-        region.getMetrics().updateReadRequestCount();
-      }
-    }
-    if (rsServices != null && rsServices.getMetrics() != null) {
-      rsServices.getMetrics().updateReadQueryMeter(getRegionInfo().getTable());
+    region.addReadRequestsCount(1);
+    if (region.getMetrics() != null) {
+      region.getMetrics().updateReadRequestCount();
     }
 
     // If the size limit was reached it means a partial Result is being returned. Returning a
@@ -728,8 +731,9 @@ class RegionScannerImpl implements RegionScanner, Shipper, RpcCallback {
     return c > 0 || (c == 0 && !includeStopRow);
   }
 
-  @Override
-  public synchronized void close() {
+  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "IS2_INCONSISTENT_SYNC",
+    justification = "this method is only called inside close which is synchronized")
+  private void closeInternal() {
     if (storeHeap != null) {
       storeHeap.close();
       storeHeap = null;
@@ -744,23 +748,30 @@ class RegionScannerImpl implements RegionScanner, Shipper, RpcCallback {
   }
 
   @Override
+  public synchronized void close() {
+    TraceUtil.trace(this::closeInternal, () -> region.createRegionSpan("RegionScanner.close"));
+  }
+
+  @Override
   public synchronized boolean reseek(byte[] row) throws IOException {
-    if (row == null) {
-      throw new IllegalArgumentException("Row cannot be null.");
-    }
-    boolean result = false;
-    region.startRegionOperation();
-    Cell kv = PrivateCellUtil.createFirstOnRow(row, 0, (short) row.length);
-    try {
-      // use request seek to make use of the lazy seek option. See HBASE-5520
-      result = this.storeHeap.requestSeek(kv, true, true);
-      if (this.joinedHeap != null) {
-        result = this.joinedHeap.requestSeek(kv, true, true) || result;
+    return TraceUtil.trace(() -> {
+      if (row == null) {
+        throw new IllegalArgumentException("Row cannot be null.");
       }
-    } finally {
-      region.closeRegionOperation();
-    }
-    return result;
+      boolean result = false;
+      region.startRegionOperation();
+      Cell kv = PrivateCellUtil.createFirstOnRow(row, 0, (short) row.length);
+      try {
+        // use request seek to make use of the lazy seek option. See HBASE-5520
+        result = this.storeHeap.requestSeek(kv, true, true);
+        if (this.joinedHeap != null) {
+          result = this.joinedHeap.requestSeek(kv, true, true) || result;
+        }
+      } finally {
+        region.closeRegionOperation();
+      }
+      return result;
+    }, () -> region.createRegionSpan("RegionScanner.reseek"));
   }
 
   @Override
