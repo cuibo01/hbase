@@ -80,6 +80,8 @@ import org.apache.hadoop.hbase.RegionMetrics;
 import org.apache.hadoop.hbase.ReplicationPeerNotFoundException;
 import org.apache.hadoop.hbase.ServerMetrics;
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.ServerTask;
+import org.apache.hadoop.hbase.ServerTaskBuilder;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotDisabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
@@ -363,6 +365,7 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
 
   private RSGroupBasedLoadBalancer balancer;
   private BalancerChore balancerChore;
+  private static boolean disableBalancerChoreForTest = false;
   private RegionNormalizerManager regionNormalizerManager;
   private ClusterStatusChore clusterStatusChore;
   private ClusterStatusPublisher clusterStatusPublisherChore = null;
@@ -434,6 +437,9 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
 
   // Cached clusterId on stand by masters to serve clusterID requests from clients.
   private final CachedClusterId cachedClusterId;
+
+  public static final String WARMUP_BEFORE_MOVE = "hbase.master.warmup.before.move";
+  private static final boolean DEFAULT_WARMUP_BEFORE_MOVE = true;
 
   /**
    * Initializes the HMaster. The steps are as follows:
@@ -1098,7 +1104,9 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
     this.clusterStatusChore = new ClusterStatusChore(this, balancer);
     getChoreService().scheduleChore(clusterStatusChore);
     this.balancerChore = new BalancerChore(this);
-    getChoreService().scheduleChore(balancerChore);
+    if (!disableBalancerChoreForTest) {
+      getChoreService().scheduleChore(balancerChore);
+    }
     if (regionNormalizerManager != null) {
       getChoreService().scheduleChore(regionNormalizerManager.getRegionNormalizerChore());
     }
@@ -2196,11 +2204,14 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
 
       TransitRegionStateProcedure proc =
         this.assignmentManager.createMoveRegionProcedure(rp.getRegionInfo(), rp.getDestination());
-      // Warmup the region on the destination before initiating the move.
-      // A region server could reject the close request because it either does not
-      // have the specified region or the region is being split.
-      warmUpRegion(rp.getDestination(), hri);
-
+      if (conf.getBoolean(WARMUP_BEFORE_MOVE, DEFAULT_WARMUP_BEFORE_MOVE)) {
+        // Warmup the region on the destination before initiating the move.
+        // A region server could reject the close request because it either does not
+        // have the specified region or the region is being split.
+        LOG.info(getClientIdAuditPrefix() + " move " + rp + ", warming up region on " +
+          rp.getDestination());
+        warmUpRegion(rp.getDestination(), hri);
+      }
       LOG.info(getClientIdAuditPrefix() + " move " + rp + ", running balancer");
       Future<byte[]> future = ProcedureSyncWait.submitProcedure(this.procedureExecutor, proc);
       try {
@@ -2731,16 +2742,39 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
       options = EnumSet.allOf(Option.class);
     }
 
+    // TASKS and/or LIVE_SERVERS will populate this map, which will be given to the builder if
+    // not null after option processing completes.
+    Map<ServerName, ServerMetrics> serverMetricsMap = null;
+
     for (Option opt : options) {
       switch (opt) {
         case HBASE_VERSION: builder.setHBaseVersion(VersionInfo.getVersion()); break;
         case CLUSTER_ID: builder.setClusterId(getClusterId()); break;
         case MASTER: builder.setMasterName(getServerName()); break;
         case BACKUP_MASTERS: builder.setBackerMasterNames(getBackupMasters()); break;
+        case TASKS: {
+          // Master tasks
+          builder.setMasterTasks(TaskMonitor.get().getTasks().stream()
+            .map(task -> ServerTaskBuilder.newBuilder()
+              .setDescription(task.getDescription())
+              .setStatus(task.getStatus())
+              .setState(ServerTask.State.valueOf(task.getState().name()))
+              .setStartTime(task.getStartTime())
+              .setCompletionTime(task.getCompletionTimestamp())
+              .build())
+            .collect(Collectors.toList()));
+          // TASKS is also synonymous with LIVE_SERVERS for now because task information for
+          // regionservers is carried in ServerLoad.
+          // Add entries to serverMetricsMap for all live servers, if we haven't already done so
+          if (serverMetricsMap == null) {
+            serverMetricsMap = getOnlineServers();
+          }
+          break;
+        }
         case LIVE_SERVERS: {
-          if (serverManager != null) {
-            builder.setLiveServerMetrics(serverManager.getOnlineServers().entrySet().stream()
-              .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue())));
+          // Add entries to serverMetricsMap for all live servers, if we haven't already done so
+          if (serverMetricsMap == null) {
+            serverMetricsMap = getOnlineServers();
           }
           break;
         }
@@ -2802,7 +2836,22 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
         }
       }
     }
+
+    if (serverMetricsMap != null) {
+      builder.setLiveServerMetrics(serverMetricsMap);
+    }
+
     return builder.build();
+  }
+
+  private Map<ServerName, ServerMetrics> getOnlineServers() {
+    if (serverManager != null) {
+      final Map<ServerName, ServerMetrics> map = new HashMap<>();
+      serverManager.getOnlineServers().entrySet()
+        .forEach(e -> map.put(e.getKey(), e.getValue()));
+      return map;
+    }
+    return null;
   }
 
   /**
@@ -4089,4 +4138,23 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
   public Collection<ServerName> getLiveRegionServers() {
     return regionServerTracker.getRegionServers();
   }
+
+  @RestrictedApi(explanation = "Should only be called in tests", link = "",
+      allowedOnPath = ".*/src/test/.*")
+  void setLoadBalancer(RSGroupBasedLoadBalancer loadBalancer) {
+    this.balancer = loadBalancer;
+  }
+
+  @RestrictedApi(explanation = "Should only be called in tests", link = "",
+      allowedOnPath = ".*/src/test/.*")
+  void setAssignmentManager(AssignmentManager assignmentManager) {
+    this.assignmentManager = assignmentManager;
+  }
+
+  @RestrictedApi(explanation = "Should only be called in tests", link = "",
+      allowedOnPath = ".*/src/test/.*")
+  static void setDisableBalancerChoreForTest(boolean disable) {
+    disableBalancerChoreForTest = disable;
+  }
+
 }

@@ -237,6 +237,12 @@
       <timezone>-6</timezone>
     </developer>
     <developer>
+      <id>chenglei</id>
+      <name>Cheng Lei</name>
+      <email>chenglei@apache.org</email>
+      <timezone>+8</timezone>
+    </developer>
+    <developer>
       <id>chenheng</id>
       <name>Heng Chen</name>
       <email>chenheng@apache.org</email>
@@ -2089,6 +2095,13 @@
         <artifactId>hbase-client</artifactId>
         <groupId>org.apache.hbase</groupId>
         <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <artifactId>hbase-client</artifactId>
+        <groupId>org.apache.hbase</groupId>
+        <version>${project.version}</version>
+        <type>test-jar</type>
+        <scope>test</scope>
       </dependency>
       <dependency>
         <artifactId>hbase-metrics-api</artifactId>
