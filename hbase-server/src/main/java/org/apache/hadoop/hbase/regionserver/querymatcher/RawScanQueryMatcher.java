@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,11 +18,10 @@
 package org.apache.hadoop.hbase.regionserver.querymatcher;
 
 import java.io.IOException;
-
-import org.apache.hadoop.hbase.Cell;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.regionserver.ScanInfo;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Query matcher for raw scan.
@@ -31,16 +30,16 @@ import org.apache.hadoop.hbase.regionserver.ScanInfo;
 public abstract class RawScanQueryMatcher extends UserScanQueryMatcher {
 
   protected RawScanQueryMatcher(Scan scan, ScanInfo scanInfo, ColumnTracker columns,
-      boolean hasNullColumn, long oldestUnexpiredTS, long now) {
+    boolean hasNullColumn, long oldestUnexpiredTS, long now) {
     super(scan, scanInfo, columns, hasNullColumn, oldestUnexpiredTS, now);
   }
 
   @Override
-  public MatchCode match(Cell cell) throws IOException {
+  public MatchCode match(ExtendedCell cell) throws IOException {
     if (filter != null && filter.filterAllRemaining()) {
       return MatchCode.DONE_SCAN;
     }
-    MatchCode returnCode = preCheck(cell);
+    MatchCode returnCode = preCheckRaw(cell);
     if (returnCode != null) {
       return returnCode;
     }
@@ -61,11 +60,11 @@ public abstract class RawScanQueryMatcher extends UserScanQueryMatcher {
   }
 
   public static RawScanQueryMatcher create(Scan scan, ScanInfo scanInfo, ColumnTracker columns,
-      boolean hasNullColumn, long oldestUnexpiredTS, long now) {
+    boolean hasNullColumn, long oldestUnexpiredTS, long now) {
     if (scan.isReversed()) {
       if (scan.includeStopRow()) {
         return new RawScanQueryMatcher(scan, scanInfo, columns, hasNullColumn, oldestUnexpiredTS,
-            now) {
+          now) {
 
           @Override
           protected boolean moreRowsMayExistsAfter(int cmpToStopRow) {
@@ -74,7 +73,7 @@ public abstract class RawScanQueryMatcher extends UserScanQueryMatcher {
         };
       } else {
         return new RawScanQueryMatcher(scan, scanInfo, columns, hasNullColumn, oldestUnexpiredTS,
-            now) {
+          now) {
 
           @Override
           protected boolean moreRowsMayExistsAfter(int cmpToStopRow) {
@@ -85,7 +84,7 @@ public abstract class RawScanQueryMatcher extends UserScanQueryMatcher {
     } else {
       if (scan.includeStopRow()) {
         return new RawScanQueryMatcher(scan, scanInfo, columns, hasNullColumn, oldestUnexpiredTS,
-            now) {
+          now) {
 
           @Override
           protected boolean moreRowsMayExistsAfter(int cmpToStopRow) {
@@ -94,7 +93,7 @@ public abstract class RawScanQueryMatcher extends UserScanQueryMatcher {
         };
       } else {
         return new RawScanQueryMatcher(scan, scanInfo, columns, hasNullColumn, oldestUnexpiredTS,
-            now) {
+          now) {
 
           @Override
           protected boolean moreRowsMayExistsAfter(int cmpToStopRow) {

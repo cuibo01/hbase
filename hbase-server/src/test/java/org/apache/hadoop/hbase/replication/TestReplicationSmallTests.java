@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.replication;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -50,6 +51,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALEditInternalHelper;
 import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.junit.Before;
 import org.junit.ClassRule;
@@ -70,7 +72,7 @@ public class TestReplicationSmallTests extends TestReplicationBase {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestReplicationSmallTests.class);
+    HBaseClassTestRule.forClass(TestReplicationSmallTests.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestReplicationSmallTests.class);
   private static final String PEER_ID = "2";
@@ -265,7 +267,7 @@ public class TestReplicationSmallTests extends TestReplicationBase {
       }
     }
     ReplicationPeerConfig rpc =
-        ReplicationPeerConfig.newBuilder().setClusterKey(UTIL2.getClusterKey()).build();
+      ReplicationPeerConfig.newBuilder().setClusterKey(UTIL2.getRpcConnnectionURI()).build();
     hbaseAdmin.addReplicationPeer(PEER_ID, rpc);
     Thread.sleep(SLEEP_TIME);
     rowKey = Bytes.toBytes("do rep");
@@ -337,8 +339,8 @@ public class TestReplicationSmallTests extends TestReplicationBase {
           }
           LOG.error("Last row: " + lastRow);
           fail("Waited too much time for normal batch replication, " + res.length + " instead of "
-            + NB_ROWS_IN_BIG_BATCH + "; waited="
-            + (EnvironmentEdgeManager.currentTime() - start) + "ms");
+            + NB_ROWS_IN_BIG_BATCH + "; waited=" + (EnvironmentEdgeManager.currentTime() - start)
+            + "ms");
         } else {
           LOG.info("Only got " + res.length + " rows... retrying");
           Thread.sleep(SLEEP_TIME);
@@ -367,10 +369,10 @@ public class TestReplicationSmallTests extends TestReplicationBase {
 
     // Create Tables
     for (int i = 0; i < numOfTables; i++) {
-      hadmin.createTable(TableDescriptorBuilder.newBuilder(TableName.valueOf(tName + i))
-          .setColumnFamily(ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes(colFam))
-              .setScope(HConstants.REPLICATION_SCOPE_GLOBAL).build())
-          .build());
+      hadmin.createTable(TableDescriptorBuilder
+        .newBuilder(TableName.valueOf(tName + i)).setColumnFamily(ColumnFamilyDescriptorBuilder
+          .newBuilder(Bytes.toBytes(colFam)).setScope(HConstants.REPLICATION_SCOPE_GLOBAL).build())
+        .build());
     }
 
     // verify the result
@@ -422,7 +424,8 @@ public class TestReplicationSmallTests extends TestReplicationBase {
     final byte[] value = Bytes.toBytes("v");
     WALEdit edit = new WALEdit(true);
     long now = EnvironmentEdgeManager.currentTime();
-    edit.add(new KeyValue(rowName, famName, qualifier, now, value));
+    WALEditInternalHelper.addExtendedCell(edit,
+      new KeyValue(rowName, famName, qualifier, now, value));
     WALKeyImpl walKey = new WALKeyImpl(hri.getEncodedNameAsBytes(), tableName, now, mvcc, scopes);
     wal.appendData(hri, walKey, edit);
     wal.sync();
@@ -440,5 +443,20 @@ public class TestReplicationSmallTests extends TestReplicationBase {
         Thread.sleep(SLEEP_TIME);
       }
     }
+  }
+
+  /**
+   * Test for HBASE-27448 Add an admin method to get replication enabled state
+   */
+  @Test
+  public void testGetReplicationPeerState() throws Exception {
+
+    // Test disable replication peer
+    hbaseAdmin.disableReplicationPeer("2");
+    assertFalse(hbaseAdmin.isReplicationPeerEnabled("2"));
+
+    // Test enable replication peer
+    hbaseAdmin.enableReplicationPeer("2");
+    assertTrue(hbaseAdmin.isReplicationPeerEnabled("2"));
   }
 }

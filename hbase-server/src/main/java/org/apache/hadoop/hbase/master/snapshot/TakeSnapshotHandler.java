@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,14 +17,16 @@
  */
 package org.apache.hadoop.hbase.master.snapshot;
 
+import static org.apache.hadoop.hbase.HConstants.DEFAULT_HBASE_RPC_TIMEOUT;
+import static org.apache.hadoop.hbase.HConstants.HBASE_RPC_TIMEOUT_KEY;
+
 import java.io.IOException;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.CancellationException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.RegionInfo;
@@ -46,7 +48,9 @@ import org.apache.hadoop.hbase.procedure2.LockType;
 import org.apache.hadoop.hbase.snapshot.ClientSnapshotDescriptionUtils;
 import org.apache.hadoop.hbase.snapshot.SnapshotDescriptionUtils;
 import org.apache.hadoop.hbase.snapshot.SnapshotManifest;
+import org.apache.hadoop.hbase.snapshot.SnapshotTTLExpiredException;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException;
@@ -59,16 +63,16 @@ import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
 
 /**
- * A handler for taking snapshots from the master.
- *
- * This is not a subclass of TableEventHandler because using that would incur an extra hbase:meta scan.
- *
- * The {@link #snapshotRegions(List)} call should get implemented for each snapshot flavor.
+ * A handler for taking snapshots from the master. This is not a subclass of TableEventHandler
+ * because using that would incur an extra hbase:meta scan. The {@link #snapshotRegions(List)} call
+ * should get implemented for each snapshot flavor.
  */
 @InterfaceAudience.Private
-public abstract class TakeSnapshotHandler extends EventHandler implements SnapshotSentinel,
-    ForeignExceptionSnare {
+public abstract class TakeSnapshotHandler extends EventHandler
+  implements SnapshotSentinel, ForeignExceptionSnare {
   private static final Logger LOG = LoggerFactory.getLogger(TakeSnapshotHandler.class);
+  public static final String HBASE_SNAPSHOT_MASTER_LOCK_ACQUIRE_TIMEOUT =
+    "hbase.snapshot.master.lock.acquire.timeout";
 
   private volatile boolean finished;
 
@@ -89,19 +93,26 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
   protected final TableName snapshotTable;
   protected final SnapshotManifest snapshotManifest;
   protected final SnapshotManager snapshotManager;
+  /**
+   * Snapshot creation requires table lock. If any region of the table is in transition, table lock
+   * cannot be acquired by LockProcedure and hence snapshot creation could hang for potentially very
+   * long time. This timeout will ensure snapshot creation fails-fast by waiting for only given
+   * timeout.
+   */
+  private final long lockAcquireTimeoutMs;
 
   protected TableDescriptor htd;
 
   /**
-   * @param snapshot descriptor of the snapshot to take
+   * @param snapshot       descriptor of the snapshot to take
    * @param masterServices master services provider
-   * @throws IllegalArgumentException if the working snapshot directory set from the
-   *   configuration is the same as the completed snapshot directory
-   * @throws IOException if the file system of the working snapshot directory cannot be
-   *   determined
+   * @throws IllegalArgumentException if the working snapshot directory set from the configuration
+   *                                  is the same as the completed snapshot directory
+   * @throws IOException              if the file system of the working snapshot directory cannot be
+   *                                  determined
    */
   public TakeSnapshotHandler(SnapshotDescription snapshot, final MasterServices masterServices,
-                             final SnapshotManager snapshotManager) throws IOException {
+    final SnapshotManager snapshotManager) throws IOException {
     super(masterServices, EventType.C_M_SNAPSHOT_TABLE);
     assert snapshot != null : "SnapshotDescription must not be nul1";
     assert masterServices != null : "MasterServices must not be nul1";
@@ -109,10 +120,11 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
     this.conf = this.master.getConfiguration();
     this.rootDir = this.master.getMasterFileSystem().getRootDir();
     this.workingDir = SnapshotDescriptionUtils.getWorkingSnapshotDir(snapshot, rootDir, conf);
-    Preconditions.checkArgument(!SnapshotDescriptionUtils.isSubDirectoryOf(workingDir, rootDir) ||
-            SnapshotDescriptionUtils.isWithinDefaultWorkingDir(workingDir, conf),
-        "The working directory " + workingDir + " cannot be in the root directory unless it is "
-            + "within the default working directory");
+    Preconditions.checkArgument(
+      !SnapshotDescriptionUtils.isSubDirectoryOf(workingDir, rootDir)
+        || SnapshotDescriptionUtils.isWithinDefaultWorkingDir(workingDir, conf),
+      "The working directory " + workingDir + " cannot be in the root directory unless it is "
+        + "within the default working directory");
 
     this.snapshot = snapshot;
     this.snapshotManager = snapshotManager;
@@ -122,29 +134,26 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
     this.workingDirFs = this.workingDir.getFileSystem(this.conf);
     this.monitor = new ForeignExceptionDispatcher(snapshot.getName());
 
-    this.tableLock = master.getLockManager().createMasterLock(
-        snapshotTable, LockType.EXCLUSIVE,
-        this.getClass().getName() + ": take snapshot " + snapshot.getName());
+    this.tableLock = master.getLockManager().createMasterLock(snapshotTable, LockType.EXCLUSIVE,
+      this.getClass().getName() + ": take snapshot " + snapshot.getName());
 
     // prepare the verify
     this.verifier = new MasterSnapshotVerifier(masterServices, snapshot, workingDirFs);
     // update the running tasks
     this.status = TaskMonitor.get().createStatus(
-      "Taking " + snapshot.getType() + " snapshot on table: " + snapshotTable);
-    this.status.enableStatusJournal(true);
+      "Taking " + snapshot.getType() + " snapshot on table: " + snapshotTable, false, true);
     this.snapshotManifest =
-        SnapshotManifest.create(conf, rootFs, workingDir, snapshot, monitor, status);
+      SnapshotManifest.create(conf, rootFs, workingDir, snapshot, monitor, status);
+    this.lockAcquireTimeoutMs = conf.getLong(HBASE_SNAPSHOT_MASTER_LOCK_ACQUIRE_TIMEOUT,
+      conf.getLong(HBASE_RPC_TIMEOUT_KEY, DEFAULT_HBASE_RPC_TIMEOUT));
   }
 
-  private TableDescriptor loadTableDescriptor()
-      throws IOException {
-    TableDescriptor htd =
-      this.master.getTableDescriptors().get(snapshotTable);
+  private TableDescriptor loadTableDescriptor() throws IOException {
+    TableDescriptor htd = this.master.getTableDescriptors().get(snapshotTable);
     if (htd == null) {
       throw new IOException("TableDescriptor missing for " + snapshotTable);
     }
-    if (htd.getMaxFileSize()==-1 &&
-        this.snapshot.getMaxFileSize()>0) {
+    if (htd.getMaxFileSize() == -1 && this.snapshot.getMaxFileSize() > 0) {
       htd = TableDescriptorBuilder.newBuilder(htd).setValue(TableDescriptorBuilder.MAX_FILESIZE,
         Long.toString(this.snapshot.getMaxFileSize())).build();
     }
@@ -155,26 +164,30 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
   public TakeSnapshotHandler prepare() throws Exception {
     super.prepare();
     // after this, you should ensure to release this lock in case of exceptions
-    this.tableLock.acquire();
-    try {
-      this.htd = loadTableDescriptor(); // check that .tableinfo is present
-    } catch (Exception e) {
-      this.tableLock.release();
-      throw e;
+    if (this.tableLock.tryAcquire(this.lockAcquireTimeoutMs)) {
+      try {
+        this.htd = loadTableDescriptor(); // check that .tableinfo is present
+      } catch (Exception e) {
+        this.tableLock.release();
+        throw e;
+      }
+    } else {
+      LOG.error("Master lock could not be acquired in {} ms", lockAcquireTimeoutMs);
+      throw new DoNotRetryIOException("Master lock could not be acquired");
     }
     return this;
   }
 
   /**
-   * Execute the core common portions of taking a snapshot. The {@link #snapshotRegions(List)}
-   * call should get implemented for each snapshot flavor.
+   * Execute the core common portions of taking a snapshot. The {@link #snapshotRegions(List)} call
+   * should get implemented for each snapshot flavor.
    */
   @Override
-  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value="REC_CATCH_EXCEPTION",
-    justification="Intentional")
+  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "REC_CATCH_EXCEPTION",
+      justification = "Intentional")
   public void process() {
     String msg = "Running " + snapshot.getType() + " table snapshot " + snapshot.getName() + " "
-        + eventType + " on table " + snapshotTable;
+      + eventType + " on table " + snapshotTable;
     LOG.info(msg);
     MasterLock tableLockToRelease = this.tableLock;
     status.setStatus(msg);
@@ -184,7 +197,12 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
         tableLockToRelease = master.getLockManager().createMasterLock(snapshotTable,
           LockType.SHARED, this.getClass().getName() + ": take snapshot " + snapshot.getName());
         tableLock.release();
-        tableLockToRelease.acquire();
+        boolean isTableLockAcquired = tableLockToRelease.tryAcquire(this.lockAcquireTimeoutMs);
+        if (!isTableLockAcquired) {
+          LOG.error("Could not acquire shared lock on table {} in {} ms", snapshotTable,
+            lockAcquireTimeoutMs);
+          throw new IOException("Could not acquire shared lock on table " + snapshotTable);
+        }
       }
       // If regions move after this meta scan, the region specific snapshot should fail, triggering
       // an external exception that gets captured here.
@@ -201,23 +219,21 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
       snapshotRegions(regionsAndLocations);
       monitor.rethrowException();
 
-      // extract each pair to separate lists
-      Set<String> serverNames = new HashSet<>();
-      for (Pair<RegionInfo, ServerName> p : regionsAndLocations) {
-        if (p != null && p.getFirst() != null && p.getSecond() != null) {
-          RegionInfo hri = p.getFirst();
-          if (hri.isOffline() && (hri.isSplit() || hri.isSplitParent())) continue;
-          serverNames.add(p.getSecond().toString());
-        }
-      }
-
       // flush the in-memory state, and write the single manifest
       status.setStatus("Consolidate snapshot: " + snapshot.getName());
       snapshotManifest.consolidate();
 
       // verify the snapshot is valid
       status.setStatus("Verifying snapshot: " + snapshot.getName());
-      verifier.verifySnapshot(this.workingDir, serverNames);
+      verifier.verifySnapshot(workingDir, true);
+
+      // HBASE-29296 check snapshot is not expired
+      if (
+        SnapshotDescriptionUtils.isExpiredSnapshot(snapshot.getTtl(), snapshot.getCreationTime(),
+          EnvironmentEdgeManager.currentTime())
+      ) {
+        throw new SnapshotTTLExpiredException(ProtobufUtil.createSnapshotDesc(snapshot));
+      }
 
       // complete the snapshot, atomically moving from tmp to .snapshot dir.
       SnapshotDescriptionUtils.completeSnapshot(this.snapshotDir, this.workingDir, this.rootFs,
@@ -229,13 +245,13 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
       metricsSnapshot.addSnapshot(status.getCompletionTimestamp() - status.getStartTime());
       if (master.getMasterCoprocessorHost() != null) {
         master.getMasterCoprocessorHost()
-            .postCompletedSnapshotAction(ProtobufUtil.createSnapshotDesc(snapshot), this.htd);
+          .postCompletedSnapshotAction(ProtobufUtil.createSnapshotDesc(snapshot), this.htd);
       }
     } catch (Exception e) { // FindBugs: REC_CATCH_EXCEPTION
-      status.abort("Failed to complete snapshot " + snapshot.getName() + " on table " +
-          snapshotTable + " because " + e.getMessage());
+      status.abort("Failed to complete snapshot " + snapshot.getName() + " on table "
+        + snapshotTable + " because " + e.getMessage());
       String reason = "Failed taking snapshot " + ClientSnapshotDescriptionUtils.toString(snapshot)
-          + " due to exception:" + e.getMessage();
+        + " due to exception:" + e.getMessage();
       LOG.error(reason, e);
       ForeignException ee = new ForeignException(reason, e);
       monitor.receive(ee);
@@ -244,13 +260,13 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
     } finally {
       LOG.debug("Launching cleanup of working dir:" + workingDir);
       try {
-        // if the working dir is still present, the snapshot has failed.  it is present we delete
+        // if the working dir is still present, the snapshot has failed. it is present we delete
         // it.
-        if (!workingDirFs.delete(workingDir, true)) {
-          LOG.error("Couldn't delete snapshot working directory:" + workingDir);
+        if (workingDirFs.exists(workingDir) && !workingDirFs.delete(workingDir, true)) {
+          LOG.error("Couldn't delete snapshot working directory: {}", workingDir);
         }
       } catch (IOException e) {
-        LOG.error("Couldn't delete snapshot working directory:" + workingDir);
+        LOG.error("Couldn't get or delete snapshot working directory: {}", workingDir, e);
       }
       if (LOG.isDebugEnabled()) {
         LOG.debug("Table snapshot journal : \n" + status.prettyPrintJournal());
@@ -273,17 +289,16 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
    * Snapshot the specified regions
    */
   protected abstract void snapshotRegions(List<Pair<RegionInfo, ServerName>> regions)
-      throws IOException, KeeperException;
+    throws IOException, KeeperException;
 
   /**
    * Take a snapshot of the specified disabled region
    */
-  protected void snapshotDisabledRegion(final RegionInfo regionInfo)
-      throws IOException {
+  protected void snapshotDisabledRegion(final RegionInfo regionInfo) throws IOException {
     snapshotManifest.addRegion(CommonFSUtils.getTableDir(rootDir, snapshotTable), regionInfo);
     monitor.rethrowException();
-    status.setStatus("Completed referencing HFiles for offline region " + regionInfo.toString() +
-        " of table: " + snapshotTable);
+    status.setStatus("Completed referencing HFiles for offline region " + regionInfo.toString()
+      + " of table: " + snapshotTable);
   }
 
   @Override
@@ -291,8 +306,8 @@ public abstract class TakeSnapshotHandler extends EventHandler implements Snapsh
     if (finished) return;
 
     this.finished = true;
-    LOG.info("Stop taking snapshot=" + ClientSnapshotDescriptionUtils.toString(snapshot) +
-        " because: " + why);
+    LOG.info("Stop taking snapshot=" + ClientSnapshotDescriptionUtils.toString(snapshot)
+      + " because: " + why);
     CancellationException ce = new CancellationException(why);
     monitor.receive(new ForeignException(master.getServerName().toString(), ce));
   }

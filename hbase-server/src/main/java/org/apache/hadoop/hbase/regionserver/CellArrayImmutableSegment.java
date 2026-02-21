@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,45 +17,45 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import java.io.IOException;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.util.ClassSize;
-
-import java.io.IOException;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * CellArrayImmutableSegment extends the API supported by a {@link Segment},
- * and {@link ImmutableSegment}. This immutable segment is working with CellSet with
- * CellArrayMap delegatee.
+ * CellArrayImmutableSegment extends the API supported by a {@link Segment}, and
+ * {@link ImmutableSegment}. This immutable segment is working with CellSet with CellArrayMap
+ * delegatee.
  */
 @InterfaceAudience.Private
 public class CellArrayImmutableSegment extends ImmutableSegment {
 
   public static final long DEEP_OVERHEAD_CAM = DEEP_OVERHEAD + ClassSize.CELL_ARRAY_MAP;
 
-  /////////////////////  CONSTRUCTORS  /////////////////////
-  /**------------------------------------------------------------------------
-   * C-tor to be used when new CellArrayImmutableSegment is a result of compaction of a
-   * list of older ImmutableSegments.
+  ///////////////////// CONSTRUCTORS /////////////////////
+  /**
+   * ------------------------------------------------------------------------ C-tor to be used when
+   * new CellArrayImmutableSegment is a result of compaction of a list of older ImmutableSegments.
    * The given iterator returns the Cells that "survived" the compaction.
    */
   protected CellArrayImmutableSegment(CellComparator comparator, MemStoreSegmentsIterator iterator,
-      MemStoreLAB memStoreLAB, int numOfCells, MemStoreCompactionStrategy.Action action) {
+    MemStoreLAB memStoreLAB, int numOfCells, MemStoreCompactionStrategy.Action action) {
     super(null, comparator, memStoreLAB); // initiailize the CellSet with NULL
     incMemStoreSize(0, DEEP_OVERHEAD_CAM, 0, 0); // CAM is always on-heap
     // build the new CellSet based on CellArrayMap and update the CellSet of the new Segment
     initializeCellSet(numOfCells, iterator, action);
   }
 
-  /**------------------------------------------------------------------------
-   * C-tor to be used when new CellChunkImmutableSegment is built as a result of flattening
-   * of CSLMImmutableSegment
-   * The given iterator returns the Cells that "survived" the compaction.
+  /**
+   * ------------------------------------------------------------------------ C-tor to be used when
+   * new CellChunkImmutableSegment is built as a result of flattening of CSLMImmutableSegment The
+   * given iterator returns the Cells that "survived" the compaction.
    */
   protected CellArrayImmutableSegment(CSLMImmutableSegment segment, MemStoreSizing mss,
-      MemStoreCompactionStrategy.Action action) {
+    MemStoreCompactionStrategy.Action action) {
     super(segment); // initiailize the upper class
     long indexOverhead = DEEP_OVERHEAD_CAM - CSLMImmutableSegment.DEEP_OVERHEAD_CSLM;
     incMemStoreSize(0, indexOverhead, 0, 0); // CAM is always on-heap
@@ -68,7 +67,7 @@ public class CellArrayImmutableSegment extends ImmutableSegment {
     // arrange the meta-data size, decrease all meta-data sizes related to SkipList;
     // add sizes of CellArrayMap entry (reinitializeCellSet doesn't take the care for the sizes)
     long newSegmentSizeDelta =
-        numOfCells * (indexEntrySize() - ClassSize.CONCURRENT_SKIPLISTMAP_ENTRY);
+      numOfCells * (indexEntrySize() - ClassSize.CONCURRENT_SKIPLISTMAP_ENTRY);
     incMemStoreSize(0, newSegmentSizeDelta, 0, 0);
     mss.incMemStoreSize(0, newSegmentSizeDelta, 0, 0);
   }
@@ -83,20 +82,19 @@ public class CellArrayImmutableSegment extends ImmutableSegment {
     return false;
   }
 
-  /////////////////////  PRIVATE METHODS  /////////////////////
+  ///////////////////// PRIVATE METHODS /////////////////////
   /*------------------------------------------------------------------------*/
   // Create CellSet based on CellArrayMap from compacting iterator
   private void initializeCellSet(int numOfCells, MemStoreSegmentsIterator iterator,
-      MemStoreCompactionStrategy.Action action) {
-
-    boolean merge = (action == MemStoreCompactionStrategy.Action.MERGE ||
-        action == MemStoreCompactionStrategy.Action.MERGE_COUNT_UNIQUE_KEYS);
-    Cell[] cells = new Cell[numOfCells];   // build the Cell Array
+    MemStoreCompactionStrategy.Action action) {
+    boolean merge = (action == MemStoreCompactionStrategy.Action.MERGE
+      || action == MemStoreCompactionStrategy.Action.MERGE_COUNT_UNIQUE_KEYS);
+    ExtendedCell[] cells = new ExtendedCell[numOfCells]; // build the Cell Array
     int i = 0;
-    int numUniqueKeys=0;
+    int numUniqueKeys = 0;
     Cell prev = null;
     while (iterator.hasNext()) {
-      Cell c = iterator.next();
+      ExtendedCell c = iterator.next();
       // The scanner behind the iterator is doing all the elimination logic
       if (merge) {
         // if this is merge we just move the Cell object without copying MSLAB
@@ -109,8 +107,8 @@ public class CellArrayImmutableSegment extends ImmutableSegment {
       // second parameter true, because in compaction/merge the addition of the cell to new segment
       // is always successful
       updateMetaInfo(cells[i], true, null); // updates the size per cell
-      if(action == MemStoreCompactionStrategy.Action.MERGE_COUNT_UNIQUE_KEYS) {
-        //counting number of unique keys
+      if (action == MemStoreCompactionStrategy.Action.MERGE_COUNT_UNIQUE_KEYS) {
+        // counting number of unique keys
         if (prev != null) {
           if (!CellUtil.matchingRowColumnBytes(prev, c)) {
             numUniqueKeys++;
@@ -122,33 +120,32 @@ public class CellArrayImmutableSegment extends ImmutableSegment {
       prev = c;
       i++;
     }
-    if(action == MemStoreCompactionStrategy.Action.COMPACT) {
+    if (action == MemStoreCompactionStrategy.Action.COMPACT) {
       numUniqueKeys = numOfCells;
-    } else if(action != MemStoreCompactionStrategy.Action.MERGE_COUNT_UNIQUE_KEYS) {
+    } else if (action != MemStoreCompactionStrategy.Action.MERGE_COUNT_UNIQUE_KEYS) {
       numUniqueKeys = CellSet.UNKNOWN_NUM_UNIQUES;
     }
     // build the immutable CellSet
-    CellArrayMap cam = new CellArrayMap(getComparator(), cells, 0, i, false);
-    this.setCellSet(null, new CellSet(cam, numUniqueKeys));   // update the CellSet of this Segment
+    CellArrayMap<ExtendedCell> cam = new CellArrayMap<>(getComparator(), cells, 0, i, false);
+    this.setCellSet(null, new CellSet<>(cam, numUniqueKeys)); // update the CellSet of this Segment
   }
 
   /*------------------------------------------------------------------------*/
   // Create CellSet based on CellChunkMap from current ConcurrentSkipListMap based CellSet
   // (without compacting iterator)
   // We do not consider cells bigger than chunks!
-  private void reinitializeCellSet(
-      int numOfCells, KeyValueScanner segmentScanner, CellSet oldCellSet,
-      MemStoreCompactionStrategy.Action action) {
-    Cell[] cells = new Cell[numOfCells];   // build the Cell Array
-    Cell curCell;
+  private void reinitializeCellSet(int numOfCells, KeyValueScanner segmentScanner,
+    CellSet<ExtendedCell> oldCellSet, MemStoreCompactionStrategy.Action action) {
+    ExtendedCell[] cells = new ExtendedCell[numOfCells]; // build the Cell Array
+    ExtendedCell curCell;
     int idx = 0;
-    int numUniqueKeys=0;
-    Cell prev = null;
+    int numUniqueKeys = 0;
+    ExtendedCell prev = null;
     try {
       while ((curCell = segmentScanner.next()) != null) {
         cells[idx++] = curCell;
-        if(action == MemStoreCompactionStrategy.Action.FLATTEN_COUNT_UNIQUE_KEYS) {
-          //counting number of unique keys
+        if (action == MemStoreCompactionStrategy.Action.FLATTEN_COUNT_UNIQUE_KEYS) {
+          // counting number of unique keys
           if (prev != null) {
             if (!CellUtil.matchingRowColumn(prev, curCell)) {
               numUniqueKeys++;
@@ -164,13 +161,13 @@ public class CellArrayImmutableSegment extends ImmutableSegment {
     } finally {
       segmentScanner.close();
     }
-    if(action != MemStoreCompactionStrategy.Action.FLATTEN_COUNT_UNIQUE_KEYS) {
+    if (action != MemStoreCompactionStrategy.Action.FLATTEN_COUNT_UNIQUE_KEYS) {
       numUniqueKeys = CellSet.UNKNOWN_NUM_UNIQUES;
     }
     // build the immutable CellSet
-    CellArrayMap cam = new CellArrayMap(getComparator(), cells, 0, idx, false);
+    CellArrayMap<ExtendedCell> cam = new CellArrayMap<>(getComparator(), cells, 0, idx, false);
     // update the CellSet of this Segment
-    this.setCellSet(oldCellSet, new CellSet(cam, numUniqueKeys));
+    this.setCellSet(oldCellSet, new CellSet<>(cam, numUniqueKeys));
   }
 
 }

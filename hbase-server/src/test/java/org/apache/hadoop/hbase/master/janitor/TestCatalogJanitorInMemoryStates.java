@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.master.janitor;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
@@ -117,8 +118,8 @@ public class TestCatalogJanitorInMemoryStates {
     LOG.info("Daughter regions: " + daughters);
     assertNotNull("Should have found daughter regions for " + parent, daughters);
 
-    assertTrue("Parent region should exist in RegionStates",
-      am.getRegionStates().isRegionInRegionStates(parent.getRegion()));
+    assertNotNull("Parent region should exist in RegionStates",
+      am.getRegionStates().getRegionStateNodeFromName(parent.getRegion().getRegionName()));
     assertTrue("Parent region should exist in ServerManager",
       sm.isRegionInServerManagerStates(parent.getRegion()));
 
@@ -132,18 +133,17 @@ public class TestCatalogJanitorInMemoryStates {
       @Override
       public boolean evaluate() throws Exception {
         ProcedureExecutor<MasterProcedureEnv> pe = master.getMasterProcedureExecutor();
-        for (Procedure<MasterProcedureEnv> proc: pe.getProcedures()) {
-          if (proc.getClass().isAssignableFrom(GCRegionProcedure.class) &&
-              proc.isFinished()) {
+        for (Procedure<MasterProcedureEnv> proc : pe.getProcedures()) {
+          if (proc.getClass().isAssignableFrom(GCRegionProcedure.class) && proc.isFinished()) {
             return true;
-          }          
+          }
         }
         return false;
       }
     });
 
-    assertFalse("Parent region should have been removed from RegionStates",
-      am.getRegionStates().isRegionInRegionStates(parent.getRegion()));
+    assertNull("Parent region should have been removed from RegionStates",
+      am.getRegionStates().getRegionStateNodeFromName(parent.getRegion().getRegionName()));
     assertFalse("Parent region should have been removed from ServerManager",
       sm.isRegionInServerManagerStates(parent.getRegion()));
 
@@ -176,7 +176,6 @@ public class TestCatalogJanitorInMemoryStates {
   /*
    * Wait on region split. May return because we waited long enough on the split and it didn't
    * happen. Caller should check.
-   * @param r
    * @return Daughter regions; caller needs to check table actually split.
    */
   private PairOfSameType<RegionInfo> waitOnDaughters(final RegionInfo r) throws IOException {

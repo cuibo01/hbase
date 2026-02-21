@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -110,7 +110,8 @@ public class TestExceptionInUnassignedRegion {
   public static class ThrowInCloseCP implements RegionCoprocessor, RegionObserver {
 
     @Override
-    public void preClose(ObserverContext<RegionCoprocessorEnvironment> c, boolean abortRequested) {
+    public void preClose(ObserverContext<? extends RegionCoprocessorEnvironment> c,
+      boolean abortRequested) {
       if (!c.getEnvironment().getRegion().getRegionInfo().getTable().isSystemTable()) {
         throw new RuntimeException();
       }

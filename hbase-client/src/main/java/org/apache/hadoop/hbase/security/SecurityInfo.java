@@ -17,13 +17,19 @@
  */
 package org.apache.hadoop.hbase.security;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import org.apache.yetus.audience.InterfaceAudience;
 
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
+
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AuthenticationProtos.TokenIdentifier.Kind;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.BootstrapNodeProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.LockServiceProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.MasterService;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos;
@@ -35,30 +41,33 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegistryProtos;
 @InterfaceAudience.Private
 public class SecurityInfo {
   /** Maps RPC service names to authentication information */
-  private static ConcurrentMap<String,SecurityInfo> infos = new ConcurrentHashMap<>();
+  private static ConcurrentMap<String, SecurityInfo> infos = new ConcurrentHashMap<>();
   // populate info for known services
   static {
     infos.put(AdminProtos.AdminService.getDescriptor().getName(),
-        new SecurityInfo(SecurityConstants.REGIONSERVER_KRB_PRINCIPAL,
-            Kind.HBASE_AUTH_TOKEN));
+      new SecurityInfo(SecurityConstants.REGIONSERVER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
     infos.put(ClientProtos.ClientService.getDescriptor().getName(),
-        new SecurityInfo(SecurityConstants.REGIONSERVER_KRB_PRINCIPAL,
-            Kind.HBASE_AUTH_TOKEN));
+      new SecurityInfo(SecurityConstants.REGIONSERVER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
     infos.put(MasterService.getDescriptor().getName(),
-        new SecurityInfo(SecurityConstants.MASTER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
+      new SecurityInfo(SecurityConstants.MASTER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
     infos.put(RegionServerStatusProtos.RegionServerStatusService.getDescriptor().getName(),
-        new SecurityInfo(SecurityConstants.MASTER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
+      new SecurityInfo(SecurityConstants.MASTER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
     infos.put(MasterProtos.HbckService.getDescriptor().getName(),
-        new SecurityInfo(SecurityConstants.MASTER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
+      new SecurityInfo(SecurityConstants.MASTER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
     infos.put(RegistryProtos.ClientMetaService.getDescriptor().getName(),
-        new SecurityInfo(SecurityConstants.MASTER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
+      new SecurityInfo(Kind.HBASE_AUTH_TOKEN, SecurityConstants.MASTER_KRB_PRINCIPAL,
+        SecurityConstants.REGIONSERVER_KRB_PRINCIPAL));
+    infos.put(BootstrapNodeProtos.BootstrapNodeService.getDescriptor().getName(),
+      new SecurityInfo(SecurityConstants.REGIONSERVER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
+    infos.put(LockServiceProtos.LockService.getDescriptor().getName(),
+      new SecurityInfo(SecurityConstants.MASTER_KRB_PRINCIPAL, Kind.HBASE_AUTH_TOKEN));
     // NOTE: IF ADDING A NEW SERVICE, BE SURE TO UPDATE HBasePolicyProvider ALSO ELSE
     // new Service will not be found when all is Kerberized!!!!
   }
 
   /**
-   * Adds a security configuration for a new service name.  Note that this will have no effect if
-   * the service name was already registered.
+   * Adds a security configuration for a new service name. Note that this will have no effect if the
+   * service name was already registered.
    */
   public static void addInfo(String serviceName, SecurityInfo securityInfo) {
     infos.putIfAbsent(serviceName, securityInfo);
@@ -71,16 +80,32 @@ public class SecurityInfo {
     return infos.get(serviceName);
   }
 
-  private final String serverPrincipal;
+  private final List<String> serverPrincipals;
   private final Kind tokenKind;
 
   public SecurityInfo(String serverPrincipal, Kind tokenKind) {
-    this.serverPrincipal = serverPrincipal;
-    this.tokenKind = tokenKind;
+    this(tokenKind, serverPrincipal);
   }
 
+  public SecurityInfo(Kind tokenKind, String... serverPrincipal) {
+    Preconditions.checkArgument(serverPrincipal.length > 0);
+    this.tokenKind = tokenKind;
+    this.serverPrincipals = Arrays.asList(serverPrincipal);
+  }
+
+  /**
+   * Although this class is IA.Private, we leak this class in
+   * {@code SaslClientAuthenticationProvider}, so need to align with the deprecation cycle for that
+   * class.
+   * @deprecated Since 2.6.0, will be removed in 4.0.0. Use {@link #getServerPrincipals()} instead.
+   */
+  @Deprecated
   public String getServerPrincipal() {
-    return serverPrincipal;
+    return serverPrincipals.get(0);
+  }
+
+  public List<String> getServerPrincipals() {
+    return serverPrincipals;
   }
 
   public Kind getTokenKind() {

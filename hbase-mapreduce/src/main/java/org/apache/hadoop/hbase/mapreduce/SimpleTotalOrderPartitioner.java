@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,57 +18,38 @@
 package org.apache.hadoop.hbase.mapreduce;
 
 import java.util.Base64;
-
-import org.apache.yetus.audience.InterfaceAudience;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.mapreduce.Partitioner;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * A partitioner that takes start and end keys and uses bigdecimal to figure
- * which reduce a key belongs to.  Pass the start and end
- * keys in the Configuration using <code>hbase.simpletotalorder.start</code>
- * and <code>hbase.simpletotalorder.end</code>.  The end key needs to be
- * exclusive; i.e. one larger than the biggest key in your key space.
- * You may be surprised at how this class partitions the space; it may not
- * align with preconceptions; e.g. a start key of zero and an end key of 100
- * divided in ten will not make regions whose range is 0-10, 10-20, and so on.
- * Make your own partitioner if you need the region spacing to come out a
- * particular way.
- * @param <VALUE>
- * @see #START
- * @see #END
+ * A partitioner that takes start and end keys and uses bigdecimal to figure which reduce a key
+ * belongs to. Pass the start and end keys in the Configuration using {@value #START_BASE64} and
+ * {@value #END_BASE64}. The end key needs to be exclusive; i.e. one larger than the biggest key in
+ * your key space. You may be surprised at how this class partitions the space; it may not align
+ * with preconceptions; e.g. a start key of zero and an end key of 100 divided in ten will not make
+ * regions whose range is 0-10, 10-20, and so on. Make your own partitioner if you need the region
+ * spacing to come out a particular way.
+ * @see #START_BASE64
+ * @see #END_BASE64
  */
 @InterfaceAudience.Public
 public class SimpleTotalOrderPartitioner<VALUE> extends Partitioner<ImmutableBytesWritable, VALUE>
-implements Configurable {
+  implements Configurable {
   private final static Logger LOG = LoggerFactory.getLogger(SimpleTotalOrderPartitioner.class);
-
-  /**
-   * @deprecated since 0.90.0
-   * @see <a href="https://issues.apache.org/jira/browse/HBASE-1923">HBASE-1923</a>
-   */
-  @Deprecated
-  public static final String START = "hbase.simpletotalorder.start";
-
-  /**
-   * @deprecated since 0.90.0
-   * @see <a href="https://issues.apache.org/jira/browse/HBASE-1923">HBASE-1923</a>
-   */
-  @Deprecated
-  public static final String END = "hbase.simpletotalorder.end";
 
   static final String START_BASE64 = "hbase.simpletotalorder.start.base64";
   static final String END_BASE64 = "hbase.simpletotalorder.end.base64";
 
   private Configuration c;
-  private byte [] startkey;
-  private byte [] endkey;
-  private byte [][] splits;
+  private byte[] startkey;
+  private byte[] endkey;
+  private byte[][] splits;
   private int lastReduces = -1;
 
   public static void setStartKey(Configuration conf, byte[] startKey) {
@@ -80,34 +60,24 @@ implements Configurable {
     conf.set(END_BASE64, Bytes.toString(Base64.getEncoder().encode(endKey)));
   }
 
-  @SuppressWarnings("deprecation")
   static byte[] getStartKey(Configuration conf) {
-    return getKeyFromConf(conf, START_BASE64, START);
+    return getBase64KeyFromConf(conf, START_BASE64);
   }
 
-  @SuppressWarnings("deprecation")
   static byte[] getEndKey(Configuration conf) {
-    return getKeyFromConf(conf, END_BASE64, END);
+    return getBase64KeyFromConf(conf, END_BASE64);
   }
 
-  private static byte[] getKeyFromConf(Configuration conf,
-      String base64Key, String deprecatedKey) {
+  private static byte[] getBase64KeyFromConf(Configuration conf, String base64Key) {
     String encoded = conf.get(base64Key);
     if (encoded != null) {
       return Base64.getDecoder().decode(encoded);
     }
-    String oldStyleVal = conf.get(deprecatedKey);
-    if (oldStyleVal == null) {
-      return null;
-    }
-    LOG.warn("Using deprecated configuration " + deprecatedKey +
-        " - please use static accessor methods instead.");
-    return Bytes.toBytesBinary(oldStyleVal);
+    return null;
   }
 
   @Override
-  public int getPartition(final ImmutableBytesWritable key, final VALUE value,
-      final int reduces) {
+  public int getPartition(final ImmutableBytesWritable key, final VALUE value, final int reduces) {
     if (reduces == 1) return 0;
     if (this.lastReduces != reduces) {
       this.splits = Bytes.split(this.startkey, this.endkey, reduces - 1);
@@ -116,16 +86,14 @@ implements Configurable {
       }
       this.lastReduces = reduces;
     }
-    int pos = Bytes.binarySearch(this.splits, key.get(), key.getOffset(),
-      key.getLength());
+    int pos = Bytes.binarySearch(this.splits, key.get(), key.getOffset(), key.getLength());
     // Below code is from hfile index search.
     if (pos < 0) {
       pos++;
       pos *= -1;
       if (pos == 0) {
         // falls before the beginning of the file.
-        throw new RuntimeException("Key outside start/stop range: " +
-          key.toString());
+        throw new RuntimeException("Key outside start/stop range: " + key.toString());
       }
       pos--;
     }
@@ -145,8 +113,8 @@ implements Configurable {
     if (startkey == null || endkey == null) {
       throw new RuntimeException(this.getClass() + " not configured");
     }
-    LOG.info("startkey=" + Bytes.toStringBinary(startkey) +
-        ", endkey=" + Bytes.toStringBinary(endkey));
+    LOG.info(
+      "startkey=" + Bytes.toStringBinary(startkey) + ", endkey=" + Bytes.toStringBinary(endkey));
     // Reset last reduces count on change of Start / End key
     this.lastReduces = -1;
   }

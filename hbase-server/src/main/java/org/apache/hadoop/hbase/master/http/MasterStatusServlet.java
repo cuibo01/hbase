@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,84 +18,20 @@
 package org.apache.hadoop.hbase.master.http;
 
 import java.io.IOException;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.ServerName;
-import org.apache.hadoop.hbase.client.RegionInfoBuilder;
-import org.apache.hadoop.hbase.master.HMaster;
-import org.apache.hadoop.hbase.master.RegionState;
-import org.apache.hadoop.hbase.master.ServerManager;
-import org.apache.hadoop.hbase.master.assignment.RegionStateNode;
-import org.apache.hadoop.hbase.tmpl.master.MasterStatusTmpl;
-import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * The servlet responsible for rendering the index page of the
- * master.
+ * Only kept for redirecting to master.jsp.
  */
 @InterfaceAudience.Private
 public class MasterStatusServlet extends HttpServlet {
   private static final long serialVersionUID = 1L;
 
   @Override
-  public void doGet(HttpServletRequest request, HttpServletResponse response)
-    throws IOException
-  {
-    HMaster master = (HMaster) getServletContext().getAttribute(HMaster.MASTER);
-    assert master != null : "No Master in context!";
-
-    response.setContentType("text/html");
-
-    Configuration conf = master.getConfiguration();
-
-    Map<String, Integer> frags = getFragmentationInfo(master, conf);
-    ServerName metaLocation = null;
-    List<ServerName> servers = null;
-    Set<ServerName> deadServers = null;
-    
-    if(master.isActiveMaster()) {
-      metaLocation = getMetaLocationOrNull(master);
-      ServerManager serverManager = master.getServerManager();
-      if (serverManager != null) {
-        deadServers = serverManager.getDeadServers().copyServerNames();
-        servers = serverManager.getOnlineServersList();
-      }
-    }
-
-    MasterStatusTmpl tmpl = new MasterStatusTmpl()
-      .setFrags(frags)
-      .setMetaLocation(metaLocation)
-      .setServers(servers)
-      .setDeadServers(deadServers)
-      .setCatalogJanitorEnabled(master.isCatalogJanitorEnabled());
-
-    if (request.getParameter("filter") != null)
-      tmpl.setFilter(request.getParameter("filter"));
-    if (request.getParameter("format") != null)
-      tmpl.setFormat(request.getParameter("format"));
-    tmpl.render(response.getWriter(), master);
-  }
-
-  private ServerName getMetaLocationOrNull(HMaster master) {
-    RegionStateNode rsn = master.getAssignmentManager().getRegionStates()
-      .getRegionStateNode(RegionInfoBuilder.FIRST_META_REGIONINFO);
-    return rsn.isInState(RegionState.State.OPEN) ? rsn.getRegionLocation() : null;
-  }
-
-  private Map<String, Integer> getFragmentationInfo(
-      HMaster master, Configuration conf) throws IOException {
-    boolean showFragmentation = conf.getBoolean(
-        "hbase.master.ui.fragmentation.enabled", false);
-    if (showFragmentation) {
-      return FSUtils.getTableFragmentation(master);
-    } else {
-      return null;
-    }
+  public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+    response.sendRedirect(request.getContextPath() + "/master.jsp");
   }
 }

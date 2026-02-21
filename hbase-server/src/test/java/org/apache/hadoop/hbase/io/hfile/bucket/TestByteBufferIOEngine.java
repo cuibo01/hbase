@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -40,7 +40,7 @@ public class TestByteBufferIOEngine {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestByteBufferIOEngine.class);
+    HBaseClassTestRule.forClass(TestByteBufferIOEngine.class);
 
   /**
    * Override the {@link BucketEntry} so that we can set an arbitrary offset.
@@ -49,7 +49,7 @@ public class TestByteBufferIOEngine {
     private long off;
 
     MockBucketEntry(long offset, int length, ByteBuffAllocator allocator) {
-      super(offset & 0xFF00, length, 0, false, (entry) -> {
+      super(offset & 0xFF00, length, length, 0, false, (entry) -> {
         return ByteBuffAllocator.NONE;
       }, allocator);
       this.off = offset;
@@ -132,8 +132,7 @@ public class TestByteBufferIOEngine {
     private int identifier;
 
     @Override
-    public Cacheable deserialize(final ByteBuff b, ByteBuffAllocator alloc)
-        throws IOException {
+    public Cacheable deserialize(final ByteBuff b, ByteBuffAllocator alloc) throws IOException {
       this.buf = b;
       return null;
     }

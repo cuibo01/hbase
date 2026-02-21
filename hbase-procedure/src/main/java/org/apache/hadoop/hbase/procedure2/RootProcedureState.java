@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,6 +18,7 @@
 package org.apache.hadoop.hbase.procedure2;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -29,15 +30,16 @@ import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos.ProcedureState;
 
 /**
- * Internal state of the ProcedureExecutor that describes the state of a "Root Procedure".
- * A "Root Procedure" is a Procedure without parent, each subprocedure will be
- * added to the "Root Procedure" stack (or rollback-stack).
+ * Internal state of the ProcedureExecutor that describes the state of a "Root Procedure". A "Root
+ * Procedure" is a Procedure without parent, each subprocedure will be added to the "Root Procedure"
+ * stack (or rollback-stack). RootProcedureState is used and managed only by the ProcedureExecutor.
  *
- * RootProcedureState is used and managed only by the ProcedureExecutor.
- *    Long rootProcId = getRootProcedureId(proc);
- *    rollbackStack.get(rootProcId).acquire(proc)
- *    rollbackStack.get(rootProcId).release(proc)
- *    ...
+ * <pre>
+ *   Long rootProcId = getRootProcedureId(proc);
+ *   rollbackStack.get(rootProcId).acquire(proc)
+ *   rollbackStack.get(rootProcId).release(proc)
+ *   ...
+ * </pre>
  */
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
@@ -45,17 +47,24 @@ class RootProcedureState<TEnvironment> {
   private static final Logger LOG = LoggerFactory.getLogger(RootProcedureState.class);
 
   private enum State {
-    RUNNING,         // The Procedure is running or ready to run
-    FAILED,          // The Procedure failed, waiting for the rollback executing
-    ROLLINGBACK,     // The Procedure failed and the execution was rolledback
+    RUNNING, // The Procedure is running or ready to run
+    FAILED, // The Procedure failed, waiting for the rollback executing
+    ROLLINGBACK, // The Procedure failed and the execution was rolledback
   }
 
   private Set<Procedure<TEnvironment>> subprocs = null;
   private ArrayList<Procedure<TEnvironment>> subprocStack = null;
   private State state = State.RUNNING;
   private int running = 0;
+  // for some procedures such as SCP and TRSP, there is no way to rollback, so we do not need to
+  // maintain the rollback steps
+  // TODO: the rollback logic is a bit complicated, so here we will only test whether the root
+  // procedure supports rollback at the very beginning, actually, lots of procedure can only
+  // rollback at the pre check step, after that there is no rollback too, we should try to support
+  // this too.
+  private boolean rollbackSupported;
 
-  public synchronized boolean isFailed() {
+  protected synchronized boolean isFailed() {
     switch (state) {
       case ROLLINGBACK:
       case FAILED:
@@ -66,7 +75,7 @@ class RootProcedureState<TEnvironment> {
     return false;
   }
 
-  public synchronized boolean isRollingback() {
+  protected synchronized boolean isRollingback() {
     return state == State.ROLLINGBACK;
   }
 
@@ -89,6 +98,14 @@ class RootProcedureState<TEnvironment> {
     state = State.FAILED;
   }
 
+  protected synchronized void setRollbackSupported(boolean rollbackSupported) {
+    this.rollbackSupported = rollbackSupported;
+  }
+
+  protected synchronized boolean isRollbackSupported() {
+    return rollbackSupported;
+  }
+
   protected synchronized long[] getSubprocedureIds() {
     if (subprocs == null) {
       return null;
@@ -96,13 +113,17 @@ class RootProcedureState<TEnvironment> {
     return subprocs.stream().mapToLong(Procedure::getProcId).toArray();
   }
 
+  protected synchronized Collection<Procedure<TEnvironment>> getSubprocs() {
+    return subprocs;
+  }
+
   protected synchronized List<Procedure<TEnvironment>> getSubproceduresStack() {
     return subprocStack;
   }
 
   protected synchronized RemoteProcedureException getException() {
-    if (subprocStack != null) {
-      for (Procedure<TEnvironment> proc: subprocStack) {
+    if (subprocs != null) {
+      for (Procedure<TEnvironment> proc : subprocs) {
         if (proc.hasException()) {
           return proc.getException();
         }
@@ -114,7 +135,7 @@ class RootProcedureState<TEnvironment> {
   /**
    * Called by the ProcedureExecutor to mark the procedure step as running.
    */
-  protected synchronized boolean acquire(Procedure<TEnvironment> proc) {
+  protected synchronized boolean acquire() {
     if (state != State.RUNNING) {
       return false;
     }
@@ -126,7 +147,7 @@ class RootProcedureState<TEnvironment> {
   /**
    * Called by the ProcedureExecutor to mark the procedure step as finished.
    */
-  protected synchronized void release(Procedure<TEnvironment> proc) {
+  protected synchronized void release() {
     running--;
   }
 
@@ -137,12 +158,20 @@ class RootProcedureState<TEnvironment> {
   }
 
   /**
-   * Called by the ProcedureExecutor after the procedure step is completed,
-   * to add the step to the rollback list (or procedure stack)
+   * Called by the ProcedureExecutor after the procedure step is completed, to add the step to the
+   * rollback list (or procedure stack).
+   * <p>
+   * Return whether we successfully added the rollback step. If the root procedure has already
+   * crossed the PONR, we do not need to maintain the rollback step,
    */
-  protected synchronized void addRollbackStep(Procedure<TEnvironment> proc) {
+  protected synchronized boolean addRollbackStep(Procedure<TEnvironment> proc) {
     if (proc.isFailed()) {
       state = State.FAILED;
+    }
+    if (!rollbackSupported) {
+      // just record executed, skip adding rollback step
+      proc.setExecuted();
+      return false;
     }
     if (subprocStack == null) {
       subprocStack = new ArrayList<>();
@@ -150,6 +179,7 @@ class RootProcedureState<TEnvironment> {
     proc.addStackIndex(subprocStack.size());
     LOG.trace("Add procedure {} as the {}th rollback step", proc, subprocStack.size());
     subprocStack.add(proc);
+    return true;
   }
 
   protected synchronized void addSubProcedure(Procedure<TEnvironment> proc) {
@@ -163,11 +193,10 @@ class RootProcedureState<TEnvironment> {
   }
 
   /**
-   * Called on store load by the ProcedureExecutor to load part of the stack.
-   *
-   * Each procedure has its own stack-positions. Which means we have to write
-   * to the store only the Procedure we executed, and nothing else.
-   * on load we recreate the full stack by aggregating each procedure stack-positions.
+   * Called on store load by the ProcedureExecutor to load part of the stack. Each procedure has its
+   * own stack-positions. Which means we have to write to the store only the Procedure we executed,
+   * and nothing else. on load we recreate the full stack by aggregating each procedure
+   * stack-positions.
    */
   protected synchronized void loadStack(Procedure<TEnvironment> proc) {
     addSubProcedure(proc);

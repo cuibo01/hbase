@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,6 +20,7 @@ package org.apache.hadoop.hbase.client;
 import static org.apache.hadoop.hbase.util.FutureUtils.addListener;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import org.apache.hadoop.hbase.HRegionLocation;
@@ -41,7 +42,7 @@ class AsyncSingleRequestRpcRetryingCaller<T> extends AsyncRpcRetryingCaller<T> {
   @FunctionalInterface
   public interface Callable<T> {
     CompletableFuture<T> call(HBaseRpcController controller, HRegionLocation loc,
-        ClientService.Interface stub);
+      ClientService.Interface stub);
   }
 
   private final TableName tableName;
@@ -55,11 +56,12 @@ class AsyncSingleRequestRpcRetryingCaller<T> extends AsyncRpcRetryingCaller<T> {
   private final Callable<T> callable;
 
   public AsyncSingleRequestRpcRetryingCaller(Timer retryTimer, AsyncConnectionImpl conn,
-      TableName tableName, byte[] row, int replicaId, RegionLocateType locateType,
-      Callable<T> callable, int priority, long pauseNs, long pauseForCQTBENs, int maxAttempts,
-      long operationTimeoutNs, long rpcTimeoutNs, int startLogErrorsCnt) {
-    super(retryTimer, conn, priority, pauseNs, pauseForCQTBENs, maxAttempts, operationTimeoutNs,
-      rpcTimeoutNs, startLogErrorsCnt);
+    TableName tableName, byte[] row, int replicaId, RegionLocateType locateType,
+    Callable<T> callable, int priority, long pauseNs, long pauseNsForServerOverloaded,
+    int maxAttempts, long operationTimeoutNs, long rpcTimeoutNs, int startLogErrorsCnt,
+    Map<String, byte[]> requestAttributes) {
+    super(retryTimer, conn, priority, pauseNs, pauseNsForServerOverloaded, maxAttempts,
+      operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt, requestAttributes);
     this.tableName = tableName;
     this.row = row;
     this.replicaId = replicaId;
@@ -73,8 +75,8 @@ class AsyncSingleRequestRpcRetryingCaller<T> extends AsyncRpcRetryingCaller<T> {
       stub = conn.getRegionServerStub(loc.getServerName());
     } catch (IOException e) {
       onError(e,
-        () -> "Get async stub to " + loc.getServerName() + " for '" + Bytes.toStringBinary(row) +
-          "' in " + loc.getRegion().getEncodedName() + " of " + tableName + " failed",
+        () -> "Get async stub to " + loc.getServerName() + " for '" + Bytes.toStringBinary(row)
+          + "' in " + loc.getRegion().getEncodedName() + " of " + tableName + " failed",
         err -> conn.getLocator().updateCachedLocationOnError(loc, err));
       return;
     }
@@ -82,8 +84,8 @@ class AsyncSingleRequestRpcRetryingCaller<T> extends AsyncRpcRetryingCaller<T> {
     addListener(callable.call(controller, loc, stub), (result, error) -> {
       if (error != null) {
         onError(error,
-          () -> "Call to " + loc.getServerName() + " for '" + Bytes.toStringBinary(row) + "' in " +
-            loc.getRegion().getEncodedName() + " of " + tableName + " failed",
+          () -> "Call to " + loc.getServerName() + " for '" + Bytes.toStringBinary(row) + "' in "
+            + loc.getRegion().getEncodedName() + " of " + tableName + " failed",
           err -> conn.getLocator().updateCachedLocationOnError(loc, err));
         return;
       }

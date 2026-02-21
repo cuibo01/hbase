@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,32 +17,28 @@
  */
 package org.apache.hadoop.hbase.procedure2;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseCommonTestingUtil;
 import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility.NoopProcedure;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStore;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Category({MasterTests.class, MediumTests.class})
+@Tag(MasterTests.TAG)
+@Tag(MediumTests.TAG)
 public class TestStateMachineProcedure {
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestStateMachineProcedure.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestStateMachineProcedure.class);
 
@@ -62,7 +58,7 @@ public class TestStateMachineProcedure {
 
       // we are going to serialize the exception in the test,
       // so the instance comparison will not match
-      return getMessage().equals(((Exception)other).getMessage());
+      return getMessage().equals(((Exception) other).getMessage());
     }
 
     @Override
@@ -81,7 +77,7 @@ public class TestStateMachineProcedure {
   private Path testDir;
   private Path logDir;
 
-  @Before
+  @BeforeEach
   public void setUp() throws IOException {
     htu = new HBaseCommonTestingUtil();
     testDir = htu.getDataTestDir();
@@ -94,10 +90,10 @@ public class TestStateMachineProcedure {
     ProcedureTestingUtility.initAndStartWorkers(procExecutor, PROCEDURE_EXECUTOR_SLOTS, true);
   }
 
-  @After
+  @AfterEach
   public void tearDown() throws IOException {
     ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdate(procExecutor, false);
-    assertTrue("expected executor to be running", procExecutor.isRunning());
+    assertTrue(procExecutor.isRunning(), "expected executor to be running");
 
     procExecutor.stop();
     procStore.stop(false);
@@ -113,7 +109,7 @@ public class TestStateMachineProcedure {
       Thread.sleep(1000 + (int) (Math.random() * 4001));
       proc.abort(procExecutor.getEnvironment());
       ProcedureTestingUtility.waitProcedure(procExecutor, procId);
-      assertEquals(true, proc.isFailed());
+      assertTrue(proc.isFailed());
     } finally {
       procExecutor.getEnvironment().loop = false;
     }
@@ -171,6 +167,7 @@ public class TestStateMachineProcedure {
   public void testChildOnLastStepWithRollbackDoubleExecution() throws Exception {
     procExecutor.getEnvironment().triggerChildRollback = true;
     ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdate(procExecutor, true);
+    ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdateInRollback(procExecutor, true);
     long procId = procExecutor.submitProcedure(new TestSMProcedure());
     ProcedureTestingUtility.testRecoveryAndDoubleExecution(procExecutor, procId, true);
     assertEquals(6, procExecutor.getEnvironment().execCount.get());
@@ -179,10 +176,13 @@ public class TestStateMachineProcedure {
     assertEquals(TEST_FAILURE_EXCEPTION, cause);
   }
 
-  public enum TestSMProcedureState { STEP_1, STEP_2 }
+  public enum TestSMProcedureState {
+    STEP_1,
+    STEP_2
+  }
 
   public static class TestSMProcedure
-      extends StateMachineProcedure<TestProcEnv, TestSMProcedureState> {
+    extends StateMachineProcedure<TestProcEnv, TestSMProcedureState> {
     @Override
     protected Flow executeFromState(TestProcEnv env, TestSMProcedureState state) {
       LOG.info("EXEC " + state + " " + this);
@@ -228,7 +228,7 @@ public class TestStateMachineProcedure {
   }
 
   public static class TestSMProcedureBadRollback
-          extends StateMachineProcedure<TestProcEnv, TestSMProcedureState> {
+    extends StateMachineProcedure<TestProcEnv, TestSMProcedureState> {
     @Override
     protected Flow executeFromState(TestProcEnv env, TestSMProcedureState state) {
       LOG.info("EXEC " + state + " " + this);
@@ -245,6 +245,12 @@ public class TestStateMachineProcedure {
       }
       return Flow.HAS_MORE_STATE;
     }
+
+    @Override
+    protected boolean isRollbackSupported(TestSMProcedureState state) {
+      return true;
+    }
+
     @Override
     protected void rollbackState(TestProcEnv env, TestSMProcedureState state) {
       LOG.info("ROLLBACK " + state + " " + this);
@@ -267,8 +273,7 @@ public class TestStateMachineProcedure {
     }
 
     @Override
-    protected void rollback(final TestProcEnv env)
-            throws IOException, InterruptedException {
+    protected void rollback(final TestProcEnv env) throws IOException, InterruptedException {
       if (isEofState()) {
         stateCount--;
       }
@@ -276,8 +281,8 @@ public class TestStateMachineProcedure {
         updateTimestamp();
         rollbackState(env, getCurrentState());
         throw new IOException();
-      } catch(IOException e) {
-        //do nothing for now
+      } catch (IOException e) {
+        // do nothing for now
       } finally {
         stateCount--;
         updateTimestamp();

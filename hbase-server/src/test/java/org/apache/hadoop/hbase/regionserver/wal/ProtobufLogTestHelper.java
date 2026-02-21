@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,8 +21,10 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.util.stream.IntStream;
 import org.apache.hadoop.hbase.Cell;
@@ -36,6 +38,7 @@ import org.apache.hadoop.hbase.regionserver.MultiVersionConcurrencyControl;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALEditInternalHelper;
 import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.apache.hadoop.hbase.wal.WALProvider;
 
@@ -56,18 +59,19 @@ public final class ProtobufLogTestHelper {
   }
 
   private static WAL.Entry generateEdit(int i, RegionInfo hri, TableName tableName, byte[] row,
-      int columnCount, long timestamp, MultiVersionConcurrencyControl mvcc) {
+    int columnCount, long timestamp, MultiVersionConcurrencyControl mvcc) {
     WALKeyImpl key = new WALKeyImpl(hri.getEncodedNameAsBytes(), tableName, i, timestamp,
-        HConstants.DEFAULT_CLUSTER_ID, mvcc);
+      HConstants.DEFAULT_CLUSTER_ID, mvcc);
     WALEdit edit = new WALEdit();
     int prefix = i;
     IntStream.range(0, columnCount).mapToObj(j -> toValue(prefix, j))
-        .map(value -> new KeyValue(row, row, row, timestamp, value)).forEachOrdered(edit::add);
+      .map(value -> new KeyValue(row, row, row, timestamp, value))
+      .forEachOrdered(c -> WALEditInternalHelper.addExtendedCell(edit, c));
     return new WAL.Entry(key, edit);
   }
 
   public static void doWrite(WALProvider.Writer writer, boolean withTrailer, TableName tableName,
-      int columnCount, int recordCount, byte[] row, long timestamp) throws IOException {
+    int columnCount, int recordCount, byte[] row, long timestamp) throws IOException {
     RegionInfo hri = toRegionInfo(tableName);
     for (int i = 0; i < recordCount; i++) {
       writer.append(generateEdit(i, hri, tableName, row, columnCount, timestamp, null));
@@ -79,8 +83,8 @@ public final class ProtobufLogTestHelper {
   }
 
   public static void doWrite(WAL wal, RegionInfo hri, TableName tableName, int columnCount,
-      int recordCount, byte[] row, long timestamp, MultiVersionConcurrencyControl mvcc)
-      throws IOException {
+    int recordCount, byte[] row, long timestamp, MultiVersionConcurrencyControl mvcc)
+    throws IOException {
     for (int i = 0; i < recordCount; i++) {
       WAL.Entry entry = generateEdit(i, hri, tableName, row, columnCount, timestamp, mvcc);
       wal.appendData(hri, entry.getKey(), entry.getEdit());
@@ -88,9 +92,9 @@ public final class ProtobufLogTestHelper {
     wal.sync();
   }
 
-  public static void doRead(ProtobufLogReader reader, boolean withTrailer, RegionInfo hri,
-      TableName tableName, int columnCount, int recordCount, byte[] row, long timestamp)
-      throws IOException {
+  public static void doRead(ProtobufWALStreamReader reader, boolean withTrailer, RegionInfo hri,
+    TableName tableName, int columnCount, int recordCount, byte[] row, long timestamp)
+    throws IOException {
     if (withTrailer) {
       assertNotNull(reader.trailer);
     } else {
@@ -110,11 +114,18 @@ public final class ProtobufLogTestHelper {
         idx++;
       }
     }
-    assertNull(reader.next());
+    if (withTrailer) {
+      // we can finish normally
+      assertNull(reader.next());
+    } else {
+      // we will get an EOF since there is no trailer
+      assertThrows(EOFException.class, () -> reader.next());
+    }
   }
 
-  public static void doRead(ProtobufLogReader reader, boolean withTrailer, TableName tableName,
-      int columnCount, int recordCount, byte[] row, long timestamp) throws IOException {
+  public static void doRead(ProtobufWALStreamReader reader, boolean withTrailer,
+    TableName tableName, int columnCount, int recordCount, byte[] row, long timestamp)
+    throws IOException {
     doRead(reader, withTrailer, toRegionInfo(tableName), tableName, columnCount, recordCount, row,
       timestamp);
   }

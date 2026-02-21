@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.master;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.Semaphore;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableDescriptors;
@@ -32,7 +33,9 @@ import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.executor.ExecutorService;
 import org.apache.hadoop.hbase.favored.FavoredNodesManager;
+import org.apache.hadoop.hbase.keymeta.KeyManagementService;
 import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
+import org.apache.hadoop.hbase.master.hbck.HbckChore;
 import org.apache.hadoop.hbase.master.janitor.CatalogJanitor;
 import org.apache.hadoop.hbase.master.locking.LockManager;
 import org.apache.hadoop.hbase.master.normalizer.RegionNormalizerManager;
@@ -51,297 +54,205 @@ import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
 import org.apache.hadoop.hbase.replication.SyncReplicationState;
+import org.apache.hadoop.hbase.replication.master.ReplicationLogCleanerBarrier;
 import org.apache.hadoop.hbase.rsgroup.RSGroupInfoManager;
 import org.apache.hadoop.hbase.security.access.AccessChecker;
 import org.apache.hadoop.hbase.security.access.ZKPermissionWatcher;
-import org.apache.hadoop.hbase.zookeeper.LoadBalancerTracker;
 import org.apache.yetus.audience.InterfaceAudience;
 
 import org.apache.hbase.thirdparty.com.google.protobuf.Service;
 
 /**
- * A curated subset of services provided by {@link HMaster}.
- * For use internally only. Passed to Managers, Services and Chores so can pass less-than-a
- * full-on HMaster at test-time. Be judicious adding API. Changes cause ripples through
- * the code base.
+ * A curated subset of services provided by {@link HMaster}. For use internally only. Passed to
+ * Managers, Services and Chores so can pass less-than-a full-on HMaster at test-time. Be judicious
+ * adding API. Changes cause ripples through the code base.
  */
 @InterfaceAudience.Private
-public interface MasterServices extends Server {
-  /**
-   * @return the underlying snapshot manager
-   */
+public interface MasterServices extends Server, KeyManagementService {
+  /** Returns the underlying snapshot manager */
   SnapshotManager getSnapshotManager();
 
-  /**
-   * @return the underlying MasterProcedureManagerHost
-   */
+  /** Returns the underlying MasterProcedureManagerHost */
   MasterProcedureManagerHost getMasterProcedureManagerHost();
 
-  /**
-   * @return Master's instance of {@link ClusterSchema}
-   */
+  /** Returns Master's instance of {@link ClusterSchema} */
   ClusterSchema getClusterSchema();
 
-  /**
-   * @return Master's instance of the {@link AssignmentManager}
-   */
+  /** Returns Master's instance of the {@link AssignmentManager} */
   AssignmentManager getAssignmentManager();
 
-  /**
-   * @return Master's filesystem {@link MasterFileSystem} utility class.
-   */
+  /** Returns Master's filesystem {@link MasterFileSystem} utility class. */
   MasterFileSystem getMasterFileSystem();
 
-  /**
-   * @return Master's WALs {@link MasterWalManager} utility class.
-   */
+  /** Returns Master's WALs {@link MasterWalManager} utility class. */
   MasterWalManager getMasterWalManager();
 
-  /**
-   * @return Master's {@link ServerManager} instance.
-   */
+  /** Rotates the system key if changed, returns true if a new key was detected and rotated */
+  boolean rotateSystemKeyIfChanged() throws IOException;
+
+  /** Returns Master's {@link ServerManager} instance. */
   ServerManager getServerManager();
 
-  /**
-   * @return Master's instance of {@link ExecutorService}
-   */
+  /** Returns Master's instance of {@link ExecutorService} */
   ExecutorService getExecutorService();
 
-  /**
-   * @return Master's instance of {@link TableStateManager}
-   */
+  /** Returns Master's instance of {@link TableStateManager} */
   TableStateManager getTableStateManager();
 
-  /**
-   * @return Master's instance of {@link MasterCoprocessorHost}
-   */
+  /** Returns Master's instance of {@link MasterCoprocessorHost} */
   MasterCoprocessorHost getMasterCoprocessorHost();
 
-  /**
-   * @return Master's instance of {@link MasterQuotaManager}
-   */
+  /** Returns Master's instance of {@link MasterQuotaManager} */
   MasterQuotaManager getMasterQuotaManager();
 
-  /**
-   * @return Master's instance of {@link RegionNormalizerManager}
-   */
+  /** Returns Master's instance of {@link RegionNormalizerManager} */
   RegionNormalizerManager getRegionNormalizerManager();
 
-  /**
-   * @return Master's instance of {@link CatalogJanitor}
-   */
+  /** Returns Master's instance of {@link CatalogJanitor} */
   CatalogJanitor getCatalogJanitor();
 
-  /**
-   * @return Master's instance of {@link ProcedureExecutor}
-   */
+  /** Returns Master's instance of {@link HbckChore} */
+  HbckChore getHbckChore();
+
+  /** Returns Master's instance of {@link ProcedureExecutor} */
   ProcedureExecutor<MasterProcedureEnv> getMasterProcedureExecutor();
 
-  /**
-   * @return Tripped when Master has finished initialization.
-   */
+  /** Returns Tripped when Master has finished initialization. */
   public ProcedureEvent<?> getInitializedEvent();
 
-  /**
-   * @return Master's instance of {@link MetricsMaster}
-   */
+  /** Returns Master's instance of {@link MetricsMaster} */
   MetricsMaster getMasterMetrics();
 
   /**
    * Check table is modifiable; i.e. exists and is offline.
    * @param tableName Name of table to check.
-   * @throws TableNotDisabledException
-   * @throws TableNotFoundException
-   * @throws IOException
    */
   // We actually throw the exceptions mentioned in the
   void checkTableModifiable(final TableName tableName)
-      throws IOException, TableNotFoundException, TableNotDisabledException;
+    throws IOException, TableNotFoundException, TableNotDisabledException;
 
   /**
    * Create a table using the given table definition.
-   * @param desc The table definition
-   * @param splitKeys Starting row keys for the initial table regions.  If null
-   * @param nonceGroup
-   * @param nonce
-   *     a single region is created.
+   * @param desc      The table definition
+   * @param splitKeys Starting row keys for the initial table regions. If null a single region is
+   *                  created.
    */
-  long createTable(
-      final TableDescriptor desc,
-      final byte[][] splitKeys,
-      final long nonceGroup,
-      final long nonce) throws IOException;
+  long createTable(final TableDescriptor desc, final byte[][] splitKeys, final long nonceGroup,
+    final long nonce) throws IOException;
 
   /**
    * Create a system table using the given table definition.
-   * @param tableDescriptor The system table definition
-   *     a single region is created.
+   * @param tableDescriptor The system table definition a single region is created.
    */
   long createSystemTable(final TableDescriptor tableDescriptor) throws IOException;
 
   /**
    * Delete a table
    * @param tableName The table name
-   * @param nonceGroup
-   * @param nonce
-   * @throws IOException
    */
-  long deleteTable(
-      final TableName tableName,
-      final long nonceGroup,
-      final long nonce) throws IOException;
+  long deleteTable(final TableName tableName, final long nonceGroup, final long nonce)
+    throws IOException;
 
   /**
    * Truncate a table
-   * @param tableName The table name
+   * @param tableName      The table name
    * @param preserveSplits True if the splits should be preserved
-   * @param nonceGroup
-   * @param nonce
-   * @throws IOException
    */
-  public long truncateTable(
-      final TableName tableName,
-      final boolean preserveSplits,
-      final long nonceGroup,
-      final long nonce) throws IOException;
+  public long truncateTable(final TableName tableName, final boolean preserveSplits,
+    final long nonceGroup, final long nonce) throws IOException;
 
   /**
    * Modify the descriptor of an existing table
-   * @param tableName The table name
+   * @param tableName  The table name
    * @param descriptor The updated table descriptor
-   * @param nonceGroup
-   * @param nonce
-   * @throws IOException
    */
-  long modifyTable(
-      final TableName tableName,
-      final TableDescriptor descriptor,
-      final long nonceGroup,
-      final long nonce)
-      throws IOException;
+  default long modifyTable(final TableName tableName, final TableDescriptor descriptor,
+    final long nonceGroup, final long nonce) throws IOException {
+    return modifyTable(tableName, descriptor, nonceGroup, nonce, true);
+  }
+
+  /**
+   * Modify the descriptor of an existing table
+   * @param tableName     The table name
+   * @param descriptor    The updated table descriptor
+   * @param reopenRegions Whether to reopen regions after modifying the table descriptor
+   */
+  long modifyTable(final TableName tableName, final TableDescriptor descriptor,
+    final long nonceGroup, final long nonce, final boolean reopenRegions) throws IOException;
 
   /**
    * Modify the store file tracker of an existing table
    */
-  long modifyTableStoreFileTracker(
-    final TableName tableName,
-    final String dstSFT,
-    final long nonceGroup,
-    final long nonce) throws IOException;
+  long modifyTableStoreFileTracker(final TableName tableName, final String dstSFT,
+    final long nonceGroup, final long nonce) throws IOException;
 
   /**
    * Enable an existing table
    * @param tableName The table name
-   * @param nonceGroup
-   * @param nonce
-   * @throws IOException
    */
-  long enableTable(
-      final TableName tableName,
-      final long nonceGroup,
-      final long nonce) throws IOException;
+  long enableTable(final TableName tableName, final long nonceGroup, final long nonce)
+    throws IOException;
 
   /**
    * Disable an existing table
    * @param tableName The table name
-   * @param nonceGroup
-   * @param nonce
-   * @throws IOException
    */
-  long disableTable(
-      final TableName tableName,
-      final long nonceGroup,
-      final long nonce) throws IOException;
-
+  long disableTable(final TableName tableName, final long nonceGroup, final long nonce)
+    throws IOException;
 
   /**
    * Add a new column to an existing table
    * @param tableName The table name
-   * @param column The column definition
-   * @param nonceGroup
-   * @param nonce
-   * @throws IOException
+   * @param column    The column definition
    */
-  long addColumn(
-      final TableName tableName,
-      final ColumnFamilyDescriptor column,
-      final long nonceGroup,
-      final long nonce)
-      throws IOException;
+  long addColumn(final TableName tableName, final ColumnFamilyDescriptor column,
+    final long nonceGroup, final long nonce) throws IOException;
 
   /**
    * Modify the column descriptor of an existing column in an existing table
-   * @param tableName The table name
+   * @param tableName  The table name
    * @param descriptor The updated column definition
-   * @param nonceGroup
-   * @param nonce
-   * @throws IOException
    */
-  long modifyColumn(
-      final TableName tableName,
-      final ColumnFamilyDescriptor descriptor,
-      final long nonceGroup,
-      final long nonce)
-      throws IOException;
+  long modifyColumn(final TableName tableName, final ColumnFamilyDescriptor descriptor,
+    final long nonceGroup, final long nonce) throws IOException;
 
   /**
    * Modify the store file tracker of an existing column in an existing table
    */
-  long modifyColumnStoreFileTracker(
-    final TableName tableName,
-    final byte[] family,
-    final String dstSFT,
-    final long nonceGroup,
-    final long nonce) throws IOException;
+  long modifyColumnStoreFileTracker(final TableName tableName, final byte[] family,
+    final String dstSFT, final long nonceGroup, final long nonce) throws IOException;
 
   /**
    * Delete a column from an existing table
-   * @param tableName The table name
+   * @param tableName  The table name
    * @param columnName The column name
-   * @param nonceGroup
-   * @param nonce
-   * @throws IOException
    */
-  long deleteColumn(
-      final TableName tableName,
-      final byte[] columnName,
-      final long nonceGroup,
-      final long nonce)
-      throws IOException;
+  long deleteColumn(final TableName tableName, final byte[] columnName, final long nonceGroup,
+    final long nonce) throws IOException;
 
   /**
    * Merge regions in a table.
    * @param regionsToMerge daughter regions to merge
-   * @param forcible whether to force to merge even two regions are not adjacent
-   * @param nonceGroup used to detect duplicate
-   * @param nonce used to detect duplicate
-   * @return  procedure Id
-   * @throws IOException
+   * @param forcible       whether to force to merge even two regions are not adjacent
+   * @param nonceGroup     used to detect duplicate
+   * @param nonce          used to detect duplicate
+   * @return procedure Id
    */
-  long mergeRegions(
-      final RegionInfo[] regionsToMerge,
-      final boolean forcible,
-      final long nonceGroup,
-      final long nonce) throws IOException;
+  long mergeRegions(final RegionInfo[] regionsToMerge, final boolean forcible,
+    final long nonceGroup, final long nonce) throws IOException;
 
   /**
    * Split a region.
    * @param regionInfo region to split
-   * @param splitRow split point
+   * @param splitRow   split point
    * @param nonceGroup used to detect duplicate
-   * @param nonce used to detect duplicate
-   * @return  procedure Id
-   * @throws IOException
+   * @param nonce      used to detect duplicate
+   * @return procedure Id
    */
-  long splitRegion(
-      final RegionInfo regionInfo,
-      final byte [] splitRow,
-      final long nonceGroup,
-      final long nonce) throws IOException;
+  long splitRegion(final RegionInfo regionInfo, final byte[] splitRow, final long nonceGroup,
+    final long nonce) throws IOException;
 
-  /**
-   * @return Return table descriptors implementation.
-   */
+  /** Returns Return table descriptors implementation. */
   TableDescriptors getTableDescriptors();
 
   /**
@@ -357,14 +268,13 @@ public interface MasterServices extends Server {
    */
   boolean registerService(Service instance);
 
-  /**
-   * @return true if master is the active one
-   */
+  /** Returns true if master is the active one */
   boolean isActiveMaster();
 
-  /**
-   * @return true if master is initialized
-   */
+  /** Returns timestamp in millis when this master became the active one. */
+  long getMasterActiveTime();
+
+  /** Returns true if master is initialized */
   boolean isInitialized();
 
   /**
@@ -382,33 +292,28 @@ public interface MasterServices extends Server {
 
   /**
    * Abort a procedure.
-   * @param procId ID of the procedure
+   * @param procId                ID of the procedure
    * @param mayInterruptIfRunning if the proc completed at least one step, should it be aborted?
    * @return true if aborted, false if procedure already completed or does not exist
-   * @throws IOException
    */
   public boolean abortProcedure(final long procId, final boolean mayInterruptIfRunning)
-      throws IOException;
+    throws IOException;
 
   /**
    * Get procedures
    * @return procedure list
-   * @throws IOException
    */
   public List<Procedure<?>> getProcedures() throws IOException;
 
   /**
    * Get locks
    * @return lock list
-   * @throws IOException
    */
   public List<LockedResource> getLocks() throws IOException;
 
   /**
    * Get list of table descriptors by namespace
    * @param name namespace name
-   * @return descriptors
-   * @throws IOException
    */
   public List<TableDescriptor> listTableDescriptorsByNamespace(String name) throws IOException;
 
@@ -416,46 +321,38 @@ public interface MasterServices extends Server {
    * Get list of table names by namespace
    * @param name namespace name
    * @return table names
-   * @throws IOException
    */
   public List<TableName> listTableNamesByNamespace(String name) throws IOException;
 
   /**
    * @param table the table for which last successful major compaction time is queried
-   * @return the timestamp of the last successful major compaction for the passed table,
-   * or 0 if no HFile resulting from a major compaction exists
-   * @throws IOException
+   * @return the timestamp of the last successful major compaction for the passed table, or 0 if no
+   *         HFile resulting from a major compaction exists
    */
   public long getLastMajorCompactionTimestamp(TableName table) throws IOException;
 
   /**
-   * @param regionName
-   * @return the timestamp of the last successful major compaction for the passed region
-   * or 0 if no HFile resulting from a major compaction exists
-   * @throws IOException
+   * Returns the timestamp of the last successful major compaction for the passed region or 0 if no
+   * HFile resulting from a major compaction exists
    */
   public long getLastMajorCompactionTimestampForRegion(byte[] regionName) throws IOException;
 
-  /**
-   * @return load balancer
-   */
+  /** Returns load balancer */
   public LoadBalancer getLoadBalancer();
 
   boolean isSplitOrMergeEnabled(MasterSwitchType switchType);
 
-  /**
-   * @return Favored Nodes Manager
-   */
+  /** Returns Favored Nodes Manager */
   public FavoredNodesManager getFavoredNodesManager();
 
   /**
    * Add a new replication peer for replicating data to slave cluster
-   * @param peerId a short name that identifies the peer
+   * @param peerId     a short name that identifies the peer
    * @param peerConfig configuration for the replication slave cluster
-   * @param enabled peer state, true if ENABLED and false if DISABLED
+   * @param enabled    peer state, true if ENABLED and false if DISABLED
    */
   long addReplicationPeer(String peerId, ReplicationPeerConfig peerConfig, boolean enabled)
-      throws ReplicationException, IOException;
+    throws ReplicationException, IOException;
 
   /**
    * Removes a peer and stops the replication
@@ -480,13 +377,24 @@ public interface MasterServices extends Server {
    * @param peerId a short name that identifies the peer
    * @return ReplicationPeerConfig for the peer
    */
-  ReplicationPeerConfig getReplicationPeerConfig(String peerId) throws ReplicationException,
-      IOException;
+  ReplicationPeerConfig getReplicationPeerConfig(String peerId)
+    throws ReplicationException, IOException;
 
   /**
    * Returns the {@link ReplicationPeerManager}.
    */
   ReplicationPeerManager getReplicationPeerManager();
+
+  /**
+   * Returns the {@link ReplicationLogCleanerBarrier}. It will be used at multiple places so we put
+   * it in MasterServices directly.
+   */
+  ReplicationLogCleanerBarrier getReplicationLogCleanerBarrier();
+
+  /**
+   * Returns the SyncReplicationPeerLock.
+   */
+  Semaphore getSyncReplicationPeerLock();
 
   /**
    * Returns the {@link SyncReplicationReplayWALManager}.
@@ -495,64 +403,57 @@ public interface MasterServices extends Server {
 
   /**
    * Update the peerConfig for the specified peer
-   * @param peerId a short name that identifies the peer
+   * @param peerId     a short name that identifies the peer
    * @param peerConfig new config for the peer
    */
   long updateReplicationPeerConfig(String peerId, ReplicationPeerConfig peerConfig)
-      throws ReplicationException, IOException;
+    throws ReplicationException, IOException;
 
   /**
    * Return a list of replication peers.
    * @param regex The regular expression to match peer id
    * @return a list of replication peers description
    */
-  List<ReplicationPeerDescription> listReplicationPeers(String regex) throws ReplicationException,
-      IOException;
+  List<ReplicationPeerDescription> listReplicationPeers(String regex)
+    throws ReplicationException, IOException;
 
   /**
    * Set current cluster state for a synchronous replication peer.
-   * @param peerId a short name that identifies the peer
+   * @param peerId       a short name that identifies the peer
    * @param clusterState state of current cluster
    */
   long transitReplicationPeerSyncReplicationState(String peerId, SyncReplicationState clusterState)
-      throws ReplicationException, IOException;
+    throws ReplicationException, IOException;
 
-  /**
-   * @return {@link LockManager} to lock namespaces/tables/regions.
-   */
+  boolean replicationPeerModificationSwitch(boolean on) throws IOException;
+
+  boolean isReplicationPeerModificationEnabled();
+
+  /** Returns {@link LockManager} to lock namespaces/tables/regions. */
   LockManager getLockManager();
 
   public String getRegionServerVersion(final ServerName sn);
 
   /**
-   * Called when a new RegionServer is added to the cluster.
-   * Checks if new server has a newer version than any existing server and will move system tables
-   * there if so.
+   * Called when a new RegionServer is added to the cluster. Checks if new server has a newer
+   * version than any existing server and will move system tables there if so.
    */
   public void checkIfShouldMoveSystemRegionAsync();
 
   String getClientIdAuditPrefix();
 
-  /**
-   * @return True if cluster is up; false if cluster is not up (we are shutting down).
-   */
+  /** Returns True if cluster is up; false if cluster is not up (we are shutting down). */
   boolean isClusterUp();
 
-  /**
-   * @return return null if current is zk-based WAL splitting
-   */
-  default SplitWALManager getSplitWALManager(){
+  /** Returns return null if current is zk-based WAL splitting */
+  default SplitWALManager getSplitWALManager() {
     return null;
   }
 
-  /**
-   * @return the {@link AccessChecker}
-   */
+  /** Returns the {@link AccessChecker} */
   AccessChecker getAccessChecker();
 
-  /**
-   * @return the {@link ZKPermissionWatcher}
-   */
+  /** Returns the {@link ZKPermissionWatcher} */
   ZKPermissionWatcher getZKPermissionWatcher();
 
   /**
@@ -567,28 +468,25 @@ public interface MasterServices extends Server {
    */
   void runReplicationBarrierCleaner();
 
-  /**
-   * @return the {@link RSGroupInfoManager}
-   */
+  /** Returns the {@link RSGroupInfoManager} */
   RSGroupInfoManager getRSGroupInfoManager();
 
   /**
-   * Queries the state of the {@link LoadBalancerTracker}. If the balancer is not initialized,
+   * Queries the state of the {@code LoadBalancerStateStore}. If the balancer is not initialized,
    * false is returned.
-   *
    * @return The state of the load balancer, or false if the load balancer isn't defined.
    */
   boolean isBalancerOn();
 
   /**
    * Perform normalization of cluster.
-   * @param ntfp Selection criteria for identifying which tables to normalize.
-   * @param isHighPriority {@code true} when these requested tables should skip to the front of
-   *   the queue.
+   * @param ntfp           Selection criteria for identifying which tables to normalize.
+   * @param isHighPriority {@code true} when these requested tables should skip to the front of the
+   *                       queue.
    * @return {@code true} when the request was submitted, {@code false} otherwise.
    */
-  boolean normalizeRegions(
-    final NormalizeTableFilterParams ntfp, final boolean isHighPriority) throws IOException;
+  boolean normalizeRegions(final NormalizeTableFilterParams ntfp, final boolean isHighPriority)
+    throws IOException;
 
   /**
    * Get the meta location syncer.
@@ -596,4 +494,35 @@ public interface MasterServices extends Server {
    * We need to get this in MTP to tell the syncer the new meta replica count.
    */
   MetaLocationSyncer getMetaLocationSyncer();
+
+  /**
+   * Flush master local region
+   */
+  void flushMasterStore() throws IOException;
+
+  /**
+   * Flush an existing table
+   * @param tableName      The table name
+   * @param columnFamilies The column families to flush
+   * @param nonceGroup     the nonce group
+   * @param nonce          the nonce
+   * @return the flush procedure id
+   */
+  long flushTable(final TableName tableName, final List<byte[]> columnFamilies,
+    final long nonceGroup, final long nonce) throws IOException;
+
+  /**
+   * Truncate region
+   * @param regionInfo region to be truncated
+   * @param nonceGroup the nonce group
+   * @param nonce      the nonce
+   * @return procedure Id
+   */
+  long truncateRegion(RegionInfo regionInfo, long nonceGroup, long nonce) throws IOException;
+
+  /**
+   * Roll WAL writer for all RegionServers
+   * @return procedure id
+   */
+  long rollAllWALWriters(long nonceGroup, long nonce) throws IOException;
 }

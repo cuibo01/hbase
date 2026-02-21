@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,23 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.security;
 
 import java.io.IOException;
 import java.util.Collection;
-import java.util.HashSet;
-import java.util.Set;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.AuthUtil;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.google.common.collect.ImmutableSet;
+
 /**
- * Keeps lists of superusers and super groups loaded from HBase configuration,
- * checks if certain user is regarded as superuser.
+ * Keeps lists of superusers and super groups loaded from HBase configuration, checks if certain
+ * user is regarded as superuser.
  */
 @InterfaceAudience.Private
 public final class Superusers {
@@ -41,22 +38,23 @@ public final class Superusers {
   /** Configuration key for superusers */
   public static final String SUPERUSER_CONF_KEY = "hbase.superuser"; // Not getting a name
 
-  private static Set<String> superUsers;
-  private static Set<String> superGroups;
+  private static ImmutableSet<String> superUsers;
+  private static ImmutableSet<String> superGroups;
   private static User systemUser;
 
-  private Superusers(){}
+  private Superusers() {
+  }
 
   /**
-   * Should be called only once to pre-load list of super users and super
-   * groups from Configuration. This operation is idempotent.
+   * Should be called only once to pre-load list of super users and super groups from Configuration.
+   * This operation is idempotent.
    * @param conf configuration to load users from
-   * @throws IOException if unable to initialize lists of superusers or super groups
+   * @throws IOException           if unable to initialize lists of superusers or super groups
    * @throws IllegalStateException if current user is null
    */
   public static void initialize(Configuration conf) throws IOException {
-    superUsers = new HashSet<>();
-    superGroups = new HashSet<>();
+    ImmutableSet.Builder<String> superUsersBuilder = ImmutableSet.builder();
+    ImmutableSet.Builder<String> superGroupsBuilder = ImmutableSet.builder();
     systemUser = User.getCurrent();
 
     if (systemUser == null) {
@@ -66,32 +64,35 @@ public final class Superusers {
 
     String currentUser = systemUser.getShortName();
     LOG.trace("Current user name is {}", currentUser);
-    superUsers.add(currentUser);
+    superUsersBuilder.add(currentUser);
 
     String[] superUserList = conf.getStrings(SUPERUSER_CONF_KEY, new String[0]);
     for (String name : superUserList) {
       if (AuthUtil.isGroupPrincipal(name)) {
         // Let's keep the '@' for distinguishing from user.
-        superGroups.add(name);
+        superGroupsBuilder.add(name);
       } else {
-        superUsers.add(name);
+        superUsersBuilder.add(name);
       }
     }
+    superUsers = superUsersBuilder.build();
+    superGroups = superGroupsBuilder.build();
   }
 
   /**
-   * @return true if current user is a super user (whether as user running process,
-   * declared as individual superuser or member of supergroup), false otherwise.
+   * Check if the current user is a super user
+   * @return true if current user is a super user (whether as user running process, declared as
+   *         individual superuser or member of supergroup), false otherwise.
    * @param user to check
-   * @throws IllegalStateException if lists of superusers/super groups
-   *   haven't been initialized properly
+   * @throws IllegalStateException if lists of superusers/super groups haven't been initialized
+   *                               properly
    */
   public static boolean isSuperUser(User user) {
     if (superUsers == null) {
-      throw new IllegalStateException("Super users/super groups lists"
-        + " have not been initialized properly.");
+      throw new IllegalStateException(
+        "Super users/super groups lists" + " have not been initialized properly.");
     }
-    if (user == null){
+    if (user == null) {
       throw new IllegalArgumentException("Null user passed for super user check");
     }
     if (superUsers.contains(user.getShortName())) {
@@ -106,6 +107,7 @@ public final class Superusers {
   }
 
   /**
+   * Check if the current user is a super user
    * @return true if current user is a super user, false otherwise.
    * @param user to check
    */
@@ -113,14 +115,20 @@ public final class Superusers {
     return superUsers.contains(user) || superGroups.contains(user);
   }
 
+  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "MS_EXPOSE_REP",
+      justification = "immutable")
   public static Collection<String> getSuperUsers() {
     return superUsers;
   }
 
+  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "MS_EXPOSE_REP",
+      justification = "immutable")
   public static Collection<String> getSuperGroups() {
     return superGroups;
   }
 
+  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "MS_EXPOSE_REP",
+      justification = "by design")
   public static User getSystemUser() {
     return systemUser;
   }

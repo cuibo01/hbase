@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,10 +17,10 @@
  */
 package org.apache.hadoop.hbase.regionserver.querymatcher;
 
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.regionserver.ShipperListener;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * This interface is used for the tracking and enforcement of Deletes during the course of a Get or
@@ -42,18 +42,16 @@ public interface DeleteTracker extends ShipperListener {
    * This is called when a Delete is encountered in a StoreFile.
    * @param cell - the delete cell
    */
-  void add(Cell cell);
+  void add(ExtendedCell cell);
 
   /**
    * Check if the specified cell buffer has been deleted by a previously seen delete.
    * @param cell - current cell to check if deleted by a previously seen delete
    * @return deleteResult The result tells whether the Cell is deleted and why
    */
-  DeleteResult isDeleted(Cell cell);
+  DeleteResult isDeleted(ExtendedCell cell);
 
-  /**
-   * @return true if there are no current delete, false otherwise
-   */
+  /** Returns true if there are no current delete, false otherwise */
   boolean isEmpty();
 
   /**
@@ -81,8 +79,8 @@ public interface DeleteTracker extends ShipperListener {
     COLUMN_DELETED, // The Cell is deleted by a delete column.
     VERSION_DELETED, // The Cell is deleted by a version delete.
     NOT_DELETED,
-    VERSION_MASKED  // The Cell is masked by max number of versions which is considered as
-                    // deleted in strong semantics of versions(See MvccTracker)
+    VERSION_MASKED // The Cell is masked by max number of versions which is considered as
+                   // deleted in strong semantics of versions(See MvccTracker)
   }
 
   /**

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -40,7 +40,6 @@ import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.IntegrationTestingUtility;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValue.Type;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
@@ -60,6 +59,9 @@ import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.google.common.base.Splitter;
+import org.apache.hbase.thirdparty.com.google.common.base.Strings;
+
 /**
  * Validate ImportTsv + BulkLoadFiles on a distributed cluster.
  */
@@ -71,45 +73,42 @@ public class IntegrationTestImportTsv extends Configured implements Tool {
   private static final String GENERATED_HFILE_FOLDER_PARAM_KEY =
     "IntegrationTestImportTsv.generatedHFileFolder";
 
-  protected static final String simple_tsv =
-      "row1\t1\tc1\tc2\n" +
-      "row2\t1\tc1\tc2\n" +
-      "row3\t1\tc1\tc2\n" +
-      "row4\t1\tc1\tc2\n" +
-      "row5\t1\tc1\tc2\n" +
-      "row6\t1\tc1\tc2\n" +
-      "row7\t1\tc1\tc2\n" +
-      "row8\t1\tc1\tc2\n" +
-      "row9\t1\tc1\tc2\n" +
-      "row10\t1\tc1\tc2\n";
+  protected static final String simple_tsv = "row1\t1\tc1\tc2\n" + "row2\t1\tc1\tc2\n"
+    + "row3\t1\tc1\tc2\n" + "row4\t1\tc1\tc2\n" + "row5\t1\tc1\tc2\n" + "row6\t1\tc1\tc2\n"
+    + "row7\t1\tc1\tc2\n" + "row8\t1\tc1\tc2\n" + "row9\t1\tc1\tc2\n" + "row10\t1\tc1\tc2\n";
 
   @Rule
   public TestName name = new TestName();
 
   protected static final Set<KeyValue> simple_expected =
-      new TreeSet<KeyValue>(CellComparator.getInstance()) {
-    private static final long serialVersionUID = 1L;
-    {
-      byte[] family = Bytes.toBytes("d");
-      for (String line : simple_tsv.split("\n")) {
-        String[] row = line.split("\t");
-        byte[] key = Bytes.toBytes(row[0]);
-        long ts = Long.parseLong(row[1]);
-        byte[][] fields = { Bytes.toBytes(row[2]), Bytes.toBytes(row[3]) };
-        add(new KeyValue(key, family, fields[0], ts, Type.Put, fields[0]));
-        add(new KeyValue(key, family, fields[1], ts, Type.Put, fields[1]));
+    new TreeSet<KeyValue>(CellComparator.getInstance()) {
+      private static final long serialVersionUID = 1L;
+      {
+        byte[] family = Bytes.toBytes("d");
+        for (String line : Splitter.on('\n').split(simple_tsv)) {
+          if (Strings.isNullOrEmpty(line)) {
+            continue;
+          }
+          String[] row = line.split("\t");
+          byte[] key = Bytes.toBytes(row[0]);
+          long ts = Long.parseLong(row[1]);
+          byte[][] fields = { Bytes.toBytes(row[2]), Bytes.toBytes(row[3]) };
+          add(new KeyValue(key, family, fields[0], ts, KeyValue.Type.Put, fields[0]));
+          add(new KeyValue(key, family, fields[1], ts, KeyValue.Type.Put, fields[1]));
+        }
       }
-    }
-  };
+    };
 
   // this instance is initialized on first access when the test is run from
   // JUnit/Maven or by main when run from the CLI.
   protected static IntegrationTestingUtility util = null;
 
+  @Override
   public Configuration getConf() {
     return util.getConfiguration();
   }
 
+  @Override
   public void setConf(Configuration conf) {
     LOG.debug("Ignoring setConf call.");
   }
@@ -136,11 +135,9 @@ public class IntegrationTestImportTsv extends Configured implements Tool {
   }
 
   /**
-   * Verify the data described by <code>simple_tsv</code> matches
-   * <code>simple_expected</code>.
+   * Verify the data described by <code>simple_tsv</code> matches <code>simple_expected</code>.
    */
-  protected void doLoadIncrementalHFiles(Path hfiles, TableName tableName)
-      throws Exception {
+  protected void doLoadIncrementalHFiles(Path hfiles, TableName tableName) throws Exception {
 
     String[] args = { hfiles.toString(), tableName.getNameAsString() };
     LOG.info(format("Running LoadIncrememntalHFiles with args: %s", Arrays.asList(args)));
@@ -148,10 +145,10 @@ public class IntegrationTestImportTsv extends Configured implements Tool {
       ToolRunner.run(new BulkLoadHFilesTool(getConf()), args));
 
     Table table = null;
-    Scan scan = new Scan() {{
-      setCacheBlocks(false);
-      setCaching(1000);
-    }};
+    Scan scan = new Scan();
+    scan.setCacheBlocks(false);
+    scan.setCaching(1000);
+
     try {
       table = util.getConnection().getTable(tableName);
       Iterator<Result> resultsIt = table.getScanner(scan).iterator();
@@ -159,9 +156,7 @@ public class IntegrationTestImportTsv extends Configured implements Tool {
       while (resultsIt.hasNext() && expectedIt.hasNext()) {
         Result r = resultsIt.next();
         for (Cell actual : r.rawCells()) {
-          assertTrue(
-            "Ran out of expected values prematurely!",
-            expectedIt.hasNext());
+          assertTrue("Ran out of expected values prematurely!", expectedIt.hasNext());
           KeyValue expected = expectedIt.next();
           assertEquals("Scan produced surprising result", 0,
             CellComparator.getInstance().compare(expected, actual));
@@ -178,8 +173,7 @@ public class IntegrationTestImportTsv extends Configured implements Tool {
    * Confirm the absence of the {@link TotalOrderPartitioner} partitions file.
    */
   protected static void validateDeletedPartitionsFile(Configuration conf) throws IOException {
-    if (!conf.getBoolean(IntegrationTestingUtility.IS_DISTRIBUTED_CLUSTER, false))
-      return;
+    if (!conf.getBoolean(IntegrationTestingUtility.IS_DISTRIBUTED_CLUSTER, false)) return;
 
     FileSystem fs = FileSystem.get(conf);
     Path partitionsFile = new Path(TotalOrderPartitioner.getPartitionFile(conf));
@@ -199,14 +193,13 @@ public class IntegrationTestImportTsv extends Configured implements Tool {
 
     Map<String, String> args = new HashMap<>();
     args.put(ImportTsv.BULK_OUTPUT_CONF_KEY, hfiles.toString());
-    args.put(ImportTsv.COLUMNS_CONF_KEY,
-        format("HBASE_ROW_KEY,HBASE_TS_KEY,%s:c1,%s:c2", cf, cf));
+    args.put(ImportTsv.COLUMNS_CONF_KEY, format("HBASE_ROW_KEY,HBASE_TS_KEY,%s:c1,%s:c2", cf, cf));
     // configure the test harness to NOT delete the HFiles after they're
     // generated. We need those for doLoadIncrementalHFiles
     args.put(TestImportTsv.DELETE_AFTER_LOAD_CONF, "false");
 
     // run the job, complete the load.
-    util.createTable(table, new String[]{cf});
+    util.createTable(table, new String[] { cf });
     Tool t = TestImportTsv.doMROnTableTest(util, table, cf, simple_tsv, args);
     doLoadIncrementalHFiles(hfiles, table);
 
@@ -219,6 +212,7 @@ public class IntegrationTestImportTsv extends Configured implements Tool {
     LOG.info("testGenerateAndLoad completed successfully.");
   }
 
+  @Override
   public int run(String[] args) throws Exception {
     if (args.length != 0) {
       System.err.println(format("%s [genericOptions]", NAME));
@@ -267,7 +261,6 @@ public class IntegrationTestImportTsv extends Configured implements Tool {
     }
     return hfiles;
   }
-
 
   public static void main(String[] args) throws Exception {
     Configuration conf = HBaseConfiguration.create();

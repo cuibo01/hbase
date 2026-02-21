@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,8 +17,8 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.metrics.ScanMetrics;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Helper class for custom client scanners.
@@ -26,6 +26,7 @@ import org.apache.hadoop.hbase.client.metrics.ScanMetrics;
 @InterfaceAudience.Private
 public abstract class AbstractClientScanner implements ResultScanner {
   protected ScanMetrics scanMetrics;
+  private boolean isScanMetricsByRegionEnabled = false;
 
   /**
    * Check and initialize if application wants to collect scan metrics
@@ -34,6 +35,9 @@ public abstract class AbstractClientScanner implements ResultScanner {
     // check if application wants to collect scan metrics
     if (scan.isScanMetricsEnabled()) {
       scanMetrics = new ScanMetrics();
+      if (scan.isScanMetricsByRegionEnabled()) {
+        isScanMetricsByRegionEnabled = true;
+      }
     }
   }
 
@@ -45,5 +49,13 @@ public abstract class AbstractClientScanner implements ResultScanner {
   @Override
   public ScanMetrics getScanMetrics() {
     return scanMetrics;
+  }
+
+  protected void setIsScanMetricsByRegionEnabled(boolean isScanMetricsByRegionEnabled) {
+    this.isScanMetricsByRegionEnabled = isScanMetricsByRegionEnabled;
+  }
+
+  protected boolean isScanMetricsByRegionEnabled() {
+    return isScanMetricsByRegionEnabled;
   }
 }

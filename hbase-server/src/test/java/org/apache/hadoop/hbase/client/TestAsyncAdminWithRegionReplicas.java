@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -32,6 +32,7 @@ import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -55,13 +56,13 @@ public class TestAsyncAdminWithRegionReplicas extends TestAsyncAdminBase {
     TestAsyncAdminBase.setUpBeforeClass();
     HBaseTestingUtil.setReplicas(TEST_UTIL.getAdmin(), TableName.META_TABLE_NAME, 3);
     try (ConnectionRegistry registry =
-      ConnectionRegistryFactory.getRegistry(TEST_UTIL.getConfiguration())) {
+      ConnectionRegistryFactory.create(TEST_UTIL.getConfiguration(), User.getCurrent())) {
       RegionReplicaTestHelper.waitUntilAllMetaReplicasAreReady(TEST_UTIL, registry);
     }
   }
 
   private void testMoveNonDefaultReplica(TableName tableName)
-      throws InterruptedException, ExecutionException {
+    throws InterruptedException, ExecutionException {
     AsyncTableRegionLocator locator = ASYNC_CONN.getRegionLocator(tableName);
     List<HRegionLocation> locs = locator.getAllRegionLocations().get();
     // try region name
@@ -76,7 +77,7 @@ public class TestAsyncAdminWithRegionReplicas extends TestAsyncAdminBase {
 
   @Test
   public void testMoveNonDefaultReplica()
-      throws InterruptedException, ExecutionException, IOException {
+    throws InterruptedException, ExecutionException, IOException {
     createTableWithDefaultConf(tableName, 3);
     testMoveNonDefaultReplica(tableName);
     testMoveNonDefaultReplica(TableName.META_TABLE_NAME);
@@ -84,7 +85,7 @@ public class TestAsyncAdminWithRegionReplicas extends TestAsyncAdminBase {
 
   @Test
   public void testSplitNonDefaultReplica()
-      throws InterruptedException, ExecutionException, IOException {
+    throws InterruptedException, ExecutionException, IOException {
     createTableWithDefaultConf(tableName, 3);
     List<HRegionLocation> locs =
       ASYNC_CONN.getRegionLocator(tableName).getAllRegionLocations().get();
@@ -102,7 +103,7 @@ public class TestAsyncAdminWithRegionReplicas extends TestAsyncAdminBase {
 
   @Test
   public void testMergeNonDefaultReplicas()
-      throws InterruptedException, ExecutionException, IOException {
+    throws InterruptedException, ExecutionException, IOException {
     byte[][] splitRows = new byte[][] { Bytes.toBytes(0) };
     createTableWithDefaultConf(tableName, 3, splitRows);
     List<HRegionLocation> locs =

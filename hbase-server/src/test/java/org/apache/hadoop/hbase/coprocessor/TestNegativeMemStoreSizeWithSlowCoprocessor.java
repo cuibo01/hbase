@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -49,10 +49,10 @@ public class TestNegativeMemStoreSizeWithSlowCoprocessor {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestNegativeMemStoreSizeWithSlowCoprocessor.class);
+    HBaseClassTestRule.forClass(TestNegativeMemStoreSizeWithSlowCoprocessor.class);
 
   static final Logger LOG =
-      LoggerFactory.getLogger(TestNegativeMemStoreSizeWithSlowCoprocessor.class);
+    LoggerFactory.getLogger(TestNegativeMemStoreSizeWithSlowCoprocessor.class);
 
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static final byte[] tableName = Bytes.toBytes("test_table");
@@ -103,8 +103,8 @@ public class TestNegativeMemStoreSizeWithSlowCoprocessor {
   public static class FlushingRegionObserver extends SimpleRegionObserver {
 
     @Override
-    public void postPut(final ObserverContext<RegionCoprocessorEnvironment> c, final Put put,
-        final WALEdit edit, final Durability durability) throws IOException {
+    public void postPut(final ObserverContext<? extends RegionCoprocessorEnvironment> c,
+      final Put put, final WALEdit edit, final Durability durability) throws IOException {
       HRegion region = (HRegion) c.getEnvironment().getRegion();
       super.postPut(c, put, edit, durability);
 

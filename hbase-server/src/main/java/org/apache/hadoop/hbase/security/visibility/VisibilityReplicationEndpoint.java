@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,9 +23,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-
 import org.apache.hadoop.hbase.ArrayBackedTag;
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.TagType;
@@ -34,6 +33,7 @@ import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.WALEntryFilter;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALEditInternalHelper;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,7 +47,7 @@ public class VisibilityReplicationEndpoint implements ReplicationEndpoint {
   private final VisibilityLabelService visibilityLabelsService;
 
   public VisibilityReplicationEndpoint(ReplicationEndpoint endpoint,
-      VisibilityLabelService visibilityLabelsService) {
+    VisibilityLabelService visibilityLabelsService) {
     this.delegator = endpoint;
     this.visibilityLabelsService = visibilityLabelsService;
   }
@@ -58,7 +58,7 @@ public class VisibilityReplicationEndpoint implements ReplicationEndpoint {
   }
 
   @Override
-  public void peerConfigUpdated(ReplicationPeerConfig rpc){
+  public void peerConfigUpdated(ReplicationPeerConfig rpc) {
     delegator.peerConfigUpdated(rpc);
   }
 
@@ -75,39 +75,39 @@ public class VisibilityReplicationEndpoint implements ReplicationEndpoint {
       List<Entry> newEntries = new ArrayList<>(entries.size());
       for (Entry entry : entries) {
         WALEdit newEdit = new WALEdit();
-        ArrayList<Cell> cells = entry.getEdit().getCells();
-        for (Cell cell : cells) {
+        List<ExtendedCell> cells = WALEditInternalHelper.getExtendedCells(entry.getEdit());
+        for (ExtendedCell cell : cells) {
           if (cell.getTagsLength() > 0) {
             visTags.clear();
             nonVisTags.clear();
-            Byte serializationFormat = VisibilityUtils.extractAndPartitionTags(cell, visTags,
-                nonVisTags);
+            Byte serializationFormat =
+              VisibilityUtils.extractAndPartitionTags(cell, visTags, nonVisTags);
             if (!visTags.isEmpty()) {
               try {
                 byte[] modifiedVisExpression = visibilityLabelsService
-                    .encodeVisibilityForReplication(visTags, serializationFormat);
+                  .encodeVisibilityForReplication(visTags, serializationFormat);
                 if (modifiedVisExpression != null) {
                   nonVisTags
-                      .add(new ArrayBackedTag(TagType.STRING_VIS_TAG_TYPE, modifiedVisExpression));
+                    .add(new ArrayBackedTag(TagType.STRING_VIS_TAG_TYPE, modifiedVisExpression));
                 }
               } catch (Exception ioe) {
                 LOG.error(
-                    "Exception while reading the visibility labels from the cell. The replication "
-                        + "would happen as per the existing format and not as " +
-                        "string type for the cell "
-                        + cell + ".", ioe);
+                  "Exception while reading the visibility labels from the cell. The replication "
+                    + "would happen as per the existing format and not as "
+                    + "string type for the cell " + cell + ".",
+                  ioe);
                 // just return the old entries as it is without applying the string type change
-                newEdit.add(cell);
+                WALEditInternalHelper.addExtendedCell(newEdit, cell);
                 continue;
               }
               // Recreate the cell with the new tags and the existing tags
-              Cell newCell = PrivateCellUtil.createCell(cell, nonVisTags);
-              newEdit.add(newCell);
+              ExtendedCell newCell = PrivateCellUtil.createCell(cell, nonVisTags);
+              WALEditInternalHelper.addExtendedCell(newEdit, newCell);
             } else {
-              newEdit.add(cell);
+              WALEditInternalHelper.addExtendedCell(newEdit, cell);
             }
           } else {
-            newEdit.add(cell);
+            WALEditInternalHelper.addExtendedCell(newEdit, cell);
           }
         }
         newEntries.add(new Entry((entry.getKey()), newEdit));
@@ -140,7 +140,9 @@ public class VisibilityReplicationEndpoint implements ReplicationEndpoint {
   }
 
   @Override
-  public boolean isStarting() {return this.delegator.isStarting();}
+  public boolean isStarting() {
+    return this.delegator.isStarting();
+  }
 
   @Override
   public void start() {

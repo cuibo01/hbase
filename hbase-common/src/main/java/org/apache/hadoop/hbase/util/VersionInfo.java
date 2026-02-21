@@ -15,17 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.util;
 
 import java.io.PrintStream;
 import java.io.PrintWriter;
-
+import java.util.List;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hbase.Version;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.base.Splitter;
+import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
 
 /**
  * This class finds the Version information for HBase.
@@ -38,12 +40,15 @@ public class VersionInfo {
   // higher than any numbers in the version.
   private static final int VERY_LARGE_NUMBER = 100000;
 
+  // Copying into a non-final member so that it can be changed by reflection for testing
+  private static String version = Version.version;
+
   /**
    * Get the hbase version.
    * @return the hbase version string, eg. "0.6.3-dev"
    */
   public static String getVersion() {
-    return Version.version;
+    return version;
   }
 
   /**
@@ -79,12 +84,10 @@ public class VersionInfo {
   }
 
   static String[] versionReport() {
-    return new String[] {
-      "HBase " + getVersion(),
+    return new String[] { "HBase " + getVersion(),
       "Source code repository " + getUrl() + " revision=" + getRevision(),
       "Compiled by " + getUser() + " on " + getDate(),
-      "From source with checksum " + getSrcChecksum()
-      };
+      "From source with checksum " + getSrcChecksum() };
   }
 
   /**
@@ -114,7 +117,7 @@ public class VersionInfo {
   }
 
   public static int compareVersion(String v1, String v2) {
-    //fast compare equals first
+    // fast compare equals first
     if (v1.equals(v2)) {
       return 0;
     }
@@ -134,17 +137,16 @@ public class VersionInfo {
   }
 
   /**
-   * Returns the version components as String objects
-   * Examples: "1.4.3" returns ["1", "4", "3"], "4.5.6-SNAPSHOT" returns ["4", "5", "6", "-1"]
-   * "4.5.6-beta" returns ["4", "5", "6", "-2"], "4.5.6-alpha" returns ["4", "5", "6", "-3"]
-   * "4.5.6-UNKNOW" returns ["4", "5", "6", "-4"]
+   * Returns the version components as String objects Examples: "1.4.3" returns ["1", "4", "3"],
+   * "4.5.6-SNAPSHOT" returns ["4", "5", "6", "-1"] "4.5.6-beta" returns ["4", "5", "6", "-2"],
+   * "4.5.6-alpha" returns ["4", "5", "6", "-3"] "4.5.6-UNKNOW" returns ["4", "5", "6", "-4"]
    * @return the components of the version string
    */
   private static String[] getVersionComponents(final String version) {
-    assert(version != null);
-    String[] strComps = version.split("[\\.-]");
-    assert(strComps.length > 0);
-
+    assert (version != null);
+    List<String> list = Splitter.onPattern("[\\.-]").splitToList(version);
+    String[] strComps = list.toArray(new String[list.size()]);
+    assert (strComps.length > 0);
     String[] comps = new String[strComps.length];
     for (int i = 0; i < strComps.length; ++i) {
       if (StringUtils.isNumeric(strComps[i])) {
@@ -152,11 +154,11 @@ public class VersionInfo {
       } else if (StringUtils.isEmpty(strComps[i])) {
         comps[i] = String.valueOf(VERY_LARGE_NUMBER);
       } else {
-        if("SNAPSHOT".equals(strComps[i])) {
+        if ("SNAPSHOT".equals(strComps[i])) {
           comps[i] = "-1";
-        } else if("beta".equals(strComps[i])) {
+        } else if ("beta".equals(strComps[i])) {
           comps[i] = "-2";
-        } else if("alpha".equals(strComps[i])) {
+        } else if ("alpha".equals(strComps[i])) {
           comps[i] = "-3";
         } else {
           comps[i] = "-4";
@@ -167,7 +169,7 @@ public class VersionInfo {
   }
 
   public static int getMajorVersion(String version) {
-    return Integer.parseInt(version.split("\\.")[0]);
+    return Integer.parseInt(Iterables.get(Splitter.on('.').split(version), 0));
   }
 
   public static void main(String[] args) {

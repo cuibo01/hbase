@@ -16,20 +16,22 @@
  * limitations under the License.
  */
 package org.apache.hadoop.hbase.replication;
+
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * A Filter for WAL entries before being sent over to replication. Multiple
- * filters might be chained together using {@link ChainWALEntryFilter}.
- * Applied on the replication source side.
- * <p>There is also a filter that can be installed on the sink end of a replication stream.
- * See {@link org.apache.hadoop.hbase.replication.regionserver.WALEntrySinkFilter}. Certain
- * use-cases may need such a facility but better to filter here on the source side rather
- * than later, after the edit arrives at the sink.</p>
+ * A Filter for WAL entries before being sent over to replication. Multiple filters might be chained
+ * together using {@link ChainWALEntryFilter}. Applied on the replication source side.
+ * <p>
+ * There is also a filter that can be installed on the sink end of a replication stream. See
+ * {@link org.apache.hadoop.hbase.replication.regionserver.WALEntrySinkFilter}. Certain use-cases
+ * may need such a facility but better to filter here on the source side rather than later, after
+ * the edit arrives at the sink.
+ * </p>
  * @see org.apache.hadoop.hbase.replication.regionserver.WALEntrySinkFilter for filtering
- * replication on the sink-side.
+ *      replication on the sink-side.
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.REPLICATION)
 public interface WALEntryFilter {
@@ -48,4 +50,18 @@ public interface WALEntryFilter {
    *         the entry to be skipped for replication.
    */
   Entry filter(Entry entry);
+
+  /**
+   * Tell the filter whether the peer is a serial replication peer.
+   * <p>
+   * For serial replication, usually you should not filter out an entire entry, unless the peer
+   * config does not contain the table, because we need the region name and sequence id of the entry
+   * to advance the pushed sequence id, otherwise the replication may be blocked. You can just
+   * filter out all the cells of the entry to stop it being replicated to peer cluster,or just rely
+   * on the {@link WALCellFilter#filterCell(Entry, org.apache.hadoop.hbase.Cell)} method to filter
+   * all the cells out.
+   * @param serial {@code true} if the peer is a serial replication peer, otherwise {@code false}
+   */
+  default void setSerial(boolean serial) {
+  }
 }

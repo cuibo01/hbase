@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.rest.model;
 
 import java.io.IOException;
@@ -24,19 +22,19 @@ import java.io.Serializable;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlRootElement;
 import javax.xml.bind.annotation.XmlTransient;
-
 import org.apache.hadoop.hbase.NamespaceDescriptor;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.rest.ProtobufMessageHandler;
+import org.apache.hadoop.hbase.rest.RestUtil;
+import org.apache.hadoop.hbase.rest.protobuf.generated.NamespacePropertiesMessage.NamespaceProperties;
+import org.apache.yetus.audience.InterfaceAudience;
 
-import org.apache.hadoop.hbase.shaded.rest.protobuf
-  .generated.NamespacePropertiesMessage.NamespaceProperties;
+import org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream;
+import org.apache.hbase.thirdparty.com.google.protobuf.Message;
 
 /**
  * List a HBase namespace's key/value properties.
@@ -48,7 +46,7 @@ import org.apache.hadoop.hbase.shaded.rest.protobuf
  * <li>value: property value</li>
  * </ul>
  */
-@XmlRootElement(name="NamespaceProperties")
+@XmlRootElement(name = "NamespaceProperties")
 @XmlAccessorType(XmlAccessType.FIELD)
 @InterfaceAudience.Private
 public class NamespacesInstanceModel implements Serializable, ProtobufMessageHandler {
@@ -56,7 +54,7 @@ public class NamespacesInstanceModel implements Serializable, ProtobufMessageHan
   private static final long serialVersionUID = 1L;
 
   // JAX-RS automatically converts Map to XMLAnyElement.
-  private Map<String,String> properties = null;
+  private Map<String, String> properties = null;
 
   @XmlTransient
   private String namespaceName;
@@ -64,12 +62,12 @@ public class NamespacesInstanceModel implements Serializable, ProtobufMessageHan
   /**
    * Default constructor. Do not use.
    */
-  public NamespacesInstanceModel() {}
+  public NamespacesInstanceModel() {
+  }
 
   /**
    * Constructor to use if namespace does not exist in HBASE.
    * @param namespaceName the namespace name.
-   * @throws IOException
    */
   public NamespacesInstanceModel(String namespaceName) throws IOException {
     this(null, namespaceName);
@@ -77,18 +75,21 @@ public class NamespacesInstanceModel implements Serializable, ProtobufMessageHan
 
   /**
    * Constructor
-   * @param admin the administrative API
+   * @param admin         the administrative API
    * @param namespaceName the namespace name.
-   * @throws IOException
    */
   public NamespacesInstanceModel(Admin admin, String namespaceName) throws IOException {
     this.namespaceName = namespaceName;
-    if(admin == null) { return; }
+    if (admin == null) {
+      return;
+    }
 
     NamespaceDescriptor nd = admin.getNamespaceDescriptor(namespaceName);
 
     // For properly formed JSON, if no properties, field has to be null (not just no elements).
-    if(nd.getConfiguration().isEmpty()){ return; }
+    if (nd.getConfiguration().isEmpty()) {
+      return;
+    }
 
     properties = new HashMap<>();
     properties.putAll(nd.getConfiguration());
@@ -96,31 +97,30 @@ public class NamespacesInstanceModel implements Serializable, ProtobufMessageHan
 
   /**
    * Add property to the namespace.
-   * @param key attribute name
+   * @param key   attribute name
    * @param value attribute value
    */
   public void addProperty(String key, String value) {
-    if(properties == null){
+    if (properties == null) {
       properties = new HashMap<>();
     }
     properties.put(key, value);
   }
 
-  /**
-   * @return The map of uncategorized namespace properties.
-   */
-  public Map<String,String> getProperties() {
-    if(properties == null){
+  /** Returns The map of uncategorized namespace properties. */
+  public Map<String, String> getProperties() {
+    if (properties == null) {
       properties = new HashMap<>();
     }
     return properties;
   }
 
-  public String getNamespaceName(){
+  public String getNamespaceName() {
     return namespaceName;
   }
 
-  /* (non-Javadoc)
+  /*
+   * (non-Javadoc)
    * @see java.lang.Object#toString()
    */
   @Override
@@ -129,7 +129,7 @@ public class NamespacesInstanceModel implements Serializable, ProtobufMessageHan
     sb.append("{NAME => \'");
     sb.append(namespaceName);
     sb.append("\'");
-    if(properties != null){
+    if (properties != null) {
       for (Map.Entry<String, String> entry : properties.entrySet()) {
         sb.append(", ");
         sb.append(entry.getKey());
@@ -143,9 +143,9 @@ public class NamespacesInstanceModel implements Serializable, ProtobufMessageHan
   }
 
   @Override
-  public byte[] createProtobufOutput() {
+  public Message messageFromObject() {
     NamespaceProperties.Builder builder = NamespaceProperties.newBuilder();
-    if(properties != null){
+    if (properties != null) {
       for (Map.Entry<String, String> entry : properties.entrySet()) {
         String key = entry.getKey();
         NamespaceProperties.Property.Builder property = NamespaceProperties.Property.newBuilder();
@@ -154,15 +154,15 @@ public class NamespacesInstanceModel implements Serializable, ProtobufMessageHan
         builder.addProps(property);
       }
     }
-    return builder.build().toByteArray();
+    return builder.build();
   }
 
   @Override
-  public ProtobufMessageHandler getObjectFromMessage(byte[] message) throws IOException {
+  public ProtobufMessageHandler getObjectFromMessage(CodedInputStream cis) throws IOException {
     NamespaceProperties.Builder builder = NamespaceProperties.newBuilder();
-    builder.mergeFrom(message);
+    RestUtil.mergeFrom(builder, cis);
     List<NamespaceProperties.Property> properties = builder.getPropsList();
-    for(NamespaceProperties.Property property: properties){
+    for (NamespaceProperties.Property property : properties) {
       addProperty(property.getKey(), property.getValue());
     }
     return this;

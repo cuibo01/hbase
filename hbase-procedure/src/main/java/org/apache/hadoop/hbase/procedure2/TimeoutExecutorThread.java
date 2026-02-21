@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -53,8 +53,7 @@ class TimeoutExecutorThread<TEnvironment> extends StoppableThread {
   @Override
   public void run() {
     while (executor.isRunning()) {
-      final DelayedWithTimeout task = DelayedUtil.takeWithoutInterrupt(queue, 20,
-        TimeUnit.SECONDS);
+      final DelayedWithTimeout task = DelayedUtil.takeWithoutInterrupt(queue, 20, TimeUnit.SECONDS);
       if (task == null || task == DelayedUtil.DELAYED_POISON) {
         // the executor may be shutting down,
         // and the task is just the shutdown request
@@ -79,9 +78,13 @@ class TimeoutExecutorThread<TEnvironment> extends StoppableThread {
   }
 
   public void add(Procedure<TEnvironment> procedure) {
-    LOG.info("ADDED {}; timeout={}, timestamp={}", procedure, procedure.getTimeout(),
-      procedure.getTimeoutTimestamp());
-    queue.add(new DelayedProcedure<>(procedure));
+    if (procedure.getTimeout() > 0) {
+      LOG.info("ADDED {}; timeout={}, timestamp={}", procedure, procedure.getTimeout(),
+        procedure.getTimeoutTimestamp());
+      queue.add(new DelayedProcedure<>(procedure));
+    } else {
+      LOG.info("Got negative timeout {} for {}, skip adding", procedure.getTimeout(), procedure);
+    }
   }
 
   public boolean remove(Procedure<TEnvironment> procedure) {

@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,17 +15,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.filter;
-
-import org.apache.hadoop.hbase.Cell;
-import org.apache.yetus.audience.InterfaceAudience;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import org.apache.hadoop.hbase.Cell;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * FilterListWithAND represents an ordered list of filters which will be evaluated with an AND
@@ -36,6 +33,7 @@ import java.util.Objects;
 public class FilterListWithAND extends FilterListBase {
 
   private List<Filter> seekHintFilters = new ArrayList<>();
+  private boolean[] hintingFilters;
 
   public FilterListWithAND(List<Filter> filters) {
     super(filters);
@@ -43,6 +41,7 @@ public class FilterListWithAND extends FilterListBase {
     // sub-filters (because all sub-filters return INCLUDE*). So here, fill this array with true. we
     // keep this in FilterListWithAND for abstracting the transformCell() in FilterListBase.
     subFiltersIncludedCell = new ArrayList<>(Collections.nCopies(filters.size(), true));
+    cacheHintingFilters();
   }
 
   @Override
@@ -52,12 +51,27 @@ public class FilterListWithAND extends FilterListBase {
     }
     this.filters.addAll(filters);
     this.subFiltersIncludedCell.addAll(Collections.nCopies(filters.size(), true));
+    this.cacheHintingFilters();
   }
 
   @Override
   protected String formatLogFilters(List<Filter> logFilters) {
     return String.format("FilterList AND (%d/%d): %s", logFilters.size(), this.size(),
       logFilters.toString());
+  }
+
+  /**
+   * As checks for this are in the hot path, we want them as fast as possible, so we are caching the
+   * status in an array.
+   */
+  private void cacheHintingFilters() {
+    int filtersSize = filters.size();
+    hintingFilters = new boolean[filtersSize];
+    for (int i = 0; i < filtersSize; i++) {
+      if (filters.get(i) instanceof HintingFilter) {
+        hintingFilters[i] = true;
+      }
+    }
   }
 
   /**
@@ -72,7 +86,8 @@ public class FilterListWithAND extends FilterListBase {
    * The jump step will be:
    *
    * <pre>
-   * INCLUDE &lt; SKIP &lt; INCLUDE_AND_NEXT_COL &lt; NEXT_COL &lt; INCLUDE_AND_SEEK_NEXT_ROW &lt; NEXT_ROW &lt; SEEK_NEXT_USING_HINT
+   * INCLUDE &lt; SKIP &lt; INCLUDE_AND_NEXT_COL &lt; NEXT_COL &lt; INCLUDE_AND_SEEK_NEXT_ROW &lt; NEXT_ROW
+   *     &lt; SEEK_NEXT_USING_HINT
    * </pre>
    *
    * Here, we have the following map to describe The Maximal Step Rule. if current return code (for
@@ -91,7 +106,7 @@ public class FilterListWithAND extends FilterListBase {
    * SEEK_NEXT_USING_HINT       SEEK_NEXT_USING_HINT       SEEK_NEXT_USING_HINT      SEEK_NEXT_USING_HINT       SEEK_NEXT_USING_HINT  SEEK_NEXT_USING_HINT  SEEK_NEXT_USING_HINT  SEEK_NEXT_USING_HINT
    * </pre>
    *
-   * @param rc Return code which is calculated by previous sub-filter(s) in filter list.
+   * @param rc      Return code which is calculated by previous sub-filter(s) in filter list.
    * @param localRC Return code of the current sub-filter in filter list.
    * @return Return code which is merged by the return code of previous sub-filter(s) and the return
    *         code of current sub-filter.
@@ -120,8 +135,10 @@ public class FilterListWithAND extends FilterListBase {
         }
         break;
       case INCLUDE_AND_SEEK_NEXT_ROW:
-        if (isInReturnCodes(rc, ReturnCode.INCLUDE, ReturnCode.INCLUDE_AND_NEXT_COL,
-          ReturnCode.INCLUDE_AND_SEEK_NEXT_ROW)) {
+        if (
+          isInReturnCodes(rc, ReturnCode.INCLUDE, ReturnCode.INCLUDE_AND_NEXT_COL,
+            ReturnCode.INCLUDE_AND_SEEK_NEXT_ROW)
+        ) {
           return ReturnCode.INCLUDE_AND_SEEK_NEXT_ROW;
         }
         if (isInReturnCodes(rc, ReturnCode.SKIP, ReturnCode.NEXT_COL, ReturnCode.NEXT_ROW)) {
@@ -140,8 +157,10 @@ public class FilterListWithAND extends FilterListBase {
         }
         break;
       case NEXT_COL:
-        if (isInReturnCodes(rc, ReturnCode.INCLUDE, ReturnCode.INCLUDE_AND_NEXT_COL, ReturnCode.SKIP,
-          ReturnCode.NEXT_COL)) {
+        if (
+          isInReturnCodes(rc, ReturnCode.INCLUDE, ReturnCode.INCLUDE_AND_NEXT_COL, ReturnCode.SKIP,
+            ReturnCode.NEXT_COL)
+        ) {
           return ReturnCode.NEXT_COL;
         }
         if (isInReturnCodes(rc, ReturnCode.INCLUDE_AND_SEEK_NEXT_ROW, ReturnCode.NEXT_ROW)) {
@@ -152,7 +171,7 @@ public class FilterListWithAND extends FilterListBase {
         return ReturnCode.NEXT_ROW;
     }
     throw new IllegalStateException(
-        "Received code is not valid. rc: " + rc + ", localRC: " + localRC);
+      "Received code is not valid. rc: " + rc + ", localRC: " + localRC);
   }
 
   private boolean isIncludeRelatedReturnCode(ReturnCode rc) {
@@ -167,10 +186,14 @@ public class FilterListWithAND extends FilterListBase {
     }
     ReturnCode rc = ReturnCode.INCLUDE;
     this.seekHintFilters.clear();
-    for (int i = 0, n = filters.size(); i < n; i++) {
+    int i = 0;
+    int n = filters.size();
+    for (; i < n; i++) {
       Filter filter = filters.get(i);
       if (filter.filterAllRemaining()) {
-        return ReturnCode.NEXT_ROW;
+        rc = ReturnCode.NEXT_ROW;
+        // See comment right after this loop
+        break;
       }
       ReturnCode localRC;
       localRC = filter.filterCell(c);
@@ -182,9 +205,26 @@ public class FilterListWithAND extends FilterListBase {
       // otherwise we may mess up the global state (such as offset, count..) in the following
       // sub-filters. (HBASE-20565)
       if (!isIncludeRelatedReturnCode(rc)) {
-        return rc;
+        // See comment right after this loop
+        break;
       }
     }
+    // We have the preliminary return code. However, if there are remaining uncalled hintingFilters,
+    // they may return hints that allow us to seek ahead and skip reading and processing a lot of
+    // cells.
+    // Process the remaining hinting filters so that we can get all seek hints.
+    // The farthest key is computed in getNextCellHint()
+    if (++i < n) {
+      for (; i < n; i++) {
+        if (hintingFilters[i]) {
+          Filter filter = filters.get(i);
+          if (filter.filterCell(c) == ReturnCode.SEEK_NEXT_USING_HINT) {
+            seekHintFilters.add(filter);
+          }
+        }
+      }
+    }
+
     if (!seekHintFilters.isEmpty()) {
       return ReturnCode.SEEK_NEXT_USING_HINT;
     }
@@ -204,17 +244,29 @@ public class FilterListWithAND extends FilterListBase {
     if (isEmpty()) {
       return super.filterRowKey(firstRowCell);
     }
-    boolean retVal = false;
+    boolean anyRowKeyFiltered = false;
+    boolean anyHintingPassed = false;
     for (int i = 0, n = filters.size(); i < n; i++) {
       Filter filter = filters.get(i);
-      if (filter.filterAllRemaining() || filter.filterRowKey(firstRowCell)) {
+      if (filter.filterAllRemaining()) {
+        // We don't need to care about any later filters, as we end the scan immediately.
+        // TODO HBASE-28633 in the normal code path, filterAllRemaining() always gets checked
+        // before filterRowKey(). We should be able to remove this check.
+        return true;
+      } else if (filter.filterRowKey(firstRowCell)) {
         // Can't just return true here, because there are some filters (such as PrefixFilter) which
         // will catch the row changed event by filterRowKey(). If we return early here, those
         // filters will have no chance to update their row state.
-        retVal = true;
+        anyRowKeyFiltered = true;
+      } else if (hintingFilters[i]) {
+        // If filterRowKey returns false and this is a hinting filter, then we must not filter this
+        // rowkey.
+        // Otherwise this sub-filter doesn't get a chance to provide a seek hint, and the scan may
+        // regress into a full scan.
+        anyHintingPassed = true;
       }
     }
-    return retVal;
+    return anyRowKeyFiltered && !anyHintingPassed;
   }
 
   @Override
@@ -268,11 +320,11 @@ public class FilterListWithAND extends FilterListBase {
 
   @Override
   public boolean equals(Object obj) {
-    if (!(obj instanceof FilterListWithAND)) {
-      return false;
-    }
     if (this == obj) {
       return true;
+    }
+    if (!(obj instanceof FilterListWithAND)) {
+      return false;
     }
     FilterListWithAND f = (FilterListWithAND) obj;
     return this.filters.equals(f.getFilters()) && this.seekHintFilters.equals(f.seekHintFilters);

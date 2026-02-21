@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,27 +17,22 @@
  */
 package org.apache.hadoop.hbase.rest.model;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.builder.ToStringBuilder;
 import org.apache.commons.lang3.builder.ToStringStyle;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.RestTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 
-@Category({RestTests.class, SmallTests.class})
+@Tag(RestTests.TAG)
+@Tag(SmallTests.TAG)
 public class TestCellModel extends TestModelBase<CellModel> {
-
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCellModel.class);
 
   private static final long TIMESTAMP = 1245219839331L;
   private static final byte[] COLUMN = Bytes.toBytes("testcolumn");
@@ -45,11 +40,9 @@ public class TestCellModel extends TestModelBase<CellModel> {
 
   public TestCellModel() throws Exception {
     super(CellModel.class);
-    AS_XML =
-      "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Cell " +
-          "column=\"dGVzdGNvbHVtbg==\" timestamp=\"1245219839331\">dGVzdHZhbHVl</Cell>";
-    AS_PB =
-      "Egp0ZXN0Y29sdW1uGOO6i+eeJCIJdGVzdHZhbHVl";
+    AS_XML = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Cell "
+      + "column=\"dGVzdGNvbHVtbg==\" timestamp=\"1245219839331\">dGVzdHZhbHVl</Cell>";
+    AS_PB = "Egp0ZXN0Y29sdW1uGOO6i+eeJCIJdGVzdHZhbHVl";
 
     AS_JSON =
       "{\"column\":\"dGVzdGNvbHVtbg==\",\"timestamp\":1245219839331,\"$\":\"dGVzdHZhbHVl\"}";
@@ -73,16 +66,19 @@ public class TestCellModel extends TestModelBase<CellModel> {
   }
 
   @Override
+  @Test
   public void testBuildModel() throws Exception {
     checkModel(buildTestModel());
   }
 
   @Override
+  @Test
   public void testFromXML() throws Exception {
     checkModel(fromXML(AS_XML));
   }
 
   @Override
+  @Test
   public void testFromPB() throws Exception {
     checkModel(fromPB(AS_PB));
   }
@@ -95,7 +91,7 @@ public class TestCellModel extends TestModelBase<CellModel> {
     assertEquals(cellModel1, cellModel2);
 
     CellModel cellModel3 = new CellModel();
-    assertFalse(cellModel1.equals(cellModel3));
+    assertNotEquals(cellModel1, cellModel3);
   }
 
   @Test
@@ -108,4 +104,3 @@ public class TestCellModel extends TestModelBase<CellModel> {
     assertTrue(StringUtils.contains(cellModel.toString(), expectedColumn));
   }
 }
-

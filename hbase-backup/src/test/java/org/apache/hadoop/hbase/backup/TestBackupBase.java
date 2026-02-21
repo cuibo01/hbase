@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,7 +19,7 @@ package org.apache.hadoop.hbase.backup;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -45,7 +44,6 @@ import org.apache.hadoop.hbase.backup.impl.BackupSystemTable;
 import org.apache.hadoop.hbase.backup.impl.FullTableBackupClient;
 import org.apache.hadoop.hbase.backup.impl.IncrementalBackupManager;
 import org.apache.hadoop.hbase.backup.impl.IncrementalTableBackupClient;
-import org.apache.hadoop.hbase.backup.master.LogRollMasterProcedureManager;
 import org.apache.hadoop.hbase.backup.util.BackupUtils;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
@@ -58,6 +56,7 @@ import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.master.cleaner.LogCleaner;
 import org.apache.hadoop.hbase.master.cleaner.TimeToLiveLogCleaner;
+import org.apache.hadoop.hbase.regionserver.LogRoller;
 import org.apache.hadoop.hbase.security.HadoopSecurityEnabledUserProviderForTesting;
 import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.security.access.SecureTestUtil;
@@ -68,7 +67,11 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.junit.AfterClass;
+import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -111,9 +114,42 @@ public class TestBackupBase {
     public IncrementalTableBackupClientForTest() {
     }
 
-    public IncrementalTableBackupClientForTest(Connection conn,
-        String backupId, BackupRequest request) throws IOException {
+    public IncrementalTableBackupClientForTest(Connection conn, String backupId,
+      BackupRequest request) throws IOException {
       super(conn, backupId, request);
+    }
+
+    @BeforeEach
+    @Before
+    public void ensurePreviousBackupTestsAreCleanedUp() throws Exception {
+      // Every operation here may not be necessary for any given test,
+      // some often being no-ops. the goal is to help ensure atomicity
+      // of that tests that implement TestBackupBase
+      try (BackupAdmin backupAdmin = getBackupAdmin()) {
+        backupManager.finishBackupSession();
+        backupAdmin.listBackupSets().forEach(backupSet -> {
+          try {
+            backupAdmin.deleteBackupSet(backupSet.getName());
+          } catch (IOException ignored) {
+          }
+        });
+      } catch (Exception ignored) {
+      }
+      Arrays.stream(TEST_UTIL.getAdmin().listTableNames())
+        .filter(tableName -> !tableName.isSystemTable()).forEach(tableName -> {
+          try {
+            TEST_UTIL.truncateTable(tableName);
+          } catch (IOException ignored) {
+          }
+        });
+      TEST_UTIL.getMiniHBaseCluster().getRegionServerThreads().forEach(rst -> {
+        try {
+          LogRoller walRoller = rst.getRegionServer().getWalRoller();
+          walRoller.requestRollAll();
+          walRoller.waitUntilWalRollFinished();
+        } catch (Exception ignored) {
+        }
+      });
     }
 
     @Override
@@ -127,13 +163,13 @@ public class TestBackupBase {
         failStageIf(Stage.stage_1);
         backupInfo.setPhase(BackupPhase.PREPARE_INCREMENTAL);
         LOG.debug("For incremental backup, current table set is "
-            + backupManager.getIncrementalBackupTableSet());
+          + backupManager.getIncrementalBackupTableSet());
         newTimestamps = ((IncrementalBackupManager) backupManager).getIncrBackupLogFileMap();
         // copy out the table and region info files for each table
         BackupUtils.copyTableRegionInfo(conn, backupInfo, conf);
         // convert WAL to HFiles and copy them to .tmp under BACKUP_ROOT
         convertWALsToHFiles();
-        incrementalCopyHFiles(new String[] {getBulkOutputDir().toString()},
+        incrementalCopyHFiles(new String[] { getBulkOutputDir().toString() },
           backupInfo.getBackupRootDir());
         failStageIf(Stage.stage_2);
 
@@ -142,7 +178,7 @@ public class TestBackupBase {
         // After this checkpoint, even if entering cancel process, will let the backup finished
         // Set the previousTimestampMap which is before this current log roll to the manifest.
         Map<TableName, Map<String, Long>> previousTimestampMap =
-            backupManager.readLogTimestampMap();
+          backupManager.readLogTimestampMap();
         backupInfo.setIncrTimestampMap(previousTimestampMap);
 
         // The table list in backupInfo is good for both full backup and incremental backup.
@@ -151,17 +187,17 @@ public class TestBackupBase {
         failStageIf(Stage.stage_3);
 
         Map<TableName, Map<String, Long>> newTableSetTimestampMap =
-            backupManager.readLogTimestampMap();
+          backupManager.readLogTimestampMap();
 
         Long newStartCode =
-            BackupUtils.getMinValue(BackupUtils.getRSLogTimestampMins(newTableSetTimestampMap));
+          BackupUtils.getMinValue(BackupUtils.getRSLogTimestampMins(newTableSetTimestampMap));
         backupManager.writeBackupStartCode(newStartCode);
 
         handleBulkLoad(backupInfo.getTableNames());
         failStageIf(Stage.stage_4);
 
         // backup complete
-        completeBackup(conn, backupInfo, backupManager, BackupType.INCREMENTAL, conf);
+        completeBackup(conn, backupInfo, BackupType.INCREMENTAL, conf);
 
       } catch (Exception e) {
         failBackup(conn, backupInfo, backupManager, e, "Unexpected Exception : ",
@@ -176,7 +212,7 @@ public class TestBackupBase {
     }
 
     public FullTableBackupClientForTest(Connection conn, String backupId, BackupRequest request)
-        throws IOException {
+      throws IOException {
       super(conn, backupId, request);
     }
 
@@ -205,19 +241,15 @@ public class TestBackupBase {
         // the snapshot.
         LOG.info("Execute roll log procedure for full backup ...");
 
-        Map<String, String> props = new HashMap<>();
-        props.put("backupRoot", backupInfo.getBackupRootDir());
-        admin.execProcedure(LogRollMasterProcedureManager.ROLLLOG_PROCEDURE_SIGNATURE,
-          LogRollMasterProcedureManager.ROLLLOG_PROCEDURE_NAME, props);
+        BackupUtils.logRoll(conn, backupInfo.getBackupRootDir(), conf);
         failStageIf(Stage.stage_2);
         newTimestamps = backupManager.readRegionServerLastLogRollResult();
 
         // SNAPSHOT_TABLES:
         backupInfo.setPhase(BackupPhase.SNAPSHOT);
         for (TableName tableName : tableList) {
-          String snapshotName =
-              "snapshot_" + Long.toString(EnvironmentEdgeManager.currentTime()) + "_"
-                  + tableName.getNamespaceAsString() + "_" + tableName.getQualifierAsString();
+          String snapshotName = "snapshot_" + Long.toString(EnvironmentEdgeManager.currentTime())
+            + "_" + tableName.getNamespaceAsString() + "_" + tableName.getQualifierAsString();
 
           snapshotTable(admin, tableName, snapshotName);
           backupInfo.setSnapshotName(tableName, snapshotName);
@@ -239,19 +271,18 @@ public class TestBackupBase {
         backupManager.writeRegionServerLogTimestamp(backupInfo.getTables(), newTimestamps);
 
         Map<TableName, Map<String, Long>> newTableSetTimestampMap =
-            backupManager.readLogTimestampMap();
+          backupManager.readLogTimestampMap();
 
         Long newStartCode =
-            BackupUtils.getMinValue(BackupUtils
-                .getRSLogTimestampMins(newTableSetTimestampMap));
+          BackupUtils.getMinValue(BackupUtils.getRSLogTimestampMins(newTableSetTimestampMap));
         backupManager.writeBackupStartCode(newStartCode);
         failStageIf(Stage.stage_4);
         // backup complete
-        completeBackup(conn, backupInfo, backupManager, BackupType.FULL, conf);
+        completeBackup(conn, backupInfo, BackupType.FULL, conf);
 
       } catch (Exception e) {
 
-        if(autoRestoreOnFailure) {
+        if (autoRestoreOnFailure) {
           failBackup(conn, backupInfo, backupManager, e, "Unexpected BackupException : ",
             BackupType.FULL, conf);
         }
@@ -261,13 +292,13 @@ public class TestBackupBase {
   }
 
   public static void setUpHelper() throws Exception {
-    BACKUP_ROOT_DIR = Path.SEPARATOR +"backupUT";
+    BACKUP_ROOT_DIR = Path.SEPARATOR + "backupUT";
     BACKUP_REMOTE_ROOT_DIR = Path.SEPARATOR + "backupUT";
 
     if (secure) {
       // set the always on security provider
       UserProvider.setUserProviderForTesting(TEST_UTIL.getConfiguration(),
-          HadoopSecurityEnabledUserProviderForTesting.class);
+        HadoopSecurityEnabledUserProviderForTesting.class);
       // setup configuration
       SecureTestUtil.enableSecurity(TEST_UTIL.getConfiguration());
     }
@@ -283,6 +314,8 @@ public class TestBackupBase {
     // Set MultiWAL (with 2 default WAL files per RS)
     conf1.set(WALFactory.WAL_PROVIDER, provider);
     TEST_UTIL.startMiniCluster();
+    conf1 = TEST_UTIL.getConfiguration();
+    TEST_UTIL.startMiniMapReduceCluster();
 
     if (useSecondCluster) {
       conf2 = HBaseConfiguration.create(conf1);
@@ -295,29 +328,26 @@ public class TestBackupBase {
       CommonFSUtils.setWALRootDir(TEST_UTIL2.getConfiguration(), p);
       TEST_UTIL2.startMiniCluster();
     }
-    conf1 = TEST_UTIL.getConfiguration();
 
-    TEST_UTIL.startMiniMapReduceCluster();
     BACKUP_ROOT_DIR =
-        new Path(new Path(TEST_UTIL.getConfiguration().get("fs.defaultFS")),
-          BACKUP_ROOT_DIR).toString();
+      new Path(new Path(TEST_UTIL.getConfiguration().get("fs.defaultFS")), BACKUP_ROOT_DIR)
+        .toString();
     LOG.info("ROOTDIR " + BACKUP_ROOT_DIR);
     if (useSecondCluster) {
-      BACKUP_REMOTE_ROOT_DIR =
-          new Path(new Path(TEST_UTIL2.getConfiguration().get("fs.defaultFS"))
-          + BACKUP_REMOTE_ROOT_DIR).toString();
+      BACKUP_REMOTE_ROOT_DIR = new Path(
+        new Path(TEST_UTIL2.getConfiguration().get("fs.defaultFS")) + BACKUP_REMOTE_ROOT_DIR)
+        .toString();
       LOG.info("REMOTE ROOTDIR " + BACKUP_REMOTE_ROOT_DIR);
     }
     createTables();
     populateFromMasterConfig(TEST_UTIL.getHBaseCluster().getMaster().getConfiguration(), conf1);
   }
 
-
   /**
    * Setup Cluster with appropriate configurations before running tests.
-   *
    * @throws Exception if starting the mini cluster or setting up the tables fails
    */
+  @BeforeAll
   @BeforeClass
   public static void setUp() throws Exception {
     TEST_UTIL = new HBaseTestingUtil();
@@ -327,7 +357,6 @@ public class TestBackupBase {
     setUpHelper();
   }
 
-
   private static void populateFromMasterConfig(Configuration masterConf, Configuration conf) {
     Iterator<Entry<String, String>> it = masterConf.iterator();
     while (it.hasNext()) {
@@ -336,12 +365,10 @@ public class TestBackupBase {
     }
   }
 
-  /**
-   * @throws Exception if deleting the archive directory or shutting down the mini cluster fails
-   */
+  @AfterAll
   @AfterClass
   public static void tearDown() throws Exception {
-    try{
+    try {
       SnapshotTestingUtils.deleteAllSnapshots(TEST_UTIL.getAdmin());
     } catch (Exception e) {
     }
@@ -356,7 +383,7 @@ public class TestBackupBase {
   }
 
   Table insertIntoTable(Connection conn, TableName table, byte[] family, int id, int numRows)
-      throws IOException {
+    throws IOException {
     Table t = conn.getTable(table);
     Put p1;
     for (int i = 0; i < numRows; i++) {
@@ -367,24 +394,28 @@ public class TestBackupBase {
     return t;
   }
 
-  protected BackupRequest createBackupRequest(BackupType type,
-      List<TableName> tables, String path) {
+  protected BackupRequest createBackupRequest(BackupType type, List<TableName> tables,
+    String path) {
+    return createBackupRequest(type, tables, path, false);
+  }
+
+  protected BackupRequest createBackupRequest(BackupType type, List<TableName> tables, String path,
+    boolean noChecksumVerify) {
     BackupRequest.Builder builder = new BackupRequest.Builder();
-    BackupRequest request = builder.withBackupType(type)
-                                    .withTableList(tables)
-                                    .withTargetRootDir(path).build();
+    BackupRequest request = builder.withBackupType(type).withTableList(tables)
+      .withTargetRootDir(path).withNoChecksumVerify(noChecksumVerify).build();
     return request;
   }
 
   protected String backupTables(BackupType type, List<TableName> tables, String path)
-      throws IOException {
+    throws IOException {
     Connection conn = null;
     BackupAdmin badmin = null;
     String backupId;
     try {
       conn = ConnectionFactory.createConnection(conf1);
       badmin = new BackupAdminImpl(conn);
-      BackupRequest request = createBackupRequest(type, tables, path);
+      BackupRequest request = createBackupRequest(type, new ArrayList<>(tables), path);
       backupId = badmin.backupTables(request);
     } finally {
       if (badmin != null) {
@@ -478,7 +509,7 @@ public class TestBackupBase {
     }
   }
 
-  protected BackupAdmin getBackupAdmin() throws IOException {
+  protected static BackupAdmin getBackupAdmin() throws IOException {
     return new BackupAdminImpl(TEST_UTIL.getConnection());
   }
 

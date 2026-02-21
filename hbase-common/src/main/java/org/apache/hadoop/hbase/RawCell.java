@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,7 +20,6 @@ package org.apache.hadoop.hbase;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
-
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
@@ -35,11 +34,32 @@ public interface RawCell extends Cell {
   static final int MAX_TAGS_LENGTH = (2 * Short.MAX_VALUE) + 1;
 
   /**
+   * Contiguous raw bytes representing tags that may start at any index in the containing array.
+   * @return the tags byte array
+   */
+  byte[] getTagsArray();
+
+  /**
+   * Return the first offset where the tags start in the Cell
+   */
+  int getTagsOffset();
+
+  /**
+   * HBase internally uses 2 bytes to store tags length in Cell. As the tags length is always a
+   * non-negative number, to make good use of the sign bit, the max of tags length is defined 2 *
+   * Short.MAX_VALUE + 1 = 65535. As a result, the return type is int, because a short is not
+   * capable of handling that. Please note that even if the return type is int, the max tags length
+   * is far less than Integer.MAX_VALUE.
+   * @return the total length of the tags in the Cell.
+   */
+  int getTagsLength();
+
+  /**
    * Allows cloning the tags in the cell to a new byte[]
    * @return the byte[] having the tags
    */
   default byte[] cloneTags() {
-    return PrivateCellUtil.cloneTags(this);
+    return PrivateCellUtil.cloneTags((ExtendedCell) this);
   }
 
   /**
@@ -47,7 +67,7 @@ public interface RawCell extends Cell {
    * @return a list of tags
    */
   default Iterator<Tag> getTags() {
-    return PrivateCellUtil.tagsIterator(this);
+    return PrivateCellUtil.tagsIterator((ExtendedCell) this);
   }
 
   /**
@@ -56,7 +76,7 @@ public interface RawCell extends Cell {
    * @return the specific tag if available or null
    */
   default Optional<Tag> getTag(byte type) {
-    return PrivateCellUtil.getTag(this, type);
+    return PrivateCellUtil.getTag((ExtendedCell) this, type);
   }
 
   /**
@@ -70,10 +90,8 @@ public interface RawCell extends Cell {
     }
   }
 
-  /**
-   * @return A new cell which is having the extra tags also added to it.
-   */
+  /** Returns A new cell which is having the extra tags also added to it. */
   public static Cell createCell(Cell cell, List<Tag> tags) {
-    return PrivateCellUtil.createCell(cell, tags);
+    return PrivateCellUtil.createCell((ExtendedCell) cell, tags);
   }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,6 +22,8 @@ import static org.apache.hadoop.hbase.backup.BackupRestoreConstants.OPTION_BANDW
 import static org.apache.hadoop.hbase.backup.BackupRestoreConstants.OPTION_BANDWIDTH_DESC;
 import static org.apache.hadoop.hbase.backup.BackupRestoreConstants.OPTION_DEBUG;
 import static org.apache.hadoop.hbase.backup.BackupRestoreConstants.OPTION_DEBUG_DESC;
+import static org.apache.hadoop.hbase.backup.BackupRestoreConstants.OPTION_IGNORECHECKSUM;
+import static org.apache.hadoop.hbase.backup.BackupRestoreConstants.OPTION_IGNORECHECKSUM_DESC;
 import static org.apache.hadoop.hbase.backup.BackupRestoreConstants.OPTION_KEEP;
 import static org.apache.hadoop.hbase.backup.BackupRestoreConstants.OPTION_KEEP_DESC;
 import static org.apache.hadoop.hbase.backup.BackupRestoreConstants.OPTION_LIST;
@@ -58,9 +60,7 @@ import org.slf4j.LoggerFactory;
 import org.apache.hbase.thirdparty.org.apache.commons.cli.CommandLine;
 
 /**
- *
  * Command-line entry point for backup operation
- *
  */
 @InterfaceAudience.Private
 public class BackupDriver extends AbstractHBaseTool {
@@ -153,6 +153,7 @@ public class BackupDriver extends AbstractHBaseTool {
     addOptWithArg(OPTION_BANDWIDTH, OPTION_BANDWIDTH_DESC);
     addOptWithArg(OPTION_LIST, OPTION_BACKUP_LIST_DESC);
     addOptWithArg(OPTION_WORKERS, OPTION_WORKERS_DESC);
+    addOptNoArg(OPTION_IGNORECHECKSUM, OPTION_IGNORECHECKSUM_DESC);
     addOptWithArg(OPTION_RECORD_NUMBER, OPTION_RECORD_NUMBER_DESC);
     addOptWithArg(OPTION_SET, OPTION_SET_DESC);
     addOptWithArg(OPTION_PATH, OPTION_PATH_DESC);

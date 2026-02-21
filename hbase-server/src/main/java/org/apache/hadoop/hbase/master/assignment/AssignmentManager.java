@@ -17,20 +17,27 @@
  */
 package org.apache.hadoop.hbase.master.assignment;
 
+import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.hadoop.conf.Configuration;
@@ -70,6 +77,7 @@ import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureScheduler;
 import org.apache.hadoop.hbase.master.procedure.ProcedureSyncWait;
 import org.apache.hadoop.hbase.master.procedure.ServerCrashProcedure;
+import org.apache.hadoop.hbase.master.procedure.TruncateRegionProcedure;
 import org.apache.hadoop.hbase.master.region.MasterRegion;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureEvent;
@@ -80,6 +88,7 @@ import org.apache.hadoop.hbase.regionserver.SequenceId;
 import org.apache.hadoop.hbase.rsgroup.RSGroupBasedLoadBalancer;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.FutureUtils;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.util.VersionInfo;
@@ -102,58 +111,75 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProto
  * <li>In-memory states of regions and servers are stored in {@link RegionStates}.</li>
  * <li>hbase:meta state updates are handled by {@link RegionStateStore}.</li>
  * </ul>
- * Regions are created by CreateTable, Split, Merge.
- * Regions are deleted by DeleteTable, Split, Merge.
- * Assigns are triggered by CreateTable, EnableTable, Split, Merge, ServerCrash.
- * Unassigns are triggered by DisableTable, Split, Merge
+ * Regions are created by CreateTable, Split, Merge. Regions are deleted by DeleteTable, Split,
+ * Merge. Assigns are triggered by CreateTable, EnableTable, Split, Merge, ServerCrash. Unassigns
+ * are triggered by DisableTable, Split, Merge
  */
 @InterfaceAudience.Private
 public class AssignmentManager {
   private static final Logger LOG = LoggerFactory.getLogger(AssignmentManager.class);
 
   // TODO: AMv2
-  //  - handle region migration from hbase1 to hbase2.
-  //  - handle sys table assignment first (e.g. acl, namespace)
-  //  - handle table priorities
-  //  - If ServerBusyException trying to update hbase:meta, we abort the Master
-  //   See updateRegionLocation in RegionStateStore.
+  // - handle region migration from hbase1 to hbase2.
+  // - handle sys table assignment first (e.g. acl, namespace)
+  // - handle table priorities
+  // - If ServerBusyException trying to update hbase:meta, we abort the Master
+  // See updateRegionLocation in RegionStateStore.
   //
   // See also
   // https://docs.google.com/document/d/1eVKa7FHdeoJ1-9o8yZcOTAQbv0u0bblBlCCzVSIn69g/edit#heading=h.ystjyrkbtoq5
   // for other TODOs.
 
   public static final String BOOTSTRAP_THREAD_POOL_SIZE_CONF_KEY =
-      "hbase.assignment.bootstrap.thread.pool.size";
+    "hbase.assignment.bootstrap.thread.pool.size";
 
   public static final String ASSIGN_DISPATCH_WAIT_MSEC_CONF_KEY =
-      "hbase.assignment.dispatch.wait.msec";
+    "hbase.assignment.dispatch.wait.msec";
   private static final int DEFAULT_ASSIGN_DISPATCH_WAIT_MSEC = 150;
 
   public static final String ASSIGN_DISPATCH_WAITQ_MAX_CONF_KEY =
-      "hbase.assignment.dispatch.wait.queue.max.size";
+    "hbase.assignment.dispatch.wait.queue.max.size";
   private static final int DEFAULT_ASSIGN_DISPATCH_WAITQ_MAX = 100;
 
   public static final String RIT_CHORE_INTERVAL_MSEC_CONF_KEY =
-      "hbase.assignment.rit.chore.interval.msec";
+    "hbase.assignment.rit.chore.interval.msec";
   private static final int DEFAULT_RIT_CHORE_INTERVAL_MSEC = 60 * 1000;
 
   public static final String DEAD_REGION_METRIC_CHORE_INTERVAL_MSEC_CONF_KEY =
-      "hbase.assignment.dead.region.metric.chore.interval.msec";
+    "hbase.assignment.dead.region.metric.chore.interval.msec";
   private static final int DEFAULT_DEAD_REGION_METRIC_CHORE_INTERVAL_MSEC = 120 * 1000;
 
-  public static final String ASSIGN_MAX_ATTEMPTS =
-      "hbase.assignment.maximum.attempts";
+  public static final String ASSIGN_MAX_ATTEMPTS = "hbase.assignment.maximum.attempts";
   private static final int DEFAULT_ASSIGN_MAX_ATTEMPTS = Integer.MAX_VALUE;
 
   public static final String ASSIGN_RETRY_IMMEDIATELY_MAX_ATTEMPTS =
-      "hbase.assignment.retry.immediately.maximum.attempts";
+    "hbase.assignment.retry.immediately.maximum.attempts";
   private static final int DEFAULT_ASSIGN_RETRY_IMMEDIATELY_MAX_ATTEMPTS = 3;
 
   /** Region in Transition metrics threshold time */
   public static final String METRICS_RIT_STUCK_WARNING_THRESHOLD =
-      "hbase.metrics.rit.stuck.warning.threshold";
+    "hbase.metrics.rit.stuck.warning.threshold";
   private static final int DEFAULT_RIT_STUCK_WARNING_THRESHOLD = 60 * 1000;
   public static final String UNEXPECTED_STATE_REGION = "Unexpected state for ";
+
+  public static final String FORCE_REGION_RETAINMENT = "hbase.master.scp.retain.assignment.force";
+
+  public static final boolean DEFAULT_FORCE_REGION_RETAINMENT = false;
+
+  /** The wait time in millis before checking again if the region's previous RS is back online */
+  public static final String FORCE_REGION_RETAINMENT_WAIT_INTERVAL =
+    "hbase.master.scp.retain.assignment.force.wait-interval";
+
+  public static final long DEFAULT_FORCE_REGION_RETAINMENT_WAIT_INTERVAL = 50;
+
+  /**
+   * The number of times to check if the region's previous RS is back online, before giving up and
+   * proceeding with assignment on a new RS
+   */
+  public static final String FORCE_REGION_RETAINMENT_RETRIES =
+    "hbase.master.scp.retain.assignment.force.retries";
+
+  public static final int DEFAULT_FORCE_REGION_RETAINMENT_RETRIES = 600;
 
   private final ProcedureEvent<?> metaAssignEvent = new ProcedureEvent<>("meta assign");
   private final ProcedureEvent<?> metaLoadEvent = new ProcedureEvent<>("meta load");
@@ -168,23 +194,20 @@ public class AssignmentManager {
   private final RegionStateStore regionStateStore;
 
   /**
-   * When the operator uses this configuration option, any version between
-   * the current cluster version and the value of "hbase.min.version.move.system.tables"
-   * does not trigger any auto-region movement. Auto-region movement here
-   * refers to auto-migration of system table regions to newer server versions.
-   * It is assumed that the configured range of versions does not require special
-   * handling of moving system table regions to higher versioned RegionServer.
-   * This auto-migration is done by {@link #checkIfShouldMoveSystemRegionAsync()}.
-   * Example: Let's assume the cluster is on version 1.4.0 and we have
-   * set "hbase.min.version.move.system.tables" as "2.0.0". Now if we upgrade
-   * one RegionServer on 1.4.0 cluster to 1.6.0 (< 2.0.0), then AssignmentManager will
-   * not move hbase:meta, hbase:namespace and other system table regions
-   * to newly brought up RegionServer 1.6.0 as part of auto-migration.
-   * However, if we upgrade one RegionServer on 1.4.0 cluster to 2.2.0 (> 2.0.0),
-   * then AssignmentManager will move all system table regions to newly brought
-   * up RegionServer 2.2.0 as part of auto-migration done by
-   * {@link #checkIfShouldMoveSystemRegionAsync()}.
-   * "hbase.min.version.move.system.tables" is introduced as part of HBASE-22923.
+   * When the operator uses this configuration option, any version between the current cluster
+   * version and the value of "hbase.min.version.move.system.tables" does not trigger any
+   * auto-region movement. Auto-region movement here refers to auto-migration of system table
+   * regions to newer server versions. It is assumed that the configured range of versions does not
+   * require special handling of moving system table regions to higher versioned RegionServer. This
+   * auto-migration is done by {@link #checkIfShouldMoveSystemRegionAsync()}. Example: Let's assume
+   * the cluster is on version 1.4.0 and we have set "hbase.min.version.move.system.tables" as
+   * "2.0.0". Now if we upgrade one RegionServer on 1.4.0 cluster to 1.6.0 (< 2.0.0), then
+   * AssignmentManager will not move hbase:meta, hbase:namespace and other system table regions to
+   * newly brought up RegionServer 1.6.0 as part of auto-migration. However, if we upgrade one
+   * RegionServer on 1.4.0 cluster to 2.2.0 (> 2.0.0), then AssignmentManager will move all system
+   * table regions to newly brought up RegionServer 2.2.0 as part of auto-migration done by
+   * {@link #checkIfShouldMoveSystemRegionAsync()}. "hbase.min.version.move.system.tables" is
+   * introduced as part of HBASE-22923.
    */
   private final String minVersionToMoveSysTables;
 
@@ -206,6 +229,15 @@ public class AssignmentManager {
 
   private Thread assignThread;
 
+  private final boolean forceRegionRetainment;
+
+  private final long forceRegionRetainmentWaitInterval;
+
+  private final int forceRegionRetainmentRetries;
+
+  private final RegionInTransitionTracker regionInTransitionTracker =
+    new RegionInTransitionTracker();
+
   public AssignmentManager(MasterServices master, MasterRegion masterRegion) {
     this(master, masterRegion, new RegionStateStore(master, masterRegion));
   }
@@ -219,32 +251,39 @@ public class AssignmentManager {
     final Configuration conf = master.getConfiguration();
 
     // Only read favored nodes if using the favored nodes load balancer.
-    this.shouldAssignRegionsWithFavoredNodes = FavoredStochasticBalancer.class.isAssignableFrom(
-        conf.getClass(HConstants.HBASE_MASTER_LOADBALANCER_CLASS, Object.class));
+    this.shouldAssignRegionsWithFavoredNodes = FavoredStochasticBalancer.class
+      .isAssignableFrom(conf.getClass(HConstants.HBASE_MASTER_LOADBALANCER_CLASS, Object.class));
 
-    this.assignDispatchWaitMillis = conf.getInt(ASSIGN_DISPATCH_WAIT_MSEC_CONF_KEY,
-        DEFAULT_ASSIGN_DISPATCH_WAIT_MSEC);
-    this.assignDispatchWaitQueueMaxSize = conf.getInt(ASSIGN_DISPATCH_WAITQ_MAX_CONF_KEY,
-        DEFAULT_ASSIGN_DISPATCH_WAITQ_MAX);
+    this.assignDispatchWaitMillis =
+      conf.getInt(ASSIGN_DISPATCH_WAIT_MSEC_CONF_KEY, DEFAULT_ASSIGN_DISPATCH_WAIT_MSEC);
+    this.assignDispatchWaitQueueMaxSize =
+      conf.getInt(ASSIGN_DISPATCH_WAITQ_MAX_CONF_KEY, DEFAULT_ASSIGN_DISPATCH_WAITQ_MAX);
 
-    this.assignMaxAttempts = Math.max(1, conf.getInt(ASSIGN_MAX_ATTEMPTS,
-        DEFAULT_ASSIGN_MAX_ATTEMPTS));
+    this.assignMaxAttempts =
+      Math.max(1, conf.getInt(ASSIGN_MAX_ATTEMPTS, DEFAULT_ASSIGN_MAX_ATTEMPTS));
     this.assignRetryImmediatelyMaxAttempts = conf.getInt(ASSIGN_RETRY_IMMEDIATELY_MAX_ATTEMPTS,
-        DEFAULT_ASSIGN_RETRY_IMMEDIATELY_MAX_ATTEMPTS);
+      DEFAULT_ASSIGN_RETRY_IMMEDIATELY_MAX_ATTEMPTS);
 
-    int ritChoreInterval = conf.getInt(RIT_CHORE_INTERVAL_MSEC_CONF_KEY,
-        DEFAULT_RIT_CHORE_INTERVAL_MSEC);
+    int ritChoreInterval =
+      conf.getInt(RIT_CHORE_INTERVAL_MSEC_CONF_KEY, DEFAULT_RIT_CHORE_INTERVAL_MSEC);
     this.ritChore = new RegionInTransitionChore(ritChoreInterval);
 
     int deadRegionChoreInterval = conf.getInt(DEAD_REGION_METRIC_CHORE_INTERVAL_MSEC_CONF_KEY,
-        DEFAULT_DEAD_REGION_METRIC_CHORE_INTERVAL_MSEC);
+      DEFAULT_DEAD_REGION_METRIC_CHORE_INTERVAL_MSEC);
     if (deadRegionChoreInterval > 0) {
       this.deadMetricChore = new DeadServerMetricRegionChore(deadRegionChoreInterval);
     } else {
       this.deadMetricChore = null;
     }
-    minVersionToMoveSysTables = conf.get(MIN_VERSION_MOVE_SYS_TABLES_CONFIG,
-      DEFAULT_MIN_VERSION_MOVE_SYS_TABLES_CONFIG);
+    minVersionToMoveSysTables =
+      conf.get(MIN_VERSION_MOVE_SYS_TABLES_CONFIG, DEFAULT_MIN_VERSION_MOVE_SYS_TABLES_CONFIG);
+
+    forceRegionRetainment =
+      conf.getBoolean(FORCE_REGION_RETAINMENT, DEFAULT_FORCE_REGION_RETAINMENT);
+    forceRegionRetainmentWaitInterval = conf.getLong(FORCE_REGION_RETAINMENT_WAIT_INTERVAL,
+      DEFAULT_FORCE_REGION_RETAINMENT_WAIT_INTERVAL);
+    forceRegionRetainmentRetries =
+      conf.getInt(FORCE_REGION_RETAINMENT_RETRIES, DEFAULT_FORCE_REGION_RETAINMENT_RETRIES);
   }
 
   private void mirrorMetaLocations() throws IOException, KeeperException {
@@ -298,10 +337,18 @@ public class AssignmentManager {
             regionNode.setLastHost(lastHost);
             regionNode.setRegionLocation(regionLocation);
             regionNode.setOpenSeqNum(openSeqNum);
+            regionInTransitionTracker.handleRegionStateNodeOperation(regionNode);
+
             if (regionNode.getProcedure() != null) {
               regionNode.getProcedure().stateLoaded(this, regionNode);
             }
             if (regionLocation != null) {
+              // TODO: this could lead to some orphan server state nodes, as it is possible that the
+              // region server is already dead and its SCP has already finished but we have
+              // persisted an opening state on this region server. Finally the TRSP will assign the
+              // region to another region server, so it will not cause critical problems, just waste
+              // some memory as no one will try to cleanup these orphan server state nodes.
+              regionStates.createServer(regionLocation);
               regionStates.addRegionToServer(regionNode);
             }
             if (RegionReplicaUtil.isDefaultReplica(regionInfo.getReplicaId())) {
@@ -343,9 +390,15 @@ public class AssignmentManager {
           return;
         }
       }
-      LOG.info("Attach {} to {} to restore RIT", proc, regionNode);
+      LOG.info("Attach {} to {}", proc, regionNode);
       regionNode.setProcedure(proc);
     });
+  }
+
+  public void initializationPostMetaOnline() {
+    // now that we are sure that meta is online, we can set TableStateManger in
+    // regionInTransitionTracker
+    regionInTransitionTracker.setTableStateManager(master.getTableStateManager());
   }
 
   public void stop() {
@@ -372,11 +425,12 @@ public class AssignmentManager {
 
     // Stop the RegionStateStore
     regionStates.clear();
+    regionInTransitionTracker.stop();
 
     // Update meta events (for testing)
     if (hasProcExecutor) {
       metaLoadEvent.suspend();
-      for (RegionInfo hri: getMetaRegionSet()) {
+      for (RegionInfo hri : getMetaRegionSet()) {
         setMetaAssigned(hri, false);
       }
     }
@@ -413,6 +467,18 @@ public class AssignmentManager {
 
   int getAssignMaxAttempts() {
     return assignMaxAttempts;
+  }
+
+  public boolean isForceRegionRetainment() {
+    return forceRegionRetainment;
+  }
+
+  public long getForceRegionRetainmentWaitInterval() {
+    return forceRegionRetainmentWaitInterval;
+  }
+
+  public int getForceRegionRetainmentRetries() {
+    return forceRegionRetainmentRetries;
   }
 
   int getAssignRetryImmediatelyMaxAttempts() {
@@ -462,8 +528,8 @@ public class AssignmentManager {
 
   public List<RegionInfo> getTableRegions(TableName tableName,
     boolean excludeOfflinedSplitParents) {
-    return getRegionStateNodes(tableName, excludeOfflinedSplitParents)
-      .map(this::getRegionInfo).collect(Collectors.toList());
+    return getRegionStateNodes(tableName, excludeOfflinedSplitParents).map(this::getRegionInfo)
+      .collect(Collectors.toList());
   }
 
   public List<Pair<RegionInfo, ServerName>> getTableRegionsAndLocations(TableName tableName,
@@ -484,7 +550,7 @@ public class AssignmentManager {
   }
 
   // ============================================================================================
-  //  Table State Manager helpers
+  // Table State Manager helpers
   // ============================================================================================
   private TableStateManager getTableStateManager() {
     return master.getTableStateManager();
@@ -495,12 +561,12 @@ public class AssignmentManager {
   }
 
   private boolean isTableDisabled(final TableName tableName) {
-    return getTableStateManager().isTableState(tableName,
-      TableState.State.DISABLED, TableState.State.DISABLING);
+    return getTableStateManager().isTableState(tableName, TableState.State.DISABLED,
+      TableState.State.DISABLING);
   }
 
   // ============================================================================================
-  //  META Helpers
+  // META Helpers
   // ============================================================================================
   private boolean isMetaRegion(final RegionInfo regionInfo) {
     return regionInfo.isMetaRegion();
@@ -511,7 +577,7 @@ public class AssignmentManager {
   }
 
   public RegionInfo getMetaRegionFromName(final byte[] regionName) {
-    for (RegionInfo hri: getMetaRegionSet()) {
+    for (RegionInfo hri : getMetaRegionSet()) {
       if (Bytes.equals(hri.getRegionName(), regionName)) {
         return hri;
       }
@@ -527,11 +593,11 @@ public class AssignmentManager {
   private boolean isCarryingRegion(final ServerName serverName, final RegionInfo regionInfo) {
     // TODO: check for state?
     final RegionStateNode node = regionStates.getRegionStateNode(regionInfo);
-    return(node != null && serverName.equals(node.getRegionLocation()));
+    return (node != null && serverName.equals(node.getRegionLocation()));
   }
 
   private RegionInfo getMetaForRegion(final RegionInfo regionInfo) {
-    //if (regionInfo.isMetaRegion()) return regionInfo;
+    // if (regionInfo.isMetaRegion()) return regionInfo;
     // TODO: handle multiple meta. if the region provided is not meta lookup
     // which meta the region belongs to.
     return RegionInfoBuilder.FIRST_META_REGIONINFO;
@@ -539,13 +605,14 @@ public class AssignmentManager {
 
   // TODO: handle multiple meta.
   private static final Set<RegionInfo> META_REGION_SET =
-      Collections.singleton(RegionInfoBuilder.FIRST_META_REGIONINFO);
+    Collections.singleton(RegionInfoBuilder.FIRST_META_REGIONINFO);
+
   public Set<RegionInfo> getMetaRegionSet() {
     return META_REGION_SET;
   }
 
   // ============================================================================================
-  //  META Event(s) helpers
+  // META Event(s) helpers
   // ============================================================================================
   /**
    * Notice that, this only means the meta region is available on a RS, but the AM may still be
@@ -620,10 +687,12 @@ public class AssignmentManager {
 
   /**
    * Start a new thread to check if there are region servers whose versions are higher than others.
-   * If so, move all system table regions to RS with the highest version to keep compatibility.
-   * The reason is, RS in new version may not be able to access RS in old version when there are
-   * some incompatible changes.
-   * <p>This method is called when a new RegionServer is added to cluster only.</p>
+   * If so, move all system table regions to RS with the highest version to keep compatibility. The
+   * reason is, RS in new version may not be able to access RS in old version when there are some
+   * incompatible changes.
+   * <p>
+   * This method is called when a new RegionServer is added to cluster only.
+   * </p>
    */
   public void checkIfShouldMoveSystemRegionAsync() {
     // TODO: Fix this thread. If a server is killed and a new one started, this thread thinks that
@@ -661,8 +730,8 @@ public class AssignmentManager {
                 RegionPlan plan = new RegionPlan(regionInfo, server, null);
                 if (regionInfo.isMetaRegion()) {
                   // Must move meta region first.
-                  LOG.info("Async MOVE of {} to newer Server={}",
-                      regionInfo.getEncodedName(), server);
+                  LOG.info("Async MOVE of {} to newer Server={}", regionInfo.getEncodedName(),
+                    server);
                   moveAsync(plan);
                 } else {
                   plans.add(plan);
@@ -670,8 +739,8 @@ public class AssignmentManager {
               }
             }
             for (RegionPlan plan : plans) {
-              LOG.info("Async MOVE of {} to newer Server={}",
-                  plan.getRegionInfo().getEncodedName(), server);
+              LOG.info("Async MOVE of {} to newer Server={}", plan.getRegionInfo().getEncodedName(),
+                server);
               moveAsync(plan);
             }
           }
@@ -691,10 +760,10 @@ public class AssignmentManager {
   }
 
   private void preTransitCheck(RegionStateNode regionNode, RegionState.State[] expectedStates)
-      throws HBaseIOException {
+    throws HBaseIOException {
     if (regionNode.getProcedure() != null) {
-      throw new HBaseIOException(regionNode + " is currently in transition; pid=" +
-        regionNode.getProcedure().getProcId());
+      throw new HBaseIOException(
+        regionNode + " is currently in transition; pid=" + regionNode.getProcedure().getProcId());
     }
     if (!regionNode.isInState(expectedStates)) {
       throw new DoNotRetryRegionException(UNEXPECTED_STATE_REGION + regionNode);
@@ -705,20 +774,22 @@ public class AssignmentManager {
   }
 
   /**
-   * Create an assign TransitRegionStateProcedure. Makes sure of RegionState.
-   * Throws exception if not appropriate UNLESS override is set. Used by hbck2 but also by
-   * straightline {@link #assign(RegionInfo, ServerName)} and
-   * {@link #assignAsync(RegionInfo, ServerName)}.
+   * Create an assign TransitRegionStateProcedure. Makes sure of RegionState. Throws exception if
+   * not appropriate UNLESS override is set. Used by hbck2 but also by straightline
+   * {@link #assign(RegionInfo, ServerName)} and {@link #assignAsync(RegionInfo, ServerName)}.
    * @see #createAssignProcedure(RegionStateNode, ServerName) for a version that does NO checking
-   *   used when only when no checking needed.
+   *      used when only when no checking needed.
    * @param override If false, check RegionState is appropriate for assign; if not throw exception.
    */
   private TransitRegionStateProcedure createAssignProcedure(RegionInfo regionInfo, ServerName sn,
-      boolean override) throws IOException {
+    boolean override, boolean force) throws IOException {
     RegionStateNode regionNode = regionStates.getOrCreateRegionStateNode(regionInfo);
     regionNode.lock();
     try {
       if (override) {
+        if (!force) {
+          preTransitCheck(regionNode, STATES_EXPECTED_ON_ASSIGN);
+        }
         if (regionNode.getProcedure() != null) {
           regionNode.unsetProcedure(regionNode.getProcedure());
         }
@@ -726,20 +797,20 @@ public class AssignmentManager {
         preTransitCheck(regionNode, STATES_EXPECTED_ON_ASSIGN);
       }
       assert regionNode.getProcedure() == null;
-      return regionNode.setProcedure(TransitRegionStateProcedure.assign(getProcedureEnvironment(),
-        regionInfo, sn));
+      return regionNode.setProcedure(
+        TransitRegionStateProcedure.assign(getProcedureEnvironment(), regionInfo, sn));
     } finally {
       regionNode.unlock();
     }
   }
 
   /**
-   * Create an assign TransitRegionStateProcedure. Does NO checking of RegionState.
-   * Presumes appriopriate state ripe for assign.
-   * @see #createAssignProcedure(RegionInfo, ServerName, boolean)
+   * Create an assign TransitRegionStateProcedure. Does NO checking of RegionState. Presumes
+   * appriopriate state ripe for assign.
+   * @see #createAssignProcedure(RegionInfo, ServerName, boolean, boolean)
    */
   private TransitRegionStateProcedure createAssignProcedure(RegionStateNode regionNode,
-      ServerName targetServer) {
+    ServerName targetServer) {
     regionNode.lock();
     try {
       return regionNode.setProcedure(TransitRegionStateProcedure.assign(getProcedureEnvironment(),
@@ -750,7 +821,7 @@ public class AssignmentManager {
   }
 
   public long assign(RegionInfo regionInfo, ServerName sn) throws IOException {
-    TransitRegionStateProcedure proc = createAssignProcedure(regionInfo, sn, false);
+    TransitRegionStateProcedure proc = createAssignProcedure(regionInfo, sn, false, false);
     ProcedureSyncWait.submitAndWaitProcedure(master.getMasterProcedureExecutor(), proc);
     return proc.getProcId();
   }
@@ -762,11 +833,11 @@ public class AssignmentManager {
   /**
    * Submits a procedure that assigns a region to a target server without waiting for it to finish
    * @param regionInfo the region we would like to assign
-   * @param sn target server name
+   * @param sn         target server name
    */
   public Future<byte[]> assignAsync(RegionInfo regionInfo, ServerName sn) throws IOException {
     return ProcedureSyncWait.submitProcedure(master.getMasterProcedureExecutor(),
-      createAssignProcedure(regionInfo, sn, false));
+      createAssignProcedure(regionInfo, sn, false, false));
   }
 
   /**
@@ -796,11 +867,11 @@ public class AssignmentManager {
   }
 
   public TransitRegionStateProcedure createMoveRegionProcedure(RegionInfo regionInfo,
-      ServerName targetServer) throws HBaseIOException {
+    ServerName targetServer) throws HBaseIOException {
     RegionStateNode regionNode = this.regionStates.getRegionStateNode(regionInfo);
     if (regionNode == null) {
-      throw new UnknownRegionException("No RegionStateNode found for " +
-          regionInfo.getEncodedName() + "(Closed/Deleted?)");
+      throw new UnknownRegionException(
+        "No RegionStateNode found for " + regionInfo.getEncodedName() + "(Closed/Deleted?)");
     }
     TransitRegionStateProcedure proc;
     regionNode.lock();
@@ -838,7 +909,7 @@ public class AssignmentManager {
   }
 
   // ============================================================================================
-  //  RegionTransition procedures helpers
+  // RegionTransition procedures helpers
   // ============================================================================================
 
   /**
@@ -849,13 +920,14 @@ public class AssignmentManager {
    *         AssignProcedure will ask the balancer for a new target, and so on.
    */
   public TransitRegionStateProcedure[] createRoundRobinAssignProcedures(List<RegionInfo> hris,
-      List<ServerName> serversToExclude) {
+    List<ServerName> serversToExclude) {
     if (hris.isEmpty()) {
       return new TransitRegionStateProcedure[0];
     }
 
-    if (serversToExclude != null
-        && this.master.getServerManager().getOnlineServersList().size() == 1) {
+    if (
+      serversToExclude != null && this.master.getServerManager().getOnlineServersList().size() == 1
+    ) {
       LOG.debug("Only one region server found and hence going ahead with the assignment");
       serversToExclude = null;
     }
@@ -905,33 +977,38 @@ public class AssignmentManager {
   }
 
   /**
-   * Create one TransitRegionStateProcedure to assign a region w/o specifying a target server.
-   * This method is called from HBCK2.
+   * Create one TransitRegionStateProcedure to assign a region w/o specifying a target server. This
+   * method is called from HBCK2.
    * @return an assign or null
    */
-  public TransitRegionStateProcedure createOneAssignProcedure(RegionInfo ri, boolean override) {
+  public TransitRegionStateProcedure createOneAssignProcedure(RegionInfo ri, boolean override,
+    boolean force) {
     TransitRegionStateProcedure trsp = null;
     try {
-      trsp = createAssignProcedure(ri, null, override);
+      trsp = createAssignProcedure(ri, null, override, force);
     } catch (IOException ioe) {
-      LOG.info("Failed {} assign, override={}" +
-        (override? "": "; set override to by-pass state checks."),
+      LOG.info(
+        "Failed {} assign, override={}"
+          + (override ? "" : "; set override to by-pass state checks."),
         ri.getEncodedName(), override, ioe);
     }
     return trsp;
   }
 
   /**
-   * Create one TransitRegionStateProcedure to unassign a region.
-   * This method is called from HBCK2.
+   * Create one TransitRegionStateProcedure to unassign a region. This method is called from HBCK2.
    * @return an unassign or null
    */
-  public TransitRegionStateProcedure createOneUnassignProcedure(RegionInfo ri, boolean override) {
+  public TransitRegionStateProcedure createOneUnassignProcedure(RegionInfo ri, boolean override,
+    boolean force) {
     RegionStateNode regionNode = regionStates.getOrCreateRegionStateNode(ri);
     TransitRegionStateProcedure trsp = null;
     regionNode.lock();
     try {
       if (override) {
+        if (!force) {
+          preTransitCheck(regionNode, STATES_EXPECTED_ON_UNASSIGN_OR_MOVE);
+        }
         if (regionNode.getProcedure() != null) {
           regionNode.unsetProcedure(regionNode.getProcedure());
         }
@@ -940,22 +1017,22 @@ public class AssignmentManager {
         preTransitCheck(regionNode, STATES_EXPECTED_ON_UNASSIGN_OR_MOVE);
       }
       assert regionNode.getProcedure() == null;
-      trsp = TransitRegionStateProcedure.unassign(getProcedureEnvironment(),
-        regionNode.getRegionInfo());
+      trsp =
+        TransitRegionStateProcedure.unassign(getProcedureEnvironment(), regionNode.getRegionInfo());
       regionNode.setProcedure(trsp);
     } catch (IOException ioe) {
       // 'override' must be false here.
       LOG.info("Failed {} unassign, override=false; set override to by-pass state checks.",
         ri.getEncodedName(), ioe);
-    } finally{
+    } finally {
       regionNode.unlock();
     }
     return trsp;
   }
 
   /**
-   * Create an array of TransitRegionStateProcedure w/o specifying a target server.
-   * Used as fallback of caller is unable to do {@link #createAssignProcedures(Map)}.
+   * Create an array of TransitRegionStateProcedure w/o specifying a target server. Used as fallback
+   * of caller is unable to do {@link #createAssignProcedures(Map)}.
    * <p/>
    * If no target server, at assign time, we will try to use the former location of the region if
    * one exists. This is how we 'retain' the old location across a server restart.
@@ -967,20 +1044,20 @@ public class AssignmentManager {
    */
   public TransitRegionStateProcedure[] createAssignProcedures(List<RegionInfo> hris) {
     return hris.stream().map(hri -> regionStates.getOrCreateRegionStateNode(hri))
-        .map(regionNode -> createAssignProcedure(regionNode, null))
-        .sorted(AssignmentManager::compare).toArray(TransitRegionStateProcedure[]::new);
+      .map(regionNode -> createAssignProcedure(regionNode, null)).sorted(AssignmentManager::compare)
+      .toArray(TransitRegionStateProcedure[]::new);
   }
 
   /**
    * Tied to {@link #createAssignProcedures(List)} in that it is called if caller is unable to run
-   * this method. Presumes all Regions are in appropriate state ripe for assign; no checking
-   * of Region state is done in here.
+   * this method. Presumes all Regions are in appropriate state ripe for assign; no checking of
+   * Region state is done in here.
    * @param assignments Map of assignments from which we produce an array of AssignProcedures.
    * @return Assignments made from the passed in <code>assignments</code>
    * @see #createAssignProcedures(List)
    */
-  private TransitRegionStateProcedure[] createAssignProcedures(
-      Map<ServerName, List<RegionInfo>> assignments) {
+  private TransitRegionStateProcedure[]
+    createAssignProcedures(Map<ServerName, List<RegionInfo>> assignments) {
     return assignments.entrySet().stream()
       .flatMap(e -> e.getValue().stream().map(hri -> regionStates.getOrCreateRegionStateNode(hri))
         .map(regionNode -> createAssignProcedure(regionNode, e.getKey())))
@@ -1023,24 +1100,103 @@ public class AssignmentManager {
       .toArray(TransitRegionStateProcedure[]::new);
   }
 
+  private int submitUnassignProcedure(TableName tableName,
+    Function<RegionStateNode, Boolean> shouldSubmit, Consumer<RegionStateNode> logRIT,
+    Consumer<TransitRegionStateProcedure> submit) {
+    int inTransitionCount = 0;
+    for (RegionStateNode regionNode : regionStates.getTableRegionStateNodes(tableName)) {
+      regionNode.lock();
+      try {
+        if (shouldSubmit.apply(regionNode)) {
+          if (regionNode.isTransitionScheduled()) {
+            logRIT.accept(regionNode);
+            inTransitionCount++;
+            continue;
+          }
+          if (regionNode.isInState(State.OFFLINE, State.CLOSED, State.SPLIT)) {
+            continue;
+          }
+          submit.accept(regionNode.setProcedure(TransitRegionStateProcedure
+            .unassign(getProcedureEnvironment(), regionNode.getRegionInfo())));
+        }
+      } finally {
+        regionNode.unlock();
+      }
+    }
+    return inTransitionCount;
+  }
+
   /**
-   * Called by ModifyTableProcedures to unassign all the excess region replicas
-   * for a table.
+   * Called by DisableTableProcedure to unassign all regions for a table. Will skip submit unassign
+   * procedure if the region is in transition, so you may need to call this method multiple times.
+   * @param tableName the table for closing excess region replicas
+   * @param submit    for submitting procedure
+   * @return the number of regions in transition that we can not schedule unassign procedures
    */
-  public TransitRegionStateProcedure[] createUnassignProceduresForClosingExcessRegionReplicas(
-    TableName tableName, int newReplicaCount) {
-    return regionStates.getTableRegionStateNodes(tableName).stream()
-      .filter(regionNode -> regionNode.getRegionInfo().getReplicaId() >= newReplicaCount)
-      .map(this::forceCreateUnssignProcedure).filter(p -> p != null)
-      .toArray(TransitRegionStateProcedure[]::new);
+  public int submitUnassignProcedureForDisablingTable(TableName tableName,
+    Consumer<TransitRegionStateProcedure> submit) {
+    return submitUnassignProcedure(tableName, rn -> true,
+      rn -> LOG.debug("skip scheduling unassign procedure for {} when closing table regions "
+        + "for disabling since it is in transition", rn),
+      submit);
+  }
+
+  /**
+   * Called by ModifyTableProcedure to unassign all the excess region replicas for a table. Will
+   * skip submit unassign procedure if the region is in transition, so you may need to call this
+   * method multiple times.
+   * @param tableName       the table for closing excess region replicas
+   * @param newReplicaCount the new replica count, should be less than current replica count
+   * @param submit          for submitting procedure
+   * @return the number of regions in transition that we can not schedule unassign procedures
+   */
+  public int submitUnassignProcedureForClosingExcessRegionReplicas(TableName tableName,
+    int newReplicaCount, Consumer<TransitRegionStateProcedure> submit) {
+    return submitUnassignProcedure(tableName,
+      rn -> rn.getRegionInfo().getReplicaId() >= newReplicaCount,
+      rn -> LOG.debug("skip scheduling unassign procedure for {} when closing excess region "
+        + "replicas since it is in transition", rn),
+      submit);
+  }
+
+  private int numberOfUnclosedRegions(TableName tableName,
+    Function<RegionStateNode, Boolean> shouldSubmit) {
+    int unclosed = 0;
+    for (RegionStateNode regionNode : regionStates.getTableRegionStateNodes(tableName)) {
+      regionNode.lock();
+      try {
+        if (shouldSubmit.apply(regionNode)) {
+          if (!regionNode.isInState(State.OFFLINE, State.CLOSED, State.SPLIT)) {
+            unclosed++;
+          }
+        }
+      } finally {
+        regionNode.unlock();
+      }
+    }
+    return unclosed;
+  }
+
+  public int numberOfUnclosedRegionsForDisabling(TableName tableName) {
+    return numberOfUnclosedRegions(tableName, rn -> true);
+  }
+
+  public int numberOfUnclosedExcessRegionReplicas(TableName tableName, int newReplicaCount) {
+    return numberOfUnclosedRegions(tableName,
+      rn -> rn.getRegionInfo().getReplicaId() >= newReplicaCount);
   }
 
   public SplitTableRegionProcedure createSplitProcedure(final RegionInfo regionToSplit,
-      final byte[] splitKey) throws IOException {
+    final byte[] splitKey) throws IOException {
     return new SplitTableRegionProcedure(getProcedureEnvironment(), regionToSplit, splitKey);
   }
 
-  public MergeTableRegionsProcedure createMergeProcedure(RegionInfo ... ris) throws IOException {
+  public TruncateRegionProcedure createTruncateRegionProcedure(final RegionInfo regionToTruncate)
+    throws IOException {
+    return new TruncateRegionProcedure(getProcedureEnvironment(), regionToTruncate);
+  }
+
+  public MergeTableRegionsProcedure createMergeProcedure(RegionInfo... ris) throws IOException {
     return new MergeTableRegionsProcedure(getProcedureEnvironment(), ris, false);
   }
 
@@ -1052,17 +1208,15 @@ public class AssignmentManager {
     regionStateStore.deleteRegions(regions);
     for (int i = 0; i < regions.size(); ++i) {
       final RegionInfo regionInfo = regions.get(i);
-      // we expect the region to be offline
-      regionStates.removeFromOfflineRegions(regionInfo);
       regionStates.deleteRegion(regionInfo);
     }
   }
 
   // ============================================================================================
-  //  RS Region Transition Report helpers
+  // RS Region Transition Report helpers
   // ============================================================================================
   private void reportRegionStateTransition(ReportRegionStateTransitionResponse.Builder builder,
-      ServerName serverName, List<RegionStateTransition> transitionList) throws IOException {
+    ServerStateNode serverNode, List<RegionStateTransition> transitionList) throws IOException {
     for (RegionStateTransition transition : transitionList) {
       switch (transition.getTransitionCode()) {
         case OPENED:
@@ -1072,7 +1226,7 @@ public class AssignmentManager {
           final RegionInfo hri = ProtobufUtil.toRegionInfo(transition.getRegionInfo(0));
           long procId =
             transition.getProcIdCount() > 0 ? transition.getProcId(0) : Procedure.NO_PROC_ID;
-          updateRegionTransition(serverName, transition.getTransitionCode(), hri,
+          updateRegionTransition(serverNode, transition.getTransitionCode(), hri,
             transition.hasOpenSeqNum() ? transition.getOpenSeqNum() : HConstants.NO_SEQNUM, procId);
           break;
         case READY_TO_SPLIT:
@@ -1082,7 +1236,7 @@ public class AssignmentManager {
           final RegionInfo parent = ProtobufUtil.toRegionInfo(transition.getRegionInfo(0));
           final RegionInfo splitA = ProtobufUtil.toRegionInfo(transition.getRegionInfo(1));
           final RegionInfo splitB = ProtobufUtil.toRegionInfo(transition.getRegionInfo(2));
-          updateRegionSplitTransition(serverName, transition.getTransitionCode(), parent, splitA,
+          updateRegionSplitTransition(serverNode, transition.getTransitionCode(), parent, splitA,
             splitB);
           break;
         case READY_TO_MERGE:
@@ -1092,7 +1246,7 @@ public class AssignmentManager {
           final RegionInfo merged = ProtobufUtil.toRegionInfo(transition.getRegionInfo(0));
           final RegionInfo mergeA = ProtobufUtil.toRegionInfo(transition.getRegionInfo(1));
           final RegionInfo mergeB = ProtobufUtil.toRegionInfo(transition.getRegionInfo(2));
-          updateRegionMergeTransition(serverName, transition.getTransitionCode(), merged, mergeA,
+          updateRegionMergeTransition(serverNode, transition.getTransitionCode(), merged, mergeA,
             mergeB);
           break;
       }
@@ -1100,11 +1254,16 @@ public class AssignmentManager {
   }
 
   public ReportRegionStateTransitionResponse reportRegionStateTransition(
-      final ReportRegionStateTransitionRequest req) throws PleaseHoldException {
+    final ReportRegionStateTransitionRequest req) throws PleaseHoldException {
     ReportRegionStateTransitionResponse.Builder builder =
-        ReportRegionStateTransitionResponse.newBuilder();
+      ReportRegionStateTransitionResponse.newBuilder();
     ServerName serverName = ProtobufUtil.toServerName(req.getServer());
-    ServerStateNode serverNode = regionStates.getOrCreateServer(serverName);
+    ServerStateNode serverNode = regionStates.getServerNode(serverName);
+    if (serverNode == null) {
+      LOG.warn("No server node for {}", serverName);
+      builder.setErrorMessage("No server node for " + serverName);
+      return builder.build();
+    }
     // here we have to acquire a read lock instead of a simple exclusive lock. This is because that
     // we should not block other reportRegionStateTransition call from the same region server. This
     // is not only about performance, but also to prevent dead lock. Think of the meta region is
@@ -1117,7 +1276,7 @@ public class AssignmentManager {
       // above in submitServerCrash method and HBASE-21508 for more details.
       if (serverNode.isInState(ServerState.ONLINE)) {
         try {
-          reportRegionStateTransition(builder, serverName, req.getTransitionList());
+          reportRegionStateTransition(builder, serverNode, req.getTransitionList());
         } catch (PleaseHoldException e) {
           LOG.trace("Failed transition ", e);
           throw e;
@@ -1139,21 +1298,20 @@ public class AssignmentManager {
     return builder.build();
   }
 
-  private void updateRegionTransition(ServerName serverName, TransitionCode state,
-      RegionInfo regionInfo, long seqId, long procId) throws IOException {
-    checkMetaLoaded(regionInfo);
+  private void updateRegionTransition(ServerStateNode serverNode, TransitionCode state,
+    RegionInfo regionInfo, long seqId, long procId) throws IOException {
+    checkMetaLoaded(regionInfo, procId);
 
     RegionStateNode regionNode = regionStates.getRegionStateNode(regionInfo);
     if (regionNode == null) {
       // the table/region is gone. maybe a delete, split, merge
       throw new UnexpectedStateException(String.format(
         "Server %s was trying to transition region %s to %s. but Region is not known.",
-        serverName, regionInfo, state));
+        serverNode.getServerName(), regionInfo, state));
     }
-    LOG.trace("Update region transition serverName={} region={} regionState={}", serverName,
-      regionNode, state);
+    LOG.trace("Update region transition serverName={} region={} regionState={}",
+      serverNode.getServerName(), regionNode, state);
 
-    ServerStateNode serverNode = regionStates.getOrCreateServer(serverName);
     regionNode.lock();
     try {
       if (!reportTransition(regionNode, serverNode, state, seqId, procId)) {
@@ -1165,12 +1323,13 @@ public class AssignmentManager {
         // These happen because on cluster shutdown, we currently let the RegionServers close
         // regions. This is the only time that region close is not run by the Master (so cluster
         // goes down fast). Consider changing it so Master runs all shutdowns.
-        if (this.master.getServerManager().isClusterShutdown() &&
-          state.equals(TransitionCode.CLOSED)) {
+        if (
+          this.master.getServerManager().isClusterShutdown() && state.equals(TransitionCode.CLOSED)
+        ) {
           LOG.info("RegionServer {} {}", state, regionNode.getRegionInfo().getEncodedName());
         } else {
           LOG.warn("No matching procedure found for {} transition on {} to {}",
-              serverName, regionNode, state);
+            serverNode.getServerName(), regionNode, state);
         }
       }
     } finally {
@@ -1179,7 +1338,7 @@ public class AssignmentManager {
   }
 
   private boolean reportTransition(RegionStateNode regionNode, ServerStateNode serverNode,
-      TransitionCode state, long seqId, long procId) throws IOException {
+    TransitionCode state, long seqId, long procId) throws IOException {
     ServerName serverName = serverNode.getServerName();
     TransitRegionStateProcedure proc = regionNode.getProcedure();
     if (proc == null) {
@@ -1190,35 +1349,34 @@ public class AssignmentManager {
     return true;
   }
 
-  private void updateRegionSplitTransition(final ServerName serverName, final TransitionCode state,
-      final RegionInfo parent, final RegionInfo hriA, final RegionInfo hriB)
-      throws IOException {
-    checkMetaLoaded(parent);
+  private void updateRegionSplitTransition(final ServerStateNode serverNode,
+    final TransitionCode state, final RegionInfo parent, final RegionInfo hriA,
+    final RegionInfo hriB) throws IOException {
+    checkMetaLoaded(parent, Procedure.NO_PROC_ID);
 
     if (state != TransitionCode.READY_TO_SPLIT) {
-      throw new UnexpectedStateException("unsupported split regionState=" + state +
-        " for parent region " + parent +
-        " maybe an old RS (< 2.0) had the operation in progress");
+      throw new UnexpectedStateException(
+        "unsupported split regionState=" + state + " for parent region " + parent
+          + " maybe an old RS (< 2.0) had the operation in progress");
     }
 
     // sanity check on the request
     if (!Bytes.equals(hriA.getEndKey(), hriB.getStartKey())) {
-      throw new UnsupportedOperationException(
-        "unsupported split request with bad keys: parent=" + parent +
-        " hriA=" + hriA + " hriB=" + hriB);
+      throw new UnsupportedOperationException("unsupported split request with bad keys: parent="
+        + parent + " hriA=" + hriA + " hriB=" + hriB);
     }
 
     if (!master.isSplitOrMergeEnabled(MasterSwitchType.SPLIT)) {
       LOG.warn("Split switch is off! skip split of " + parent);
-      throw new DoNotRetryIOException("Split region " + parent.getRegionNameAsString() +
-          " failed due to split switch off");
+      throw new DoNotRetryIOException(
+        "Split region " + parent.getRegionNameAsString() + " failed due to split switch off");
     }
 
     // Submit the Split procedure
     final byte[] splitKey = hriB.getStartKey();
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Split request from " + serverName +
-          ", parent=" + parent + " splitKey=" + Bytes.toStringBinary(splitKey));
+      LOG.debug("Split request from {}, parent={}, splitKey={}", serverNode.getServerName(), parent,
+        Bytes.toStringBinary(splitKey));
     }
     // Processing this report happens asynchronously from other activities which can mutate
     // the region state. For example, a split procedure may already be running for this parent.
@@ -1230,35 +1388,36 @@ public class AssignmentManager {
     // initialization and report failure with WARN level logging.
     RegionState parentState = regionStates.getRegionState(parent);
     if (parentState != null && parentState.isOpened()) {
-      master.getMasterProcedureExecutor().submitProcedure(createSplitProcedure(parent,
-        splitKey));
+      master.getMasterProcedureExecutor().submitProcedure(createSplitProcedure(parent, splitKey));
     } else {
-      LOG.info("Ignoring split request from " + serverName +
-        ", parent=" + parent + " because parent is unknown or not open");
+      LOG.info("Ignoring split request from {}, parent={} because parent is unknown or not open",
+        serverNode.getServerName(), parent);
       return;
     }
 
     // If the RS is < 2.0 throw an exception to abort the operation, we are handling the split
-    if (master.getServerManager().getVersionNumber(serverName) < 0x0200000) {
-      throw new UnsupportedOperationException(String.format("Split handled by the master: " +
-        "parent=%s hriA=%s hriB=%s", parent.getShortNameToLog(), hriA, hriB));
+    if (master.getServerManager().getVersionNumber(serverNode.getServerName()) < 0x0200000) {
+      throw new UnsupportedOperationException(
+        String.format("Split handled by the master: " + "parent=%s hriA=%s hriB=%s",
+          parent.getShortNameToLog(), hriA, hriB));
     }
   }
 
-  private void updateRegionMergeTransition(final ServerName serverName, final TransitionCode state,
-      final RegionInfo merged, final RegionInfo hriA, final RegionInfo hriB) throws IOException {
-    checkMetaLoaded(merged);
+  private void updateRegionMergeTransition(final ServerStateNode serverNode,
+    final TransitionCode state, final RegionInfo merged, final RegionInfo hriA,
+    final RegionInfo hriB) throws IOException {
+    checkMetaLoaded(merged, Procedure.NO_PROC_ID);
 
     if (state != TransitionCode.READY_TO_MERGE) {
-      throw new UnexpectedStateException("Unsupported merge regionState=" + state +
-        " for regionA=" + hriA + " regionB=" + hriB + " merged=" + merged +
-        " maybe an old RS (< 2.0) had the operation in progress");
+      throw new UnexpectedStateException(
+        "Unsupported merge regionState=" + state + " for regionA=" + hriA + " regionB=" + hriB
+          + " merged=" + merged + " maybe an old RS (< 2.0) had the operation in progress");
     }
 
     if (!master.isSplitOrMergeEnabled(MasterSwitchType.MERGE)) {
       LOG.warn("Merge switch is off! skip merge of regionA=" + hriA + " regionB=" + hriB);
-      throw new DoNotRetryIOException("Merge of regionA=" + hriA + " regionB=" + hriB +
-        " failed because merge switch is off");
+      throw new DoNotRetryIOException(
+        "Merge of regionA=" + hriA + " regionB=" + hriB + " failed because merge switch is off");
     }
 
     // Submit the Merge procedure
@@ -1268,15 +1427,15 @@ public class AssignmentManager {
     master.getMasterProcedureExecutor().submitProcedure(createMergeProcedure(hriA, hriB));
 
     // If the RS is < 2.0 throw an exception to abort the operation, we are handling the merge
-    if (master.getServerManager().getVersionNumber(serverName) < 0x0200000) {
-      throw new UnsupportedOperationException(String.format(
-        "Merge not handled yet: regionState=%s merged=%s hriA=%s hriB=%s", state, merged, hriA,
-          hriB));
+    if (master.getServerManager().getVersionNumber(serverNode.getServerName()) < 0x0200000) {
+      throw new UnsupportedOperationException(
+        String.format("Merge not handled yet: regionState=%s merged=%s hriA=%s hriB=%s", state,
+          merged, hriA, hriB));
     }
   }
 
   // ============================================================================================
-  //  RS Status update (report online regions) helpers
+  // RS Status update (report online regions) helpers
   // ============================================================================================
   /**
    * The master will call this method when the RS send the regionServerReport(). The report will
@@ -1298,12 +1457,19 @@ public class AssignmentManager {
         regionNames.stream().map(Bytes::toStringBinary).collect(Collectors.toList()));
     }
 
-    ServerStateNode serverNode = regionStates.getOrCreateServer(serverName);
-    synchronized (serverNode) {
+    ServerStateNode serverNode = regionStates.getServerNode(serverName);
+    if (serverNode == null) {
+      LOG.warn("Got a report from server {} where its server node is null", serverName);
+      return;
+    }
+    serverNode.readLock().lock();
+    try {
       if (!serverNode.isInState(ServerState.ONLINE)) {
-        LOG.warn("Got a report from a server result in state " + serverNode.getState());
+        LOG.warn("Got a report from a server result in state {}", serverNode);
         return;
       }
+    } finally {
+      serverNode.readLock().unlock();
     }
 
     // Track the regionserver reported online regions in memory.
@@ -1325,12 +1491,12 @@ public class AssignmentManager {
   }
 
   /**
-   * Close <code>regionName</code> on <code>sn</code> silently and immediately without
-   * using a Procedure or going via hbase:meta. For case where a RegionServer's hosting
-   * of a Region is not aligned w/ the Master's accounting of Region state. This is for
-   * cleaning up an error in accounting.
+   * Close <code>regionName</code> on <code>sn</code> silently and immediately without using a
+   * Procedure or going via hbase:meta. For case where a RegionServer's hosting of a Region is not
+   * aligned w/ the Master's accounting of Region state. This is for cleaning up an error in
+   * accounting.
    */
-  private void closeRegionSilently(ServerName sn, byte [] regionName) {
+  private void closeRegionSilently(ServerName sn, byte[] regionName) {
     try {
       RegionInfo ri = CatalogFamilyFormat.parseRegionInfoFromRegionName(regionName);
       // Pass -1 for timeout. Means do not wait.
@@ -1341,9 +1507,8 @@ public class AssignmentManager {
   }
 
   /**
-   * Check that what the RegionServer reports aligns with the Master's image.
-   * If disagreement, we will tell the RegionServer to expediently close
-   * a Region we do not think it should have.
+   * Check that what the RegionServer reports aligns with the Master's image. If disagreement, we
+   * will tell the RegionServer to expediently close a Region we do not think it should have.
    */
   private void checkOnlineRegionsReport(ServerStateNode serverNode, Set<byte[]> regionNames) {
     ServerName serverName = serverNode.getServerName();
@@ -1354,42 +1519,51 @@ public class AssignmentManager {
       RegionStateNode regionNode = regionStates.getRegionStateNodeFromName(regionName);
       if (regionNode == null) {
         String regionNameAsStr = Bytes.toStringBinary(regionName);
-        LOG.warn("No RegionStateNode for {} but reported as up on {}; closing...",
-            regionNameAsStr, serverName);
+        LOG.warn("No RegionStateNode for {} but reported as up on {}; closing...", regionNameAsStr,
+          serverName);
         closeRegionSilently(serverNode.getServerName(), regionName);
         continue;
       }
       final long lag = 1000;
-      regionNode.lock();
-      try {
-        long diff = EnvironmentEdgeManager.currentTime() - regionNode.getLastUpdate();
-        if (regionNode.isInState(State.OPENING, State.OPEN)) {
-          // This is possible as a region server has just closed a region but the region server
-          // report is generated before the closing, but arrive after the closing. Make sure there
-          // is some elapsed time so less false alarms.
-          if (!regionNode.getRegionLocation().equals(serverName) && diff > lag) {
-            LOG.warn("Reporting {} server does not match {} (time since last " +
-                    "update={}ms); closing...",
-              serverName, regionNode, diff);
-            closeRegionSilently(serverNode.getServerName(), regionName);
+      // This is just a fallback check designed to identify unexpected data inconsistencies, so we
+      // use tryLock to attempt to acquire the lock, and if the lock cannot be acquired, we skip the
+      // check. This will not cause any additional problems and also prevents the regionServerReport
+      // call from being stuck for too long which may cause deadlock on region assignment.
+      if (regionNode.tryLock()) {
+        try {
+          long diff = EnvironmentEdgeManager.currentTime() - regionNode.getLastUpdate();
+          if (regionNode.isInState(State.OPENING, State.OPEN)) {
+            // This is possible as a region server has just closed a region but the region server
+            // report is generated before the closing, but arrive after the closing. Make sure
+            // there
+            // is some elapsed time so less false alarms.
+            if (!regionNode.getRegionLocation().equals(serverName) && diff > lag) {
+              LOG.warn("Reporting {} server does not match {} (time since last "
+                + "update={}ms); closing...", serverName, regionNode, diff);
+              closeRegionSilently(serverNode.getServerName(), regionName);
+            }
+          } else if (!regionNode.isInState(State.CLOSING, State.SPLITTING)) {
+            // So, we can get report that a region is CLOSED or SPLIT because a heartbeat
+            // came in at about same time as a region transition. Make sure there is some
+            // elapsed time so less false alarms.
+            if (diff > lag) {
+              LOG.warn("Reporting {} state does not match {} (time since last update={}ms)",
+                serverName, regionNode, diff);
+            }
           }
-        } else if (!regionNode.isInState(State.CLOSING, State.SPLITTING)) {
-          // So, we can get report that a region is CLOSED or SPLIT because a heartbeat
-          // came in at about same time as a region transition. Make sure there is some
-          // elapsed time so less false alarms.
-          if (diff > lag) {
-            LOG.warn("Reporting {} state does not match {} (time since last update={}ms)",
-              serverName, regionNode, diff);
-          }
+        } finally {
+          regionNode.unlock();
         }
-      } finally {
-        regionNode.unlock();
+      } else {
+        LOG.warn(
+          "Unable to acquire lock for regionNode {}. It is likely that another thread is currently holding the lock. To avoid deadlock, skip execution for now.",
+          regionNode);
       }
     }
   }
 
   // ============================================================================================
-  //  RIT chore
+  // RIT chore
   // ============================================================================================
   private static class RegionInTransitionChore extends ProcedureInMemoryChore<MasterProcedureEnv> {
     public RegionInTransitionChore(final int timeoutMsec) {
@@ -1402,7 +1576,7 @@ public class AssignmentManager {
 
       final RegionInTransitionStat ritStat = am.computeRegionInTransitionStat();
       if (ritStat.hasRegionsOverThreshold()) {
-        for (RegionState hri: ritStat.getRegionOverThreshold()) {
+        for (RegionState hri : ritStat.getRegionOverThreshold()) {
           am.handleRegionOverStuckWarningThreshold(hri.getRegion());
         }
       }
@@ -1413,7 +1587,7 @@ public class AssignmentManager {
   }
 
   private static class DeadServerMetricRegionChore
-      extends ProcedureInMemoryChore<MasterProcedureEnv> {
+    extends ProcedureInMemoryChore<MasterProcedureEnv> {
     public DeadServerMetricRegionChore(final int timeoutMsec) {
       super(timeoutMsec);
     }
@@ -1457,7 +1631,8 @@ public class AssignmentManager {
           case UNKNOWN:
             ++unknownRegions;
             break;
-          default: throw new AssertionError("Unexpected " + sls);
+          default:
+            throw new AssertionError("Unexpected " + sls);
         }
       }
       if (deadRegions > 0 || unknownRegions > 0) {
@@ -1521,7 +1696,7 @@ public class AssignmentManager {
 
     public Collection<RegionState> getRegionOverThreshold() {
       Map<String, RegionState> m = this.ritsOverThreshold;
-      return m != null? m.values(): Collections.emptySet();
+      return m != null ? m.values() : Collections.emptySet();
     }
 
     public boolean isRegionOverThreshold(final RegionInfo regionInfo) {
@@ -1542,10 +1717,8 @@ public class AssignmentManager {
     }
 
     protected void update(final AssignmentManager am) {
-      final RegionStates regionStates = am.getRegionStates();
       this.statTimestamp = EnvironmentEdgeManager.currentTime();
-      update(regionStates.getRegionsStateInTransition(), statTimestamp);
-      update(regionStates.getRegionFailedOpen(), statTimestamp);
+      update(am.getRegionsStateInTransition(), statTimestamp);
 
       if (LOG.isDebugEnabled() && ritsOverThreshold != null && !ritsOverThreshold.isEmpty()) {
         LOG.debug("RITs over threshold: {}",
@@ -1556,7 +1729,7 @@ public class AssignmentManager {
     }
 
     private void update(final Collection<RegionState> regions, final long currentTime) {
-      for (RegionState state: regions) {
+      for (RegionState state : regions) {
         totalRITs++;
         final long ritStartedMs = state.getStamp();
         if (ritStartedMs == 0) {
@@ -1592,12 +1765,12 @@ public class AssignmentManager {
 
   private void handleRegionOverStuckWarningThreshold(final RegionInfo regionInfo) {
     final RegionStateNode regionNode = regionStates.getRegionStateNode(regionInfo);
-    //if (regionNode.isStuck()) {
+    // if (regionNode.isStuck()) {
     LOG.warn("STUCK Region-In-Transition {}", regionNode);
   }
 
   // ============================================================================================
-  //  TODO: Master load/bootstrap
+  // TODO: Master load/bootstrap
   // ============================================================================================
   public void joinCluster() throws IOException {
     long startTime = System.nanoTime();
@@ -1605,7 +1778,7 @@ public class AssignmentManager {
 
     // Scan hbase:meta to build list of existing regions, servers, and assignment.
     // hbase:meta is online now or will be. Inside loadMeta, we keep trying. Can't make progress
-    // w/o  meta.
+    // w/o meta.
     loadMeta();
 
     while (master.getServerManager().countOfRegionServers() < 1) {
@@ -1624,13 +1797,13 @@ public class AssignmentManager {
   }
 
   /**
-   * Create assign procedure for offline regions.
-   * Just follow the old processofflineServersWithOnlineRegions method. Since now we do not need to
-   * deal with dead server any more, we only deal with the regions in OFFLINE state in this method.
-   * And this is a bit strange, that for new regions, we will add it in CLOSED state instead of
-   * OFFLINE state, and usually there will be a procedure to track them. The
-   * processofflineServersWithOnlineRegions is a legacy from long ago, as things are going really
-   * different now, maybe we do not need this method any more. Need to revisit later.
+   * Create assign procedure for offline regions. Just follow the old
+   * processofflineServersWithOnlineRegions method. Since now we do not need to deal with dead
+   * server any more, we only deal with the regions in OFFLINE state in this method. And this is a
+   * bit strange, that for new regions, we will add it in CLOSED state instead of OFFLINE state, and
+   * usually there will be a procedure to track them. The processofflineServersWithOnlineRegions is
+   * a legacy from long ago, as things are going really different now, maybe we do not need this
+   * method any more. Need to revisit later.
    */
   // Public so can be run by the Master as part of the startup. Needs hbase:meta to be online.
   // Needs to be done after the table state manager has been started.
@@ -1655,20 +1828,23 @@ public class AssignmentManager {
     }
   }
 
-  /* AM internal RegionStateStore.RegionStateVisitor implementation. To be used when
-   * scanning META table for region rows, using RegionStateStore utility methods. RegionStateStore
-   * methods will convert Result into proper RegionInfo instances, but those would still need to be
-   * added into AssignmentManager.regionStates in-memory cache.
-   * RegionMetaLoadingVisitor.visitRegionState method provides the logic for adding RegionInfo
-   * instances as loaded from latest META scan into AssignmentManager.regionStates.
+  /*
+   * AM internal RegionStateStore.RegionStateVisitor implementation. To be used when scanning META
+   * table for region rows, using RegionStateStore utility methods. RegionStateStore methods will
+   * convert Result into proper RegionInfo instances, but those would still need to be added into
+   * AssignmentManager.regionStates in-memory cache. RegionMetaLoadingVisitor.visitRegionState
+   * method provides the logic for adding RegionInfo instances as loaded from latest META scan into
+   * AssignmentManager.regionStates.
    */
-  private class RegionMetaLoadingVisitor implements RegionStateStore.RegionStateVisitor  {
+  private class RegionMetaLoadingVisitor implements RegionStateStore.RegionStateVisitor {
 
     @Override
     public void visitRegionState(Result result, final RegionInfo regionInfo, final State state,
       final ServerName regionLocation, final ServerName lastHost, final long openSeqNum) {
-      if (state == null && regionLocation == null && lastHost == null &&
-        openSeqNum == SequenceId.NO_SEQUENCE_ID) {
+      if (
+        state == null && regionLocation == null && lastHost == null
+          && openSeqNum == SequenceId.NO_SEQUENCE_ID
+      ) {
         // This is a row with nothing in it.
         LOG.warn("Skipping empty row={}", result);
         return;
@@ -1692,10 +1868,17 @@ public class AssignmentManager {
       regionNode.setOpenSeqNum(openSeqNum);
 
       // Note: keep consistent with other methods, see region(Opening|Opened|Closing)
-      //       RIT/ServerCrash handling should take care of the transiting regions.
-      if (localState.matches(State.OPEN, State.OPENING, State.CLOSING, State.SPLITTING,
-        State.MERGING)) {
+      // RIT/ServerCrash handling should take care of the transiting regions.
+      if (
+        localState.matches(State.OPEN, State.OPENING, State.CLOSING, State.SPLITTING, State.MERGING)
+      ) {
         assert regionLocation != null : "found null region location for " + regionNode;
+        // TODO: this could lead to some orphan server state nodes, as it is possible that the
+        // region server is already dead and its SCP has already finished but we have
+        // persisted an opening state on this region server. Finally the TRSP will assign the
+        // region to another region server, so it will not cause critical problems, just waste
+        // some memory as no one will try to cleanup these orphan server state nodes.
+        regionStates.createServer(regionLocation);
         regionStates.addRegionToServer(regionNode);
       } else if (localState == State.OFFLINE || regionInfo.isOffline()) {
         regionStates.addToOfflineRegions(regionNode);
@@ -1703,29 +1886,47 @@ public class AssignmentManager {
       if (regionNode.getProcedure() != null) {
         regionNode.getProcedure().stateLoaded(AssignmentManager.this, regionNode);
       }
+      // add regions to RIT while visiting the meta
+      regionInTransitionTracker.handleRegionStateNodeOperation(regionNode);
+      // If region location of region belongs to a dead server mark the region crashed
+      if (
+        regionNode.getRegionLocation() != null
+          && master.getServerManager().isServerDead(regionNode.getRegionLocation())
+      ) {
+        long timeOfCrash = master.getServerManager().getDeadServers()
+          .getDeathTimestamp(regionNode.getRegionLocation());
+        if (timeOfCrash != 0) {
+          regionNode.crashed(timeOfCrash);
+        }
+        regionInTransitionTracker.regionCrashed(regionNode);
+      }
     }
   };
 
   /**
-   * Query META if the given <code>RegionInfo</code> exists, adding to
-   * <code>AssignmentManager.regionStateStore</code> cache if the region is found in META.
-   * @param regionEncodedName encoded name for the region to be loaded from META into
-   *                          <code>AssignmentManager.regionStateStore</code> cache
-   * @return <code>RegionInfo</code> instance for the given region if it is present in META
-   *          and got successfully loaded into <code>AssignmentManager.regionStateStore</code>
-   *          cache, <b>null</b> otherwise.
-   * @throws UnknownRegionException if any errors occur while querying meta.
+   * Attempt to load {@code regionInfo} from META, adding any results to the
+   * {@link #regionStateStore} Is NOT aware of replica regions.
+   * @param regionInfo the region to be loaded from META.
+   * @throws IOException If some error occurs while querying META or parsing results.
    */
-  public RegionInfo loadRegionFromMeta(String regionEncodedName) throws UnknownRegionException {
-    try {
-      RegionMetaLoadingVisitor visitor = new RegionMetaLoadingVisitor();
-      regionStateStore.visitMetaForRegion(regionEncodedName, visitor);
-      return regionStates.getRegionState(regionEncodedName) == null ? null :
-        regionStates.getRegionState(regionEncodedName).getRegion();
-    } catch (IOException e) {
-      throw new UnknownRegionException(
-          "Error trying to load region " + regionEncodedName + " from META", e);
-    }
+  public void populateRegionStatesFromMeta(@NonNull final RegionInfo regionInfo)
+    throws IOException {
+    final String regionEncodedName = RegionInfo.DEFAULT_REPLICA_ID == regionInfo.getReplicaId()
+      ? regionInfo.getEncodedName()
+      : RegionInfoBuilder.newBuilder(regionInfo).setReplicaId(RegionInfo.DEFAULT_REPLICA_ID).build()
+        .getEncodedName();
+    populateRegionStatesFromMeta(regionEncodedName);
+  }
+
+  /**
+   * Attempt to load {@code regionEncodedName} from META, adding any results to the
+   * {@link #regionStateStore} Is NOT aware of replica regions.
+   * @param regionEncodedName encoded name for the region to be loaded from META.
+   * @throws IOException If some error occurs while querying META or parsing results.
+   */
+  public void populateRegionStatesFromMeta(@NonNull String regionEncodedName) throws IOException {
+    final RegionMetaLoadingVisitor visitor = new RegionMetaLoadingVisitor();
+    regionStateStore.visitMetaForRegion(regionEncodedName, visitor);
   }
 
   private void loadMeta() throws IOException {
@@ -1737,13 +1938,27 @@ public class AssignmentManager {
    * Used to check if the meta loading is done.
    * <p/>
    * if not we throw PleaseHoldException since we are rebuilding the RegionStates
-   * @param hri region to check if it is already rebuild
+   * @param hri    region to check if it is already rebuild
+   * @param procId the procedure id for this region operation, or NO_PROC_ID if not available
    * @throws PleaseHoldException if meta has not been loaded yet
    */
-  private void checkMetaLoaded(RegionInfo hri) throws PleaseHoldException {
+  private void checkMetaLoaded(RegionInfo hri, long procId) throws PleaseHoldException {
     if (!isRunning()) {
       throw new PleaseHoldException("AssignmentManager not running");
     }
+
+    // Check if the procedure is for a critical system table
+    // Critical system tables can proceed even if meta is not loaded yet
+    // We are currently making procId available only for the code path which can execute during the
+    // cluster boot up. In the future, if additional code paths execute during cluster boot up, we
+    // will need to make procId available for all those code paths.
+    if (procId != Procedure.NO_PROC_ID) {
+      Procedure<?> proc = master.getMasterProcedureExecutor().getProcedure(procId);
+      if (proc != null && proc.isCriticalSystemTable()) {
+        return;
+      }
+    }
+
     boolean meta = isMetaRegion(hri);
     boolean metaLoaded = isMetaLoaded();
     if (!meta && !metaLoaded) {
@@ -1753,7 +1968,7 @@ public class AssignmentManager {
   }
 
   // ============================================================================================
-  //  TODO: Metrics
+  // TODO: Metrics
   // ============================================================================================
   public int getNumRegionsOpened() {
     // TODO: Used by TestRegionPlacement.java and assume monotonically increasing value
@@ -1761,15 +1976,13 @@ public class AssignmentManager {
   }
 
   /**
-   * Usually run by the Master in reaction to server crash during normal processing.
-   * Can also be invoked via external RPC to effect repair; in the latter case,
-   * the 'force' flag is set so we push through the SCP though context may indicate
-   * already-running-SCP (An old SCP may have exited abnormally, or damaged cluster
-   * may still have references in hbase:meta to 'Unknown Servers' -- servers that
-   * are not online or in dead servers list, etc.)
-   * @param force Set if the request came in externally over RPC (via hbck2). Force means
-   *              run the SCP even if it seems as though there might be an outstanding
-   *              SCP running.
+   * Usually run by the Master in reaction to server crash during normal processing. Can also be
+   * invoked via external RPC to effect repair; in the latter case, the 'force' flag is set so we
+   * push through the SCP though context may indicate already-running-SCP (An old SCP may have
+   * exited abnormally, or damaged cluster may still have references in hbase:meta to 'Unknown
+   * Servers' -- servers that are not online or in dead servers list, etc.)
+   * @param force Set if the request came in externally over RPC (via hbck2). Force means run the
+   *              SCP even if it seems as though there might be an outstanding SCP running.
    * @return pid of scheduled SCP or {@link Procedure#NO_PROC_ID} if none scheduled.
    */
   public long submitServerCrash(ServerName serverName, boolean shouldSplitWal, boolean force) {
@@ -1779,7 +1992,17 @@ public class AssignmentManager {
     synchronized (rsReports) {
       rsReports.remove(serverName);
     }
+    if (serverNode == null) {
+      if (force) {
+        LOG.info("Force adding ServerCrashProcedure for {} when server node is null", serverName);
+      } else {
+        // for normal case, do not schedule SCP if ServerStateNode is null
+        LOG.warn("Skip adding ServerCrashProcedure for {} because server node is null", serverName);
+        return Procedure.NO_PROC_ID;
+      }
+    }
 
+    ProcedureExecutor<MasterProcedureEnv> procExec = this.master.getMasterProcedureExecutor();
     // We hold the write lock here for fencing on reportRegionStateTransition. Once we set the
     // server state to CRASHED, we will no longer accept the reportRegionStateTransition call from
     // this server. This is used to simplify the implementation for TRSP and SCP, where we can make
@@ -1787,44 +2010,42 @@ public class AssignmentManager {
     if (serverNode != null) {
       serverNode.writeLock().lock();
     }
-    boolean carryingMeta;
-    long pid;
     try {
-      ProcedureExecutor<MasterProcedureEnv> procExec = this.master.getMasterProcedureExecutor();
-      carryingMeta = isCarryingMeta(serverName);
-      if (!force && serverNode != null && !serverNode.isInState(ServerState.ONLINE)) {
-        LOG.info("Skip adding ServerCrashProcedure for {} (meta={}) -- running?",
-          serverNode, carryingMeta);
-        return Procedure.NO_PROC_ID;
-      } else {
-        MasterProcedureEnv mpe = procExec.getEnvironment();
-        // If serverNode == null, then 'Unknown Server'. Schedule HBCKSCP instead.
-        // HBCKSCP scours Master in-memory state AND hbase;meta for references to
-        // serverName just-in-case. An SCP that is scheduled when the server is
-        // 'Unknown' probably originated externally with HBCK2 fix-it tool.
-        ServerState oldState = null;
-        if (serverNode != null) {
-          oldState = serverNode.getState();
-          serverNode.setState(ServerState.CRASHED);
-        }
 
+      boolean carryingMeta = isCarryingMeta(serverName);
+      if (serverNode != null && !serverNode.isInState(ServerState.ONLINE)) {
         if (force) {
-          pid = procExec.submitProcedure(
-              new HBCKServerCrashProcedure(mpe, serverName, shouldSplitWal, carryingMeta));
+          LOG.info("Force adding ServerCrashProcedure for {} (meta={}) when state is not {}",
+            serverNode, carryingMeta, ServerState.ONLINE);
         } else {
-          pid = procExec.submitProcedure(
-              new ServerCrashProcedure(mpe, serverName, shouldSplitWal, carryingMeta));
+          LOG.info("Skip adding ServerCrashProcedure for {} (meta={}) when state is not {}",
+            serverNode, carryingMeta, ServerState.ONLINE);
+          return Procedure.NO_PROC_ID;
         }
-        LOG.info("Scheduled ServerCrashProcedure pid={} for {} (carryingMeta={}){}.",
-          pid, serverName, carryingMeta,
-          serverNode == null? "": " " + serverNode.toString() + ", oldState=" + oldState);
       }
+      MasterProcedureEnv mpe = procExec.getEnvironment();
+      // If serverNode == null, then 'Unknown Server'. Schedule HBCKSCP instead.
+      // HBCKSCP scours Master in-memory state AND hbase;meta for references to
+      // serverName just-in-case. An SCP that is scheduled when the server is
+      // 'Unknown' probably originated externally with HBCK2 fix-it tool.
+      ServerState oldState = null;
+      if (serverNode != null) {
+        oldState = serverNode.getState();
+        serverNode.setState(ServerState.CRASHED);
+      }
+      ServerCrashProcedure scp = force
+        ? new HBCKServerCrashProcedure(mpe, serverName, shouldSplitWal, carryingMeta)
+        : new ServerCrashProcedure(mpe, serverName, shouldSplitWal, carryingMeta);
+      long pid = procExec.submitProcedure(scp);
+      LOG.info("Scheduled ServerCrashProcedure pid={} for {} (carryingMeta={}){}.", pid, serverName,
+        carryingMeta,
+        serverNode == null ? "" : " " + serverNode.toString() + ", oldState=" + oldState);
+      return pid;
     } finally {
       if (serverNode != null) {
         serverNode.writeLock().unlock();
       }
     }
-    return pid;
   }
 
   public void offlineRegion(final RegionInfo regionInfo) {
@@ -1839,13 +2060,13 @@ public class AssignmentManager {
     // TODO used by TestSplitTransactionOnCluster.java
   }
 
-  public Map<ServerName, List<RegionInfo>> getSnapShotOfAssignment(
-      final Collection<RegionInfo> regions) {
+  public Map<ServerName, List<RegionInfo>>
+    getSnapShotOfAssignment(final Collection<RegionInfo> regions) {
     return regionStates.getSnapShotOfAssignment(regions);
   }
 
   // ============================================================================================
-  //  TODO: UTILS/HELPERS?
+  // TODO: UTILS/HELPERS?
   // ============================================================================================
   /**
    * Used by the client (via master) to identify if all regions have the schema updates
@@ -1858,7 +2079,7 @@ public class AssignmentManager {
 
     final List<RegionState> states = regionStates.getTableRegionStates(tableName);
     int ritCount = 0;
-    for (RegionState regionState: states) {
+    for (RegionState regionState : states) {
       if (!regionState.isOpened() && !regionState.isSplit()) {
         ritCount++;
       }
@@ -1866,45 +2087,91 @@ public class AssignmentManager {
     return new Pair<Integer, Integer>(ritCount, states.size());
   }
 
+  // This comparator sorts the RegionStates by time stamp then Region name.
+  // Comparing by timestamp alone can lead us to discard different RegionStates that happen
+  // to share a timestamp.
+  private final static class RegionStateStampComparator implements Comparator<RegionState> {
+    @Override
+    public int compare(final RegionState l, final RegionState r) {
+      int stampCmp = Long.compare(l.getStamp(), r.getStamp());
+      return stampCmp != 0 ? stampCmp : RegionInfo.COMPARATOR.compare(l.getRegion(), r.getRegion());
+    }
+  }
+
+  public final static RegionStateStampComparator REGION_STATE_STAMP_COMPARATOR =
+    new RegionStateStampComparator();
+
   // ============================================================================================
-  //  TODO: Region State In Transition
+  // TODO: Region State In Transition
   // ============================================================================================
   public boolean hasRegionsInTransition() {
-    return regionStates.hasRegionsInTransition();
+    return regionInTransitionTracker.hasRegionsInTransition();
   }
 
   public List<RegionStateNode> getRegionsInTransition() {
-    return regionStates.getRegionsInTransition();
+    return regionInTransitionTracker.getRegionsInTransition();
+  }
+
+  public boolean isRegionInTransition(final RegionInfo regionInfo) {
+    return regionInTransitionTracker.isRegionInTransition(regionInfo);
+  }
+
+  public int getRegionTransitScheduledCount() {
+    return regionStates.getRegionTransitScheduledCount();
+  }
+
+  /**
+   * Get the number of regions in transition.
+   */
+  public int getRegionsInTransitionCount() {
+    return regionInTransitionTracker.getRegionsInTransition().size();
+  }
+
+  public SortedSet<RegionState> getRegionsStateInTransition() {
+    final SortedSet<RegionState> rit = new TreeSet<RegionState>(REGION_STATE_STAMP_COMPARATOR);
+    for (RegionStateNode node : getRegionsInTransition()) {
+      rit.add(node.toRegionState());
+    }
+    return rit;
   }
 
   public List<RegionInfo> getAssignedRegions() {
     return regionStates.getAssignedRegions();
   }
 
+  /**
+   * Resolve a cached {@link RegionInfo} from the region name as a {@code byte[]}.
+   */
   public RegionInfo getRegionInfo(final byte[] regionName) {
     final RegionStateNode regionState = regionStates.getRegionStateNodeFromName(regionName);
     return regionState != null ? regionState.getRegionInfo() : null;
   }
 
+  /**
+   * Resolve a cached {@link RegionInfo} from the encoded region name as a {@code String}.
+   */
+  public RegionInfo getRegionInfo(final String encodedRegionName) {
+    final RegionStateNode regionState =
+      regionStates.getRegionStateNodeFromEncodedRegionName(encodedRegionName);
+    return regionState != null ? regionState.getRegionInfo() : null;
+  }
+
   // ============================================================================================
-  //  Expected states on region state transition.
-  //  Notice that there is expected states for transiting to OPENING state, this is because SCP.
-  //  See the comments in regionOpening method for more details.
+  // Expected states on region state transition.
+  // Notice that there is expected states for transiting to OPENING state, this is because SCP.
+  // See the comments in regionOpening method for more details.
   // ============================================================================================
-  private static final State[] STATES_EXPECTED_ON_OPEN = {
-    State.OPENING, // Normal case
+  private static final State[] STATES_EXPECTED_ON_OPEN = { State.OPENING, // Normal case
     State.OPEN // Retrying
   };
 
-  private static final State[] STATES_EXPECTED_ON_CLOSING = {
-    State.OPEN, // Normal case
+  private static final State[] STATES_EXPECTED_ON_CLOSING = { State.OPEN, // Normal case
     State.CLOSING, // Retrying
     State.SPLITTING, // Offline the split parent
     State.MERGING // Offline the merge parents
   };
 
-  private static final State[] STATES_EXPECTED_ON_CLOSED = {
-    State.CLOSING, // Normal case
+  private static final State[] STATES_EXPECTED_ON_CLOSED = { State.CLOSING, // Normal case
     State.CLOSED // Retrying
   };
 
@@ -1920,71 +2187,91 @@ public class AssignmentManager {
   // Should only be called in TransitRegionStateProcedure(and related procedures), as the locking
   // and pre-assumptions are very tricky.
   // ============================================================================================
-  private void transitStateAndUpdate(RegionStateNode regionNode, RegionState.State newState,
-      RegionState.State... expectedStates) throws IOException {
+  private CompletableFuture<Void> transitStateAndUpdate(RegionStateNode regionNode,
+    RegionState.State newState, RegionState.State... expectedStates) {
     RegionState.State state = regionNode.getState();
-    regionNode.transitionState(newState, expectedStates);
-    boolean succ = false;
     try {
-      regionStateStore.updateRegionLocation(regionNode);
-      succ = true;
-    } finally {
-      if (!succ) {
+      regionNode.transitionState(newState, expectedStates);
+    } catch (UnexpectedStateException e) {
+      return FutureUtils.failedFuture(e);
+    }
+    CompletableFuture<Void> future = regionStateStore.updateRegionLocation(regionNode);
+    FutureUtils.addListener(future, (r, e) -> {
+      if (e != null) {
         // revert
         regionNode.setState(state);
+      } else {
+        regionInTransitionTracker.handleRegionStateNodeOperation(regionNode);
       }
-    }
+    });
+    return future;
   }
 
   // should be called within the synchronized block of RegionStateNode
-  void regionOpening(RegionStateNode regionNode) throws IOException {
+  CompletableFuture<Void> regionOpening(RegionStateNode regionNode) {
     // As in SCP, for performance reason, there is no TRSP attached with this region, we will not
     // update the region state, which means that the region could be in any state when we want to
     // assign it after a RS crash. So here we do not pass the expectedStates parameter.
-    transitStateAndUpdate(regionNode, State.OPENING);
-    regionStates.addRegionToServer(regionNode);
-    // update the operation count metrics
-    metrics.incrementOperationCounter();
+    return transitStateAndUpdate(regionNode, State.OPENING).thenAccept(r -> {
+      ServerStateNode serverNode = regionStates.getServerNode(regionNode.getRegionLocation());
+      // Here the server node could be null. For example, we want to assign the region to a given
+      // region server and it crashes, and it is the region server which holds hbase:meta, then the
+      // above transitStateAndUpdate call will never succeed until we finishes the SCP for it. But
+      // after the SCP finishes, the server node will be removed, so when we arrive there, the
+      // server
+      // node will be null. This is not a big problem if we skip adding it, as later we will fail to
+      // execute the remote procedure on the region server and then try to assign to another region
+      // server
+      if (serverNode != null) {
+        serverNode.addRegion(regionNode);
+      }
+      // update the operation count metrics
+      metrics.incrementOperationCounter();
+    });
   }
 
   // should be called under the RegionStateNode lock
   // The parameter 'giveUp' means whether we will try to open the region again, if it is true, then
   // we will persist the FAILED_OPEN state into hbase:meta.
-  void regionFailedOpen(RegionStateNode regionNode, boolean giveUp) throws IOException {
+  CompletableFuture<Void> regionFailedOpen(RegionStateNode regionNode, boolean giveUp) {
     RegionState.State state = regionNode.getState();
     ServerName regionLocation = regionNode.getRegionLocation();
-    if (giveUp) {
-      regionNode.setState(State.FAILED_OPEN);
-      regionNode.setRegionLocation(null);
-      boolean succ = false;
-      try {
-        regionStateStore.updateRegionLocation(regionNode);
-        succ = true;
-      } finally {
-        if (!succ) {
-          // revert
-          regionNode.setState(state);
-          regionNode.setRegionLocation(regionLocation);
-        }
+    if (!giveUp) {
+      if (regionLocation != null) {
+        regionStates.removeRegionFromServer(regionLocation, regionNode);
       }
+      return CompletableFuture.completedFuture(null);
     }
-    if (regionLocation != null) {
-      regionStates.removeRegionFromServer(regionLocation, regionNode);
-    }
+    regionNode.setState(State.FAILED_OPEN);
+    regionNode.setRegionLocation(null);
+    CompletableFuture<Void> future = regionStateStore.updateRegionLocation(regionNode);
+    FutureUtils.addListener(future, (r, e) -> {
+      if (e == null) {
+        if (regionLocation != null) {
+          regionStates.removeRegionFromServer(regionLocation, regionNode);
+        }
+        regionInTransitionTracker.handleRegionStateNodeOperation(regionNode);
+      } else {
+        // revert
+        regionNode.setState(state);
+        regionNode.setRegionLocation(regionLocation);
+      }
+    });
+    return future;
   }
 
   // should be called under the RegionStateNode lock
-  void regionClosing(RegionStateNode regionNode) throws IOException {
-    transitStateAndUpdate(regionNode, State.CLOSING, STATES_EXPECTED_ON_CLOSING);
-
-    RegionInfo hri = regionNode.getRegionInfo();
-    // Set meta has not initialized early. so people trying to create/edit tables will wait
-    if (isMetaRegion(hri)) {
-      setMetaAssigned(hri, false);
-    }
-    regionStates.addRegionToServer(regionNode);
-    // update the operation count metrics
-    metrics.incrementOperationCounter();
+  CompletableFuture<Void> regionClosing(RegionStateNode regionNode) {
+    return transitStateAndUpdate(regionNode, State.CLOSING, STATES_EXPECTED_ON_CLOSING)
+      .thenAccept(r -> {
+        RegionInfo hri = regionNode.getRegionInfo();
+        // Set meta has not initialized early. so people trying to create/edit tables will wait
+        if (isMetaRegion(hri)) {
+          setMetaAssigned(hri, false);
+        }
+        // update the operation count metrics
+        metrics.incrementOperationCounter();
+      });
   }
 
   // for open and close, they will first be persist to the procedure store in
@@ -1993,7 +2280,8 @@ public class AssignmentManager {
   // RegionRemoteProcedureBase is woken up, we will persist the RegionStateNode to hbase:meta.
 
   // should be called under the RegionStateNode lock
-  void regionOpenedWithoutPersistingToMeta(RegionStateNode regionNode) throws IOException {
+  void regionOpenedWithoutPersistingToMeta(RegionStateNode regionNode)
+    throws UnexpectedStateException {
     regionNode.transitionState(State.OPEN, STATES_EXPECTED_ON_OPEN);
     RegionInfo regionInfo = regionNode.getRegionInfo();
     regionStates.addRegionToServer(regionNode);
@@ -2001,7 +2289,8 @@ public class AssignmentManager {
   }
 
   // should be called under the RegionStateNode lock
-  void regionClosedWithoutPersistingToMeta(RegionStateNode regionNode) throws IOException {
+  void regionClosedWithoutPersistingToMeta(RegionStateNode regionNode)
+    throws UnexpectedStateException {
     ServerName regionLocation = regionNode.getRegionLocation();
     regionNode.transitionState(State.CLOSED, STATES_EXPECTED_ON_CLOSED);
     regionNode.setRegionLocation(null);
@@ -2012,47 +2301,68 @@ public class AssignmentManager {
   }
 
   // should be called under the RegionStateNode lock
+  CompletableFuture<Void> persistToMeta(RegionStateNode regionNode) {
+    return regionStateStore.updateRegionLocation(regionNode).thenAccept(r -> {
+      RegionInfo regionInfo = regionNode.getRegionInfo();
+      if (isMetaRegion(regionInfo) && regionNode.getState() == State.OPEN) {
+        // Usually we'd set a table ENABLED at this stage but hbase:meta is ALWAYs enabled, it
+        // can't be disabled -- so skip the RPC (besides... enabled is managed by TableStateManager
+        // which is backed by hbase:meta... Avoid setting ENABLED to avoid having to update state
+        // on table that contains state.
+        setMetaAssigned(regionInfo, true);
+      }
+      regionInTransitionTracker.handleRegionStateNodeOperation(regionNode);
+    });
+  }
+
+  // should be called under the RegionStateNode lock
   // for SCP
-  public void regionClosedAbnormally(RegionStateNode regionNode) throws IOException {
+  public CompletableFuture<Void> regionClosedAbnormally(RegionStateNode regionNode) {
     RegionState.State state = regionNode.getState();
     ServerName regionLocation = regionNode.getRegionLocation();
-    regionNode.transitionState(State.ABNORMALLY_CLOSED);
+    regionNode.setState(State.ABNORMALLY_CLOSED);
     regionNode.setRegionLocation(null);
-    boolean succ = false;
-    try {
-      regionStateStore.updateRegionLocation(regionNode);
-      succ = true;
-    } finally {
-      if (!succ) {
+    CompletableFuture<Void> future = regionStateStore.updateRegionLocation(regionNode);
+    FutureUtils.addListener(future, (r, e) -> {
+      if (e == null) {
+        if (regionLocation != null) {
+          regionNode.setLastHost(regionLocation);
+          regionStates.removeRegionFromServer(regionLocation, regionNode);
+        }
+        regionInTransitionTracker.handleRegionStateNodeOperation(regionNode);
+      } else {
         // revert
         regionNode.setState(state);
         regionNode.setRegionLocation(regionLocation);
       }
-    }
-    if (regionLocation != null) {
-      regionNode.setLastHost(regionLocation);
-      regionStates.removeRegionFromServer(regionLocation, regionNode);
-    }
-  }
-
-  void persistToMeta(RegionStateNode regionNode) throws IOException {
-    regionStateStore.updateRegionLocation(regionNode);
-    RegionInfo regionInfo = regionNode.getRegionInfo();
-    if (isMetaRegion(regionInfo) && regionNode.getState() == State.OPEN) {
-      // Usually we'd set a table ENABLED at this stage but hbase:meta is ALWAYs enabled, it
-      // can't be disabled -- so skip the RPC (besides... enabled is managed by TableStateManager
-      // which is backed by hbase:meta... Avoid setting ENABLED to avoid having to update state
-      // on table that contains state.
-      setMetaAssigned(regionInfo, true);
-    }
+    });
+    return future;
   }
 
   // ============================================================================================
   // The above methods can only be called in TransitRegionStateProcedure(and related procedures)
   // ============================================================================================
 
+  // As soon as a server a crashed, region hosting on that are un-available, this method helps to
+  // track those un-available regions. This method can only be called from ServerCrashProcedure.
+  public void markRegionsAsCrashed(List<RegionInfo> regionsOnCrashedServer,
+    ServerCrashProcedure scp) {
+    ServerName crashedServerName = scp.getServerName();
+    assert crashedServerName != null;
+    for (RegionInfo regionInfo : regionsOnCrashedServer) {
+      RegionStateNode node = regionStates.getOrCreateRegionStateNode(regionInfo);
+      if (crashedServerName.equals(node.getRegionLocation())) {
+        node.crashed(scp.getSubmittedTime());
+        regionInTransitionTracker.regionCrashed(node);
+      } else {
+        LOG.warn("Region {} should be on crashed region server {} but is recorded on {}",
+          regionInfo, crashedServerName, node.getRegionLocation());
+      }
+    }
+  }
+
   public void markRegionAsSplit(final RegionInfo parent, final ServerName serverName,
-      final RegionInfo daughterA, final RegionInfo daughterB) throws IOException {
+    final RegionInfo daughterA, final RegionInfo daughterB) throws IOException {
     // Update hbase:meta. Parent will be marked offline and split up in hbase:meta.
     // The parent stays in regionStates until cleared when removed by CatalogJanitor.
     // Update its state in regionStates to it shows as offline and split when read
@@ -2075,6 +2385,9 @@ public class AssignmentManager {
     // it is a split parent. And usually only one of them can match, as after restart, the region
     // state will be changed from SPLIT to CLOSED.
     regionStateStore.splitRegion(parent, daughterA, daughterB, serverName, td);
+    regionInTransitionTracker.handleRegionStateNodeOperation(node);
+    regionInTransitionTracker.handleRegionStateNodeOperation(nodeA);
+    regionInTransitionTracker.handleRegionStateNodeOperation(nodeB);
     if (shouldAssignFavoredNodes(parent)) {
       List<ServerName> onlineServers = this.master.getServerManager().getOnlineServersList();
       getFavoredNodePromoter().generateFavoredNodesForDaughter(onlineServers, parent, daughterA,
@@ -2083,25 +2396,25 @@ public class AssignmentManager {
   }
 
   /**
-   * When called here, the merge has happened. The merged regions have been
-   * unassigned and the above markRegionClosed has been called on each so they have been
-   * disassociated from a hosting Server. The merged region will be open after this call. The
-   * merged regions are removed from hbase:meta below. Later they are deleted from the filesystem
-   * by the catalog janitor running against hbase:meta. It notices when the merged region no
-   * longer holds references to the old regions (References are deleted after a compaction
-   * rewrites what the Reference points at but not until the archiver chore runs, are the
-   * References removed).
+   * When called here, the merge has happened. The merged regions have been unassigned and the above
+   * markRegionClosed has been called on each so they have been disassociated from a hosting Server.
+   * The merged region will be open after this call. The merged regions are removed from hbase:meta
+   * below. Later they are deleted from the filesystem by the catalog janitor running against
+   * hbase:meta. It notices when the merged region no longer holds references to the old regions
+   * (References are deleted after a compaction rewrites what the Reference points at but not until
+   * the archiver chore runs, are the References removed).
    */
   public void markRegionAsMerged(final RegionInfo child, final ServerName serverName,
-        RegionInfo [] mergeParents)
-      throws IOException {
+    RegionInfo[] mergeParents) throws IOException {
     final RegionStateNode node = regionStates.getOrCreateRegionStateNode(child);
-    node.setState(State.MERGED);
-    for (RegionInfo ri: mergeParents) {
+    for (RegionInfo ri : mergeParents) {
       regionStates.deleteRegion(ri);
+      regionInTransitionTracker.handleRegionDelete(ri);
     }
+
     TableDescriptor td = master.getTableDescriptors().get(child.getTable());
     regionStateStore.mergeRegions(child, mergeParents, serverName, td);
+    regionInTransitionTracker.handleRegionStateNodeOperation(node);
     if (shouldAssignFavoredNodes(child)) {
       getFavoredNodePromoter().generateFavoredNodesForMergedRegion(child, mergeParents);
     }
@@ -2112,21 +2425,20 @@ public class AssignmentManager {
    * belongs to a non-system table.
    */
   private boolean shouldAssignFavoredNodes(RegionInfo region) {
-    return this.shouldAssignRegionsWithFavoredNodes &&
-        FavoredNodesManager.isFavoredNodeApplicable(region);
+    return this.shouldAssignRegionsWithFavoredNodes
+      && FavoredNodesManager.isFavoredNodeApplicable(region);
   }
 
   // ============================================================================================
-  //  Assign Queue (Assign/Balance)
+  // Assign Queue (Assign/Balance)
   // ============================================================================================
   private final ArrayList<RegionStateNode> pendingAssignQueue = new ArrayList<RegionStateNode>();
   private final ReentrantLock assignQueueLock = new ReentrantLock();
   private final Condition assignQueueFullCond = assignQueueLock.newCondition();
 
   /**
-   * Add the assign operation to the assignment queue.
-   * The pending assignment operation will be processed,
-   * and each region will be assigned by a server using the balancer.
+   * Add the assign operation to the assignment queue. The pending assignment operation will be
+   * processed, and each region will be assigned by a server using the balancer.
    */
   protected void queueAssign(final RegionStateNode regionNode) {
     regionNode.getProcedureEvent().suspend();
@@ -2135,9 +2447,10 @@ public class AssignmentManager {
     assignQueueLock.lock();
     try {
       pendingAssignQueue.add(regionNode);
-      if (regionNode.isSystemTable() ||
-          pendingAssignQueue.size() == 1 ||
-          pendingAssignQueue.size() >= assignDispatchWaitQueueMaxSize) {
+      if (
+        regionNode.isSystemTable() || pendingAssignQueue.size() == 1
+          || pendingAssignQueue.size() >= assignDispatchWaitQueueMaxSize
+      ) {
         assignQueueFullCond.signal();
       }
     } finally {
@@ -2196,7 +2509,7 @@ public class AssignmentManager {
       }
       assignQueueFullCond.await(assignDispatchWaitMillis, TimeUnit.MILLISECONDS);
       regions = new HashMap<RegionInfo, RegionStateNode>(pendingAssignQueue.size());
-      for (RegionStateNode regionNode: pendingAssignQueue) {
+      for (RegionStateNode regionNode : pendingAssignQueue) {
         regions.put(regionNode.getRegionInfo(), regionNode);
       }
       pendingAssignQueue.clear();
@@ -2224,9 +2537,9 @@ public class AssignmentManager {
     final List<RegionInfo> userHRIs = new ArrayList<>(regions.size());
     // Regions for system tables requiring reassignment
     final List<RegionInfo> systemHRIs = new ArrayList<>();
-    for (RegionStateNode regionStateNode: regions.values()) {
+    for (RegionStateNode regionStateNode : regions.values()) {
       boolean sysTable = regionStateNode.isSystemTable();
-      final List<RegionInfo> hris = sysTable? systemHRIs: userHRIs;
+      final List<RegionInfo> hris = sysTable ? systemHRIs : userHRIs;
       if (regionStateNode.getRegionLocation() != null) {
         retainMap.put(regionStateNode.getRegionInfo(), regionStateNode.getRegionLocation());
       } else {
@@ -2256,27 +2569,30 @@ public class AssignmentManager {
       // System table regions requiring reassignment are present, get region servers
       // not available for system table regions
       final List<ServerName> excludeServers = getExcludedServersForSystemTable();
-      List<ServerName> serversForSysTables = servers.stream()
-          .filter(s -> !excludeServers.contains(s)).collect(Collectors.toList());
+      List<ServerName> serversForSysTables =
+        servers.stream().filter(s -> !excludeServers.contains(s)).collect(Collectors.toList());
       if (serversForSysTables.isEmpty()) {
-        LOG.warn("Filtering old server versions and the excluded produced an empty set; " +
-            "instead considering all candidate servers!");
+        LOG.warn("Filtering old server versions and the excluded produced an empty set; "
+          + "instead considering all candidate servers!");
       }
-      LOG.debug("Processing assignQueue; systemServersCount=" + serversForSysTables.size() +
-          ", allServersCount=" + servers.size());
+      LOG.debug("Processing assignQueue; systemServersCount=" + serversForSysTables.size()
+        + ", allServersCount=" + servers.size());
       processAssignmentPlans(regions, null, systemHRIs,
-          serversForSysTables.isEmpty() && !containsBogusAssignments(regions, systemHRIs) ?
-              servers: serversForSysTables);
+        serversForSysTables.isEmpty() && !containsBogusAssignments(regions, systemHRIs)
+          ? servers
+          : serversForSysTables);
     }
 
     processAssignmentPlans(regions, retainMap, userHRIs, servers);
   }
 
   private boolean containsBogusAssignments(Map<RegionInfo, RegionStateNode> regions,
-      List<RegionInfo> hirs) {
+    List<RegionInfo> hirs) {
     for (RegionInfo ri : hirs) {
-      if (regions.get(ri).getRegionLocation() != null &&
-          regions.get(ri).getRegionLocation().equals(LoadBalancer.BOGUS_SERVER_NAME)){
+      if (
+        regions.get(ri).getRegionLocation() != null
+          && regions.get(ri).getRegionLocation().equals(LoadBalancer.BOGUS_SERVER_NAME)
+      ) {
         return true;
       }
     }
@@ -2284,8 +2600,8 @@ public class AssignmentManager {
   }
 
   private void processAssignmentPlans(final HashMap<RegionInfo, RegionStateNode> regions,
-      final HashMap<RegionInfo, ServerName> retainMap, final List<RegionInfo> hris,
-      final List<ServerName> servers) {
+    final HashMap<RegionInfo, ServerName> retainMap, final List<RegionInfo> hris,
+    final List<ServerName> servers) {
     boolean isTraceEnabled = LOG.isTraceEnabled();
     if (isTraceEnabled) {
       LOG.trace("Available servers count=" + servers.size() + ": " + servers);
@@ -2322,7 +2638,7 @@ public class AssignmentManager {
   }
 
   private void acceptPlan(final HashMap<RegionInfo, RegionStateNode> regions,
-      final Map<ServerName, List<RegionInfo>> plan) throws HBaseIOException {
+    final Map<ServerName, List<RegionInfo>> plan) throws HBaseIOException {
     final ProcedureEvent<?>[] events = new ProcedureEvent[regions.size()];
     final long st = EnvironmentEdgeManager.currentTime();
 
@@ -2331,9 +2647,9 @@ public class AssignmentManager {
     }
 
     int evcount = 0;
-    for (Map.Entry<ServerName, List<RegionInfo>> entry: plan.entrySet()) {
+    for (Map.Entry<ServerName, List<RegionInfo>> entry : plan.entrySet()) {
       final ServerName server = entry.getKey();
-      for (RegionInfo hri: entry.getValue()) {
+      for (RegionInfo hri : entry.getValue()) {
         final RegionStateNode regionNode = regions.get(hri);
         regionNode.setRegionLocation(server);
         if (server.equals(LoadBalancer.BOGUS_SERVER_NAME) && regionNode.isSystemTable()) {
@@ -2343,7 +2659,7 @@ public class AssignmentManager {
           } finally {
             assignQueueLock.unlock();
           }
-        }else {
+        } else {
           events[evcount++] = regionNode.getProcedureEvent();
         }
       }
@@ -2352,16 +2668,15 @@ public class AssignmentManager {
 
     final long et = EnvironmentEdgeManager.currentTime();
     if (LOG.isTraceEnabled()) {
-      LOG.trace("ASSIGN ACCEPT " + events.length + " -> " +
-          StringUtils.humanTimeDiff(et - st));
+      LOG.trace("ASSIGN ACCEPT " + events.length + " -> " + StringUtils.humanTimeDiff(et - st));
     }
   }
 
   private void addToPendingAssignment(final HashMap<RegionInfo, RegionStateNode> regions,
-      final Collection<RegionInfo> pendingRegions) {
+    final Collection<RegionInfo> pendingRegions) {
     assignQueueLock.lock();
     try {
-      for (RegionInfo hri: pendingRegions) {
+      for (RegionInfo hri : pendingRegions) {
         pendingAssignQueue.add(regions.get(hri));
       }
     } finally {
@@ -2370,50 +2685,41 @@ public class AssignmentManager {
   }
 
   /**
-   * For a given cluster with mixed versions of servers, get a list of
-   * servers with lower versions, where system table regions should not be
-   * assigned to.
-   * For system table, we must assign regions to a server with highest version.
-   * However, we can disable this exclusion using config:
-   * "hbase.min.version.move.system.tables" if checkForMinVersion is true.
-   * Detailed explanation available with definition of minVersionToMoveSysTables.
-   *
+   * For a given cluster with mixed versions of servers, get a list of servers with lower versions,
+   * where system table regions should not be assigned to. For system table, we must assign regions
+   * to a server with highest version. However, we can disable this exclusion using config:
+   * "hbase.min.version.move.system.tables" if checkForMinVersion is true. Detailed explanation
+   * available with definition of minVersionToMoveSysTables.
    * @return List of Excluded servers for System table regions.
    */
   public List<ServerName> getExcludedServersForSystemTable() {
     // TODO: This should be a cached list kept by the ServerManager rather than calculated on each
     // move or system region assign. The RegionServerTracker keeps list of online Servers with
     // RegionServerInfo that includes Version.
-    List<Pair<ServerName, String>> serverList = master.getServerManager().getOnlineServersList()
-      .stream()
-      .map(s->new Pair<>(s, master.getRegionServerVersion(s)))
-      .collect(Collectors.toList());
+    List<Pair<ServerName, String>> serverList =
+      master.getServerManager().getOnlineServersList().stream()
+        .map(s -> new Pair<>(s, master.getRegionServerVersion(s))).collect(Collectors.toList());
     if (serverList.isEmpty()) {
       return new ArrayList<>();
     }
-    String highestVersion = Collections.max(serverList,
-      (o1, o2) -> VersionInfo.compareVersion(o1.getSecond(), o2.getSecond())).getSecond();
+    String highestVersion = Collections
+      .max(serverList, (o1, o2) -> VersionInfo.compareVersion(o1.getSecond(), o2.getSecond()))
+      .getSecond();
     if (!DEFAULT_MIN_VERSION_MOVE_SYS_TABLES_CONFIG.equals(minVersionToMoveSysTables)) {
-      int comparedValue = VersionInfo.compareVersion(minVersionToMoveSysTables,
-        highestVersion);
+      int comparedValue = VersionInfo.compareVersion(minVersionToMoveSysTables, highestVersion);
       if (comparedValue > 0) {
         return new ArrayList<>();
       }
     }
-    return serverList.stream()
-      .filter(pair -> !pair.getSecond().equals(highestVersion))
-      .map(Pair::getFirst)
-      .collect(Collectors.toList());
+    return serverList.stream().filter(pair -> !pair.getSecond().equals(highestVersion))
+      .map(Pair::getFirst).collect(Collectors.toList());
   }
-
 
   MasterServices getMaster() {
     return master;
   }
 
-  /**
-   * @return a snapshot of rsReports
-   */
+  /** Returns a snapshot of rsReports */
   public Map<ServerName, Set<byte[]>> getRSReports() {
     Map<ServerName, Set<byte[]>> rsReportsSnapshot = new HashMap<>();
     synchronized (rsReports) {
@@ -2423,9 +2729,8 @@ public class AssignmentManager {
   }
 
   /**
-   * Provide regions state count for given table.
-   * e.g howmany regions of give table are opened/closed/rit etc
-   *
+   * Provide regions state count for given table. e.g howmany regions of give table are
+   * opened/closed/rit etc
    * @param tableName TableName
    * @return region states count
    */
@@ -2449,13 +2754,9 @@ public class AssignmentManager {
       totalRegionCount = states.size();
       ritCount = totalRegionCount - openRegionsCount - splitRegionCount;
     }
-    return new RegionStatesCount.RegionStatesCountBuilder()
-      .setOpenRegions(openRegionsCount)
-      .setClosedRegions(closedRegionCount)
-      .setSplitRegions(splitRegionCount)
-      .setRegionsInTransition(ritCount)
-      .setTotalRegions(totalRegionCount)
-      .build();
+    return new RegionStatesCount.RegionStatesCountBuilder().setOpenRegions(openRegionsCount)
+      .setClosedRegions(closedRegionCount).setSplitRegions(splitRegionCount)
+      .setRegionsInTransition(ritCount).setTotalRegions(totalRegionCount).build();
   }
 
 }

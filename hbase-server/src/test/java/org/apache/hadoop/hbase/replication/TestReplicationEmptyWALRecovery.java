@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -6,7 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -40,6 +42,7 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALEditInternalHelper;
 import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.junit.Assert;
 import org.junit.Before;
@@ -67,7 +70,6 @@ public class TestReplicationEmptyWALRecovery extends TestReplicationBase {
 
   /**
    * Waits until there is only one log(the current writing one) in the replication queue
-   *
    * @param numRs number of region servers
    */
   private void waitForLogAdvance(int numRs) {
@@ -88,9 +90,11 @@ public class TestReplicationEmptyWALRecovery extends TestReplicationBase {
             // We are making sure that there is only one log queue and that is for the
             // current WAL of region server
             String logPrefix = source.getQueues().keySet().stream().findFirst().get();
-            if (!currentFile.equals(source.getCurrentPath())
-              || source.getQueues().keySet().size() != 1
-              || source.getQueues().get(logPrefix).size() != 1) {
+            if (
+              !currentFile.equals(source.getCurrentPath())
+                || source.getQueues().keySet().size() != 1
+                || source.getQueues().get(logPrefix).size() != 1
+            ) {
               return false;
             }
           }
@@ -158,11 +162,14 @@ public class TestReplicationEmptyWALRecovery extends TestReplicationBase {
    */
   @Test
   public void testReplicationOfEmptyWALFollowingNonEmptyWAL() throws Exception {
+    final int numRs = UTIL1.getHBaseCluster().getRegionServerThreads().size();
+    // make sure we only the current active wal file in queue
+    verifyNumberOfLogsInQueue(1, numRs);
+
     // Disable the replication peer to accumulate the non empty WAL followed by empty WAL
     hbaseAdmin.disableReplicationPeer(PEER_ID2);
-    int numOfEntriesToReplicate = 20;
 
-    final int numRs = UTIL1.getHBaseCluster().getRegionServerThreads().size();
+    int numOfEntriesToReplicate = 20;
     // for each RS, create an empty wal with same walGroupId
     final List<Path> emptyWalPaths = new ArrayList<>();
     long ts = EnvironmentEdgeManager.currentTime();
@@ -326,7 +333,6 @@ public class TestReplicationEmptyWALRecovery extends TestReplicationBase {
     for (int i = 0; i < numRs; i++) {
       HRegionServer hrs = UTIL1.getHBaseCluster().getRegionServer(i);
       Replication replicationService = (Replication) hrs.getReplicationSourceService();
-      replicationService.getReplicationManager().preLogRoll(emptyWalPaths.get(i));
       replicationService.getReplicationManager().postLogRoll(emptyWalPaths.get(i));
       RegionInfo regionInfo =
         UTIL1.getHBaseCluster().getRegions(htable1.getName()).get(0).getRegionInfo();
@@ -356,7 +362,7 @@ public class TestReplicationEmptyWALRecovery extends TestReplicationBase {
       byte[] b = Bytes.toBytes(Integer.toString(i));
       KeyValue kv = new KeyValue(b, famName, b);
       WALEdit edit = new WALEdit();
-      edit.add(kv);
+      WALEditInternalHelper.addExtendedCell(edit, kv);
       txId = wal.appendData(info, getWalKeyImpl(), edit);
     }
     wal.sync(txId);

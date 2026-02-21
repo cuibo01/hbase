@@ -1,37 +1,43 @@
-/**
- * Copyright The Apache Software Foundation
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements. See the NOTICE file distributed with this
- * work for additional information regarding copyright ownership. The ASF
- * licenses this file to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
- * License for the specific language governing permissions and limitations
- * under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.hadoop.hbase.io.hfile;
 
 import java.util.Iterator;
-
-import org.apache.yetus.audience.InterfaceAudience;
+import java.util.Map;
+import java.util.Optional;
+import org.apache.commons.lang3.mutable.Mutable;
+import org.apache.commons.lang3.mutable.MutableBoolean;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.io.hfile.bucket.BucketCache;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * CombinedBlockCache is an abstraction layer that combines
- * {@link FirstLevelBlockCache} and {@link BucketCache}. The smaller lruCache is used
- * to cache bloom blocks and index blocks.  The larger Cache is used to
- * cache data blocks. {@link #getBlock(BlockCacheKey, boolean, boolean, boolean)} reads
- * first from the smaller l1Cache before looking for the block in the l2Cache.  Blocks evicted
- * from l1Cache are put into the bucket cache.
- * Metrics are the combined size and hits and misses of both caches.
+ * CombinedBlockCache is an abstraction layer that combines {@link FirstLevelBlockCache} and
+ * {@link BucketCache}. The smaller lruCache is used to cache bloom blocks and index blocks. The
+ * larger Cache is used to cache data blocks.
+ * {@link #getBlock(BlockCacheKey, boolean, boolean, boolean)} reads first from the smaller l1Cache
+ * before looking for the block in the l2Cache. Blocks evicted from l1Cache are put into the bucket
+ * cache. Metrics are the combined size and hits and misses of both caches.
  */
 @InterfaceAudience.Private
 public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
@@ -39,11 +45,12 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
   protected final BlockCache l2Cache;
   protected final CombinedCacheStats combinedCacheStats;
 
+  private static final Logger LOG = LoggerFactory.getLogger(CombinedBlockCache.class);
+
   public CombinedBlockCache(FirstLevelBlockCache l1Cache, BlockCache l2Cache) {
     this.l1Cache = l1Cache;
     this.l2Cache = l2Cache;
-    this.combinedCacheStats = new CombinedCacheStats(l1Cache.getStats(),
-        l2Cache.getStats());
+    this.combinedCacheStats = new CombinedCacheStats(l1Cache.getStats(), l2Cache.getStats());
   }
 
   @Override
@@ -57,11 +64,17 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
   @Override
   public void cacheBlock(BlockCacheKey cacheKey, Cacheable buf, boolean inMemory) {
+    cacheBlock(cacheKey, buf, inMemory, false);
+  }
+
+  @Override
+  public void cacheBlock(BlockCacheKey cacheKey, Cacheable buf, boolean inMemory,
+    boolean waitWhenCache) {
     boolean metaBlock = isMetaBlock(buf.getBlockType());
     if (metaBlock) {
       l1Cache.cacheBlock(cacheKey, buf, inMemory);
     } else {
-      l2Cache.cacheBlock(cacheKey, buf, inMemory);
+      l2Cache.cacheBlock(cacheKey, buf, inMemory, waitWhenCache);
     }
   }
 
@@ -71,27 +84,64 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
   }
 
   @Override
-  public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching,
-      boolean repeat, boolean updateCacheMetrics) {
-    // We are not in a position to exactly look at LRU cache or BC as BlockType may not be getting
-    // passed always.
+  public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching, boolean repeat,
+    boolean updateCacheMetrics) {
+    Cacheable block = null;
+    // We don't know the block type. We should try to get it on one of the caches only,
+    // but not both otherwise we'll over compute on misses. Here we check if the key is on L1,
+    // if so, call getBlock on L1 and that will compute the hit. Otherwise, we'll try to get it from
+    // L2 and whatever happens, we'll update the stats there.
     boolean existInL1 = l1Cache.containsBlock(cacheKey);
-    if (!existInL1 && updateCacheMetrics && !repeat) {
-      // If the block does not exist in L1, the containsBlock should be counted as one miss.
-      l1Cache.getStats().miss(caching, cacheKey.isPrimary(), cacheKey.getBlockType());
+    // if we know it's in L1, just delegate call to l1 and return it
+    if (existInL1) {
+      block = l1Cache.getBlock(cacheKey, caching, repeat, false);
+    } else {
+      block = l2Cache.getBlock(cacheKey, caching, repeat, false);
     }
-    return existInL1 ?
-        l1Cache.getBlock(cacheKey, caching, repeat, updateCacheMetrics):
-        l2Cache.getBlock(cacheKey, caching, repeat, updateCacheMetrics);
+    if (updateCacheMetrics) {
+      boolean metaBlock = isMetaBlock(cacheKey.getBlockType());
+      if (metaBlock) {
+        if (!existInL1 && block != null) {
+          LOG.warn("Cache key {} had block type {}, but was found in L2 cache.", cacheKey,
+            cacheKey.getBlockType());
+          updateBlockMetrics(block, cacheKey, l2Cache, caching);
+        } else {
+          updateBlockMetrics(block, cacheKey, l1Cache, caching);
+        }
+      } else {
+        if (existInL1) {
+          updateBlockMetrics(block, cacheKey, l1Cache, caching);
+        } else {
+          updateBlockMetrics(block, cacheKey, l2Cache, caching);
+        }
+      }
+    }
+    return block;
+  }
+
+  private void updateBlockMetrics(Cacheable block, BlockCacheKey key, BlockCache cache,
+    boolean caching) {
+    if (block == null) {
+      cache.getStats().miss(caching, key.isPrimary(), key.getBlockType());
+    } else {
+      cache.getStats().hit(caching, key.isPrimary(), key.getBlockType());
+
+    }
   }
 
   @Override
   public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching, boolean repeat,
-      boolean updateCacheMetrics, BlockType blockType) {
+    boolean updateCacheMetrics, BlockType blockType) {
     if (blockType == null) {
       return getBlock(cacheKey, caching, repeat, updateCacheMetrics);
     }
-    boolean metaBlock = isMetaBlock(blockType);
+    cacheKey.setBlockType(blockType);
+    return getBlockWithType(cacheKey, caching, repeat, updateCacheMetrics);
+  }
+
+  private Cacheable getBlockWithType(BlockCacheKey cacheKey, boolean caching, boolean repeat,
+    boolean updateCacheMetrics) {
+    boolean metaBlock = isMetaBlock(cacheKey.getBlockType());
     if (metaBlock) {
       return l1Cache.getBlock(cacheKey, caching, repeat, updateCacheMetrics);
     } else {
@@ -106,8 +156,7 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
   @Override
   public int evictBlocksByHfileName(String hfileName) {
-    return l1Cache.evictBlocksByHfileName(hfileName)
-        + l2Cache.evictBlocksByHfileName(hfileName);
+    return l1Cache.evictBlocksByHfileName(hfileName) + l2Cache.evictBlocksByHfileName(hfileName);
   }
 
   @Override
@@ -201,8 +250,8 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
     @Override
     public long getIntermediateIndexMissCount() {
-      return lruCacheStats.getIntermediateIndexMissCount() +
-          bucketCacheStats.getIntermediateIndexMissCount();
+      return lruCacheStats.getIntermediateIndexMissCount()
+        + bucketCacheStats.getIntermediateIndexMissCount();
     }
 
     @Override
@@ -212,14 +261,14 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
     @Override
     public long getGeneralBloomMetaMissCount() {
-      return lruCacheStats.getGeneralBloomMetaMissCount() +
-          bucketCacheStats.getGeneralBloomMetaMissCount();
+      return lruCacheStats.getGeneralBloomMetaMissCount()
+        + bucketCacheStats.getGeneralBloomMetaMissCount();
     }
 
     @Override
     public long getDeleteFamilyBloomMissCount() {
-      return lruCacheStats.getDeleteFamilyBloomMissCount() +
-          bucketCacheStats.getDeleteFamilyBloomMissCount();
+      return lruCacheStats.getDeleteFamilyBloomMissCount()
+        + bucketCacheStats.getDeleteFamilyBloomMissCount();
     }
 
     @Override
@@ -254,8 +303,8 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
     @Override
     public long getIntermediateIndexHitCount() {
-      return lruCacheStats.getIntermediateIndexHitCount() +
-          bucketCacheStats.getIntermediateIndexHitCount();
+      return lruCacheStats.getIntermediateIndexHitCount()
+        + bucketCacheStats.getIntermediateIndexHitCount();
     }
 
     @Override
@@ -265,14 +314,14 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
     @Override
     public long getGeneralBloomMetaHitCount() {
-      return lruCacheStats.getGeneralBloomMetaHitCount() +
-          bucketCacheStats.getGeneralBloomMetaHitCount();
+      return lruCacheStats.getGeneralBloomMetaHitCount()
+        + bucketCacheStats.getGeneralBloomMetaHitCount();
     }
 
     @Override
     public long getDeleteFamilyBloomHitCount() {
-      return lruCacheStats.getDeleteFamilyBloomHitCount() +
-          bucketCacheStats.getDeleteFamilyBloomHitCount();
+      return lruCacheStats.getDeleteFamilyBloomHitCount()
+        + bucketCacheStats.getDeleteFamilyBloomHitCount();
     }
 
     @Override
@@ -282,14 +331,12 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
     @Override
     public long getRequestCount() {
-      return lruCacheStats.getRequestCount()
-          + bucketCacheStats.getRequestCount();
+      return lruCacheStats.getRequestCount() + bucketCacheStats.getRequestCount();
     }
 
     @Override
     public long getRequestCachingCount() {
-      return lruCacheStats.getRequestCachingCount()
-          + bucketCacheStats.getRequestCachingCount();
+      return lruCacheStats.getRequestCachingCount() + bucketCacheStats.getRequestCachingCount();
     }
 
     @Override
@@ -304,8 +351,7 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
     @Override
     public long getMissCachingCount() {
-      return lruCacheStats.getMissCachingCount()
-          + bucketCacheStats.getMissCachingCount();
+      return lruCacheStats.getMissCachingCount() + bucketCacheStats.getMissCachingCount();
     }
 
     @Override
@@ -317,28 +363,25 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
     public long getPrimaryHitCount() {
       return lruCacheStats.getPrimaryHitCount() + bucketCacheStats.getPrimaryHitCount();
     }
+
     @Override
     public long getHitCachingCount() {
-      return lruCacheStats.getHitCachingCount()
-          + bucketCacheStats.getHitCachingCount();
+      return lruCacheStats.getHitCachingCount() + bucketCacheStats.getHitCachingCount();
     }
 
     @Override
     public long getEvictionCount() {
-      return lruCacheStats.getEvictionCount()
-          + bucketCacheStats.getEvictionCount();
+      return lruCacheStats.getEvictionCount() + bucketCacheStats.getEvictionCount();
     }
 
     @Override
     public long getEvictedCount() {
-      return lruCacheStats.getEvictedCount()
-          + bucketCacheStats.getEvictedCount();
+      return lruCacheStats.getEvictedCount() + bucketCacheStats.getEvictedCount();
     }
 
     @Override
     public long getPrimaryEvictedCount() {
-      return lruCacheStats.getPrimaryEvictedCount()
-          + bucketCacheStats.getPrimaryEvictedCount();
+      return lruCacheStats.getPrimaryEvictedCount() + bucketCacheStats.getPrimaryEvictedCount();
     }
 
     @Override
@@ -355,25 +398,25 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
     @Override
     public long getSumHitCountsPastNPeriods() {
       return lruCacheStats.getSumHitCountsPastNPeriods()
-          + bucketCacheStats.getSumHitCountsPastNPeriods();
+        + bucketCacheStats.getSumHitCountsPastNPeriods();
     }
 
     @Override
     public long getSumRequestCountsPastNPeriods() {
       return lruCacheStats.getSumRequestCountsPastNPeriods()
-          + bucketCacheStats.getSumRequestCountsPastNPeriods();
+        + bucketCacheStats.getSumRequestCountsPastNPeriods();
     }
 
     @Override
     public long getSumHitCachingCountsPastNPeriods() {
       return lruCacheStats.getSumHitCachingCountsPastNPeriods()
-          + bucketCacheStats.getSumHitCachingCountsPastNPeriods();
+        + bucketCacheStats.getSumHitCachingCountsPastNPeriods();
     }
 
     @Override
     public long getSumRequestCachingCountsPastNPeriods() {
       return lruCacheStats.getSumRequestCachingCountsPastNPeriods()
-          + bucketCacheStats.getSumRequestCachingCountsPastNPeriods();
+        + bucketCacheStats.getSumRequestCachingCountsPastNPeriods();
     }
   }
 
@@ -384,7 +427,20 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
   @Override
   public BlockCache[] getBlockCaches() {
-    return new BlockCache [] {this.l1Cache, this.l2Cache};
+    return new BlockCache[] { this.l1Cache, this.l2Cache };
+  }
+
+  /**
+   * Returns the list of fully cached files
+   */
+  @Override
+  public Optional<Map<String, Pair<String, Long>>> getFullyCachedFiles() {
+    return this.l2Cache.getFullyCachedFiles();
+  }
+
+  @Override
+  public Optional<Map<String, Long>> getRegionCachedInfo() {
+    return l2Cache.getRegionCachedInfo();
   }
 
   @Override
@@ -394,11 +450,90 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
   public int getRpcRefCount(BlockCacheKey cacheKey) {
     return (this.l2Cache instanceof BucketCache)
-        ? ((BucketCache) this.l2Cache).getRpcRefCount(cacheKey)
-        : 0;
+      ? ((BucketCache) this.l2Cache).getRpcRefCount(cacheKey)
+      : 0;
   }
 
   public FirstLevelBlockCache getFirstLevelCache() {
     return l1Cache;
+  }
+
+  public BlockCache getSecondLevelCache() {
+    return l2Cache;
+  }
+
+  @Override
+  public void notifyFileCachingCompleted(Path fileName, int totalBlockCount, int dataBlockCount,
+    long size) {
+    l1Cache.getBlockCount();
+    l1Cache.notifyFileCachingCompleted(fileName, totalBlockCount, dataBlockCount, size);
+    l2Cache.notifyFileCachingCompleted(fileName, totalBlockCount, dataBlockCount, size);
+
+  }
+
+  @Override
+  public void onConfigurationChange(Configuration config) {
+    l1Cache.onConfigurationChange(config);
+    l2Cache.onConfigurationChange(config);
+  }
+
+  @Override
+  public Optional<Boolean> blockFitsIntoTheCache(HFileBlock block) {
+    if (isMetaBlock(block.getBlockType())) {
+      return l1Cache.blockFitsIntoTheCache(block);
+    } else {
+      return l2Cache.blockFitsIntoTheCache(block);
+    }
+  }
+
+  @Override
+  public Optional<Boolean> shouldCacheFile(HFileInfo hFileInfo, Configuration conf) {
+    return combineCacheResults(l1Cache.shouldCacheFile(hFileInfo, conf),
+      l2Cache.shouldCacheFile(hFileInfo, conf));
+  }
+
+  @Override
+  public Optional<Boolean> shouldCacheBlock(BlockCacheKey key, long maxTimeStamp,
+    Configuration conf) {
+    return combineCacheResults(l1Cache.shouldCacheBlock(key, maxTimeStamp, conf),
+      l2Cache.shouldCacheBlock(key, maxTimeStamp, conf));
+  }
+
+  private Optional<Boolean> combineCacheResults(Optional<Boolean> result1,
+    Optional<Boolean> result2) {
+    final Mutable<Boolean> combinedResult = new MutableBoolean(true);
+    result1.ifPresent(b -> combinedResult.setValue(b && combinedResult.getValue()));
+    result2.ifPresent(b -> combinedResult.setValue(b && combinedResult.getValue()));
+    return Optional.of(combinedResult.getValue());
+  }
+
+  @Override
+  public Optional<Boolean> isAlreadyCached(BlockCacheKey key) {
+    boolean result =
+      l1Cache.isAlreadyCached(key).orElseGet(() -> l2Cache.isAlreadyCached(key).orElse(false));
+    return Optional.of(result);
+  }
+
+  @Override
+  public Optional<Integer> getBlockSize(BlockCacheKey key) {
+    Optional<Integer> l1Result = l1Cache.getBlockSize(key);
+    return l1Result.isPresent() ? l1Result : l2Cache.getBlockSize(key);
+  }
+
+  @Override
+  public int evictBlocksRangeByHfileName(String hfileName, long initOffset, long endOffset) {
+    return l1Cache.evictBlocksRangeByHfileName(hfileName, initOffset, endOffset)
+      + l2Cache.evictBlocksRangeByHfileName(hfileName, initOffset, endOffset);
+  }
+
+  @Override
+  public boolean waitForCacheInitialization(long timeout) {
+    return this.l1Cache.waitForCacheInitialization(timeout)
+      && this.l2Cache.waitForCacheInitialization(timeout);
+  }
+
+  @Override
+  public boolean isCacheEnabled() {
+    return l1Cache.isCacheEnabled() && l2Cache.isCacheEnabled();
   }
 }

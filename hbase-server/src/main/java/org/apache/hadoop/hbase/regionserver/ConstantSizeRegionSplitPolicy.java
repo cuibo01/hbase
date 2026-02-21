@@ -22,27 +22,29 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.conf.ConfigKey;
 import org.apache.hadoop.hbase.procedure2.util.StringUtils;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * A {@link RegionSplitPolicy} implementation which splits a region
- * as soon as any of its store files exceeds a maximum configurable
- * size.
+ * A {@link RegionSplitPolicy} implementation which splits a region as soon as any of its store
+ * files exceeds a maximum configurable size.
  * <p>
- * This is the default split policy. From 0.94.0 on the default split policy has
- * changed to {@link IncreasingToUpperBoundRegionSplitPolicy}
+ * This is the default split policy. From 0.94.0 on the default split policy has changed to
+ * {@link IncreasingToUpperBoundRegionSplitPolicy}
  * </p>
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.CONFIG)
 public class ConstantSizeRegionSplitPolicy extends RegionSplitPolicy {
-  private static final Logger LOG =
-    LoggerFactory.getLogger(ConstantSizeRegionSplitPolicy.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ConstantSizeRegionSplitPolicy.class);
   private long desiredMaxFileSize;
   private double jitterRate;
   protected boolean overallHRegionFiles;
+
+  public static final String MAX_FILESIZE_JITTER_KEY =
+    ConfigKey.DOUBLE("hbase.hregion.max.filesize.jitter");
 
   @Override
   public String toString() {
@@ -59,12 +61,12 @@ public class ConstantSizeRegionSplitPolicy extends RegionSplitPolicy {
       this.desiredMaxFileSize = desc.getMaxFileSize();
     }
     if (this.desiredMaxFileSize <= 0) {
-      this.desiredMaxFileSize = conf.getLong(HConstants.HREGION_MAX_FILESIZE,
-        HConstants.DEFAULT_MAX_FILE_SIZE);
+      this.desiredMaxFileSize =
+        conf.getLong(HConstants.HREGION_MAX_FILESIZE, HConstants.DEFAULT_MAX_FILE_SIZE);
     }
-    this.overallHRegionFiles = conf.getBoolean(HConstants.OVERALL_HREGION_FILES,
-      HConstants.DEFAULT_OVERALL_HREGION_FILES);
-    double jitter = conf.getDouble("hbase.hregion.max.filesize.jitter", 0.25D);
+    this.overallHRegionFiles =
+      conf.getBoolean(HConstants.OVERALL_HREGION_FILES, HConstants.DEFAULT_OVERALL_HREGION_FILES);
+    double jitter = conf.getDouble(MAX_FILESIZE_JITTER_KEY, 0.25D);
     this.jitterRate = (ThreadLocalRandom.current().nextFloat() - 0.5D) * jitter;
     long jitterValue = (long) (this.desiredMaxFileSize * this.jitterRate);
     // Default jitter is ~12% +/-. Make sure the long value won't overflow with jitter
@@ -92,9 +94,7 @@ public class ConstantSizeRegionSplitPolicy extends RegionSplitPolicy {
     return this.jitterRate > 0;
   }
 
-  /**
-   * @return true if region size exceed the sizeToCheck
-   */
+  /** Returns true if region size exceed the sizeToCheck */
   protected final boolean isExceedSize(long sizeToCheck) {
     if (overallHRegionFiles) {
       long sumSize = 0;
@@ -102,18 +102,16 @@ public class ConstantSizeRegionSplitPolicy extends RegionSplitPolicy {
         sumSize += store.getSize();
       }
       if (sumSize > sizeToCheck) {
-        LOG.debug("ShouldSplit because region size is big enough "
-            + "sumSize={}, sizeToCheck={}", StringUtils.humanSize(sumSize),
-          StringUtils.humanSize(sizeToCheck));
+        LOG.debug("Should split because region size is big enough " + "sumSize={}, sizeToCheck={}",
+          StringUtils.humanSize(sumSize), StringUtils.humanSize(sizeToCheck));
         return true;
       }
     } else {
       for (HStore store : region.getStores()) {
         long size = store.getSize();
         if (size > sizeToCheck) {
-          LOG.debug("ShouldSplit because {} size={}, sizeToCheck={}{}",
-            store.getColumnFamilyName(), StringUtils.humanSize(size),
-            StringUtils.humanSize(sizeToCheck));
+          LOG.debug("Should split because {} size={}, sizeToCheck={}", store.getColumnFamilyName(),
+            StringUtils.humanSize(size), StringUtils.humanSize(sizeToCheck));
           return true;
         }
       }

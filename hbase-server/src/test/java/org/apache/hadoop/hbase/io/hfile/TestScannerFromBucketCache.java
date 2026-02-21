@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,12 +20,13 @@ package org.apache.hadoop.hbase.io.hfile;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.ByteBufferKeyValue;
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
@@ -60,7 +61,7 @@ public class TestScannerFromBucketCache {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestScannerFromBucketCache.class);
+    HBaseClassTestRule.forClass(TestScannerFromBucketCache.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestScannerFromBucketCache.class);
   @Rule
@@ -115,9 +116,9 @@ public class TestScannerFromBucketCache {
     String method = this.getName();
     this.region = initHRegion(tableName, method, conf, test_util, fam1);
     try {
-      List<Cell> expected = insertData(row1, qf1, qf2, fam1, ts1, ts2, ts3, false);
+      List<ExtendedCell> expected = insertData(row1, qf1, qf2, fam1, ts1, ts2, ts3, false);
 
-      List<Cell> actual = performScan(row1, fam1);
+      List<ExtendedCell> actual = performScan(row1, fam1);
       // Verify result
       for (int i = 0; i < expected.size(); i++) {
         assertFalse(actual.get(i) instanceof ByteBufferKeyValue);
@@ -153,9 +154,9 @@ public class TestScannerFromBucketCache {
     String method = this.getName();
     this.region = initHRegion(tableName, method, conf, test_util, fam1);
     try {
-      List<Cell> expected = insertData(row1, qf1, qf2, fam1, ts1, ts2, ts3, false);
+      List<ExtendedCell> expected = insertData(row1, qf1, qf2, fam1, ts1, ts2, ts3, false);
 
-      List<Cell> actual = performScan(row1, fam1);
+      List<ExtendedCell> actual = performScan(row1, fam1);
       // Verify result
       for (int i = 0; i < expected.size(); i++) {
         assertFalse(actual.get(i) instanceof ByteBufferKeyValue);
@@ -194,9 +195,9 @@ public class TestScannerFromBucketCache {
     String method = this.getName();
     this.region = initHRegion(tableName, method, conf, test_util, fam1);
     try {
-      List<Cell> expected = insertData(row1, qf1, qf2, fam1, ts1, ts2, ts3, true);
+      List<ExtendedCell> expected = insertData(row1, qf1, qf2, fam1, ts1, ts2, ts3, true);
 
-      List<Cell> actual = performScan(row1, fam1);
+      List<ExtendedCell> actual = performScan(row1, fam1);
       // Verify result
       for (int i = 0; i < expected.size(); i++) {
         assertFalse(actual.get(i) instanceof ByteBufferKeyValue);
@@ -228,8 +229,8 @@ public class TestScannerFromBucketCache {
     }
   }
 
-  private List<Cell> insertData(byte[] row1, byte[] qf1, byte[] qf2, byte[] fam1, long ts1,
-      long ts2, long ts3, boolean withVal) throws IOException {
+  private List<ExtendedCell> insertData(byte[] row1, byte[] qf1, byte[] qf2, byte[] fam1, long ts1,
+    long ts2, long ts3, boolean withVal) throws IOException {
     // Putting data in Region
     Put put = null;
     KeyValue kv13 = null;
@@ -275,7 +276,7 @@ public class TestScannerFromBucketCache {
     }
 
     // Expected
-    List<Cell> expected = new ArrayList<>();
+    List<ExtendedCell> expected = new ArrayList<>();
     expected.add(kv13);
     expected.add(kv12);
     expected.add(kv23);
@@ -283,9 +284,9 @@ public class TestScannerFromBucketCache {
     return expected;
   }
 
-  private List<Cell> performScan(byte[] row1, byte[] fam1) throws IOException {
+  private List<ExtendedCell> performScan(byte[] row1, byte[] fam1) throws IOException {
     Scan scan = new Scan().withStartRow(row1).addFamily(fam1).readVersions(MAX_VERSIONS);
-    List<Cell> actual = new ArrayList<>();
+    List<ExtendedCell> actual = new ArrayList<>();
     InternalScanner scanner = region.getScanner(scan);
 
     boolean hasNext = scanner.next(actual);
@@ -294,24 +295,22 @@ public class TestScannerFromBucketCache {
   }
 
   private static HRegion initHRegion(TableName tableName, String callingMethod, Configuration conf,
-      HBaseTestingUtil test_util, byte[]... families) throws IOException {
+    HBaseTestingUtil test_util, byte[]... families) throws IOException {
     return initHRegion(tableName, null, null, callingMethod, conf, test_util, false, families);
   }
 
   private static HRegion initHRegion(TableName tableName, byte[] startKey, byte[] stopKey,
-      String callingMethod, Configuration conf, HBaseTestingUtil testUtil, boolean isReadOnly,
-      byte[]... families) throws IOException {
+    String callingMethod, Configuration conf, HBaseTestingUtil testUtil, boolean isReadOnly,
+    byte[]... families) throws IOException {
     RegionInfo regionInfo =
-        RegionInfoBuilder.newBuilder(tableName).setStartKey(startKey).setEndKey(stopKey).build();
+      RegionInfoBuilder.newBuilder(tableName).setStartKey(startKey).setEndKey(stopKey).build();
     TableDescriptorBuilder builder = TableDescriptorBuilder.newBuilder(tableName);
     builder.setReadOnly(isReadOnly).setDurability(Durability.SYNC_WAL);
     for (byte[] family : families) {
       builder.setColumnFamily(
-          ColumnFamilyDescriptorBuilder.newBuilder(family).setMaxVersions(Integer.MAX_VALUE)
-              .build());
+        ColumnFamilyDescriptorBuilder.newBuilder(family).setMaxVersions(Integer.MAX_VALUE).build());
     }
-    return HBaseTestingUtil
-        .createRegionAndWAL(regionInfo, testUtil.getDataTestDir(callingMethod), conf,
-            builder.build(), BlockCacheFactory.createBlockCache(conf));
+    return HBaseTestingUtil.createRegionAndWAL(regionInfo, testUtil.getDataTestDir(callingMethod),
+      conf, builder.build(), BlockCacheFactory.createBlockCache(conf));
   }
 }

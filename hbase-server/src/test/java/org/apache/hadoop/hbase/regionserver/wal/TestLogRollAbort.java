@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,8 +17,13 @@
  */
 package org.apache.hadoop.hbase.regionserver.wal;
 
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 import org.apache.hadoop.conf.Configuration;
@@ -50,30 +55,38 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALEditInternalHelper;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hbase.wal.WALKeyImpl;
+import org.apache.hadoop.hbase.wal.WALProvider;
 import org.apache.hadoop.hbase.wal.WALSplitter;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.ipc.RemoteException;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameter;
+import org.junit.runners.Parameterized.Parameters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.google.common.base.Throwables;
+
 /**
- * Tests for conditions that should trigger RegionServer aborts when
- * rolling the current WAL fails.
+ * Tests for conditions that should trigger RegionServer aborts when rolling the current WAL fails.
  */
-@Category({RegionServerTests.class, MediumTests.class})
+@RunWith(Parameterized.class)
+@Category({ RegionServerTests.class, MediumTests.class })
 public class TestLogRollAbort {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestLogRollAbort.class);
+    HBaseClassTestRule.forClass(TestLogRollAbort.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(AbstractTestLogRolling.class);
   private static MiniDFSCluster dfsCluster;
@@ -91,8 +104,7 @@ public class TestLogRollAbort {
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     // Tweak default timeout values down for faster recovery
-    TEST_UTIL.getConfiguration().setInt(
-        "hbase.regionserver.logroll.errors.tolerated", 2);
+    TEST_UTIL.getConfiguration().setInt("hbase.regionserver.logroll.errors.tolerated", 2);
     TEST_UTIL.getConfiguration().setInt("hbase.rpc.timeout", 10 * 1000);
 
     // Increase the amount of time between client retries
@@ -105,14 +117,23 @@ public class TestLogRollAbort {
     // the namenode might still try to choose the recently-dead datanode
     // for a pipeline, so try to a new pipeline multiple times
     TEST_UTIL.getConfiguration().setInt("dfs.client.block.write.retries", 10);
-    TEST_UTIL.getConfiguration().set(WALFactory.WAL_PROVIDER, "filesystem");
+    TEST_UTIL.getConfiguration().set(WALFactory.WAL_PROVIDER, "asyncfs");
+  }
+
+  @Parameters(name = "{index}: walProvider={0}")
+  public static List<Object[]> params() {
+    return Arrays.asList(new Object[] { "filesystem" }, new Object[] { "asyncfs" });
   }
 
   private Configuration conf;
   private FileSystem fs;
 
+  @Parameter
+  public String walProvider;
+
   @Before
   public void setUp() throws Exception {
+    TEST_UTIL.getConfiguration().set(WALFactory.WAL_PROVIDER, walProvider);
     TEST_UTIL.startMiniCluster(2);
 
     cluster = TEST_UTIL.getHBaseCluster();
@@ -133,8 +154,8 @@ public class TestLogRollAbort {
   }
 
   /**
-   * Tests that RegionServer aborts if we hit an error closing the WAL when
-   * there are unsynced WAL edits.  See HBASE-4282.
+   * Tests that RegionServer aborts if we hit an error closing the WAL when there are unsynced WAL
+   * edits. See HBASE-4282.
    */
   @Test
   public void testRSAbortWithUnflushedEdits() throws Exception {
@@ -146,7 +167,7 @@ public class TestLogRollAbort {
     // Create the test table and open it
     TableName tableName = TableName.valueOf(this.getClass().getSimpleName());
     TableDescriptor desc = TableDescriptorBuilder.newBuilder(tableName)
-        .setColumnFamily(ColumnFamilyDescriptorBuilder.of(HConstants.CATALOG_FAMILY)).build();
+      .setColumnFamily(ColumnFamilyDescriptorBuilder.of(HConstants.CATALOG_FAMILY)).build();
 
     admin.createTable(desc);
     Table table = TEST_UTIL.getConnection().getTable(tableName);
@@ -170,8 +191,8 @@ public class TestLogRollAbort {
       try {
         log.rollWriter(true);
       } catch (FailedLogCloseException flce) {
-        // Expected exception.  We used to expect that there would be unsynced appends but this
-        // not reliable now that sync plays a roll in wall rolling.  The above puts also now call
+        // Expected exception. We used to expect that there would be unsynced appends but this
+        // not reliable now that sync plays a roll in wall rolling. The above puts also now call
         // sync.
       } catch (Throwable t) {
         LOG.error(HBaseMarkers.FATAL, "FAILED TEST: Got wrong exception", t);
@@ -182,22 +203,22 @@ public class TestLogRollAbort {
   }
 
   /**
-   * Tests the case where a RegionServer enters a GC pause,
-   * comes back online after the master declared it dead and started to split.
-   * Want log rolling after a master split to fail. See HBASE-2312.
+   * Tests the case where a RegionServer enters a GC pause, comes back online after the master
+   * declared it dead and started to split. Want log rolling after a master split to fail. See
+   * HBASE-2312.
    */
   @Test
   public void testLogRollAfterSplitStart() throws IOException {
     LOG.info("Verify wal roll after split starts will fail.");
-    String logName = ServerName.valueOf("testLogRollAfterSplitStart",
-        16010, EnvironmentEdgeManager.currentTime()).toString();
+    String logName =
+      ServerName.valueOf("testLogRollAfterSplitStart", 16010, EnvironmentEdgeManager.currentTime())
+        .toString();
     Path thisTestsDir = new Path(HBASELOGDIR, AbstractFSWALProvider.getWALDirectoryName(logName));
     final WALFactory wals = new WALFactory(conf, logName);
 
     try {
       // put some entries in an WAL
-      TableName tableName =
-          TableName.valueOf(this.getClass().getName());
+      TableName tableName = TableName.valueOf(this.getClass().getName());
       RegionInfo regionInfo = RegionInfoBuilder.newBuilder(tableName).build();
       WAL log = wals.getWAL(regionInfo);
       MultiVersionConcurrencyControl mvcc = new MultiVersionConcurrencyControl(1);
@@ -205,7 +226,8 @@ public class TestLogRollAbort {
       int total = 20;
       for (int i = 0; i < total; i++) {
         WALEdit kvs = new WALEdit();
-        kvs.add(new KeyValue(Bytes.toBytes(i), tableName.getName(), tableName.getName()));
+        WALEditInternalHelper.addExtendedCell(kvs,
+          new KeyValue(Bytes.toBytes(i), tableName.getName(), tableName.getName()));
         NavigableMap<byte[], Integer> scopes = new TreeMap<>(Bytes.BYTES_COMPARATOR);
         scopes.put(Bytes.toBytes("column"), 0);
         log.appendData(regionInfo, new WALKeyImpl(regionInfo.getEncodedNameAsBytes(), tableName,
@@ -213,7 +235,7 @@ public class TestLogRollAbort {
       }
       // Send the data to HDFS datanodes and close the HDFS writer
       log.sync();
-      ((AbstractFSWAL<?>) log).replaceWriter(((FSHLog)log).getOldPath(), null, null);
+      closeWriter((AbstractFSWAL<?>) log);
 
       // code taken from MasterFileSystem.getLogDirs(), which is called from
       // MasterFileSystem.splitLog() handles RS shutdowns (as observed by the splitting process)
@@ -228,21 +250,28 @@ public class TestLogRollAbort {
       WALSplitter.split(HBASELOGDIR, rsSplitDir, OLDLOGDIR, fs, conf, wals);
 
       LOG.debug("Trying to roll the WAL.");
-      try {
-        log.rollWriter();
-        Assert.fail("rollWriter() did not throw any exception.");
-      } catch (IOException ioe) {
-        if (ioe.getCause() instanceof FileNotFoundException) {
-          LOG.info("Got the expected exception: ", ioe.getCause());
-        } else {
-          Assert.fail("Unexpected exception: " + ioe);
-        }
+      IOException error = assertThrows(IOException.class, () -> log.rollWriter());
+      if (error instanceof RemoteException) {
+        error = ((RemoteException) error).unwrapRemoteException();
       }
+      assertTrue("unexpected error: " + Throwables.getStackTraceAsString(error),
+        error instanceof FileNotFoundException
+          || error.getCause() instanceof FileNotFoundException);
     } finally {
       wals.close();
       if (fs.exists(thisTestsDir)) {
         fs.delete(thisTestsDir, true);
       }
     }
+  }
+
+  private <W extends WALProvider.WriterBase> void closeWriter(AbstractFSWAL<W> wal) {
+    wal.waitForSafePoint();
+    long oldFileLen = wal.writer.getLength();
+    wal.closeWriter(wal.writer, wal.getOldPath());
+    wal.logRollAndSetupWalProps(wal.getOldPath(), null, oldFileLen);
+    wal.writer = null;
+    wal.onWriterReplaced(null);
+    wal.rollRequested.set(false);
   }
 }

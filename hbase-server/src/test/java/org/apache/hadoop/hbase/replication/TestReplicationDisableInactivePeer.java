@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,6 +21,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.fail;
 
 import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
@@ -33,23 +34,27 @@ import org.junit.experimental.categories.Category;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Category({ReplicationTests.class, LargeTests.class})
+@Category({ ReplicationTests.class, LargeTests.class })
 public class TestReplicationDisableInactivePeer extends TestReplicationBase {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestReplicationDisableInactivePeer.class);
+    HBaseClassTestRule.forClass(TestReplicationDisableInactivePeer.class);
 
   private static final Logger LOG =
-      LoggerFactory.getLogger(TestReplicationDisableInactivePeer.class);
+    LoggerFactory.getLogger(TestReplicationDisableInactivePeer.class);
+
+  @Override
+  protected String getClusterKey(HBaseTestingUtil util) throws Exception {
+    // in this test we will restart the peer cluster, and the master address will be changed, so we
+    // need to use zk based connection uri
+    return util.getZkConnectionURI();
+  }
 
   /**
-   * Test disabling an inactive peer. Add a peer which is inactive, trying to
-   * insert, disable the peer, then activate the peer and make sure nothing is
-   * replicated. In Addition, enable the peer and check the updates are
-   * replicated.
-   *
-   * @throws Exception
+   * Test disabling an inactive peer. Add a peer which is inactive, trying to insert, disable the
+   * peer, then activate the peer and make sure nothing is replicated. In Addition, enable the peer
+   * and check the updates are replicated.
    */
   @Test
   public void testDisableInactivePeer() throws Exception {

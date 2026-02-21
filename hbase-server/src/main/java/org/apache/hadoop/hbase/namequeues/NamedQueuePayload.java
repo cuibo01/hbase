@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,15 +15,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.namequeues;
 
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * Base payload to be prepared by client to send various namedQueue events for in-memory
- * ring buffer storage in either HMaster or RegionServer.
- * e.g slowLog responses
+ * Base payload to be prepared by client to send various namedQueue events for in-memory ring buffer
+ * storage in either HMaster or RegionServer. e.g slowLog responses
  */
 @InterfaceAudience.Private
 public class NamedQueuePayload {
@@ -32,7 +29,8 @@ public class NamedQueuePayload {
   public enum NamedQueueEvent {
     SLOW_LOG(0),
     BALANCE_DECISION(1),
-    BALANCE_REJECTION(2);
+    BALANCE_REJECTION(2),
+    WAL_EVENT_TRACKER(3);
 
     private final int value;
 
@@ -40,7 +38,7 @@ public class NamedQueuePayload {
       this.value = i;
     }
 
-    public static NamedQueueEvent getEventByOrdinal(int value){
+    public static NamedQueueEvent getEventByOrdinal(int value) {
       switch (value) {
         case 0: {
           return SLOW_LOG;
@@ -50,6 +48,9 @@ public class NamedQueuePayload {
         }
         case 2: {
           return BALANCE_REJECTION;
+        }
+        case 3: {
+          return WAL_EVENT_TRACKER;
         }
         default: {
           throw new IllegalArgumentException(

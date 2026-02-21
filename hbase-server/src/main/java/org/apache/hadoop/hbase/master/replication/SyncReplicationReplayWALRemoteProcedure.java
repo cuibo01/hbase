@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,7 +21,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.procedure.PeerProcedureInterface;
@@ -30,11 +29,13 @@ import org.apache.hadoop.hbase.master.procedure.ServerRemoteProcedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
 import org.apache.hadoop.hbase.procedure2.RemoteProcedureDispatcher.RemoteOperation;
 import org.apache.hadoop.hbase.replication.regionserver.ReplaySyncReplicationWALCallable;
+import org.apache.hadoop.hbase.util.ForeignExceptionUtil;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ErrorHandlingProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.ReplaySyncReplicationWALParameter;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.SyncReplicationReplayWALRemoteStateData;
 
@@ -43,7 +44,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.S
  */
 @InterfaceAudience.Private
 public class SyncReplicationReplayWALRemoteProcedure extends ServerRemoteProcedure
-    implements PeerProcedureInterface {
+  implements PeerProcedureInterface {
 
   private static final Logger LOG =
     LoggerFactory.getLogger(SyncReplicationReplayWALRemoteProcedure.class);
@@ -56,7 +57,7 @@ public class SyncReplicationReplayWALRemoteProcedure extends ServerRemoteProcedu
   }
 
   public SyncReplicationReplayWALRemoteProcedure(String peerId, List<String> wals,
-      ServerName targetServer) {
+    ServerName targetServer) {
     this.peerId = peerId;
     this.wals = wals;
     this.targetServer = targetServer;
@@ -65,22 +66,22 @@ public class SyncReplicationReplayWALRemoteProcedure extends ServerRemoteProcedu
   @Override
   public Optional<RemoteOperation> remoteCallBuild(MasterProcedureEnv env, ServerName remote) {
     ReplaySyncReplicationWALParameter.Builder builder =
-        ReplaySyncReplicationWALParameter.newBuilder();
+      ReplaySyncReplicationWALParameter.newBuilder();
     builder.setPeerId(peerId);
     wals.stream().forEach(builder::addWal);
     return Optional
-        .of(new ServerOperation(this, getProcId(), ReplaySyncReplicationWALCallable.class,
-            builder.build().toByteArray()));
+      .of(new ServerOperation(this, getProcId(), ReplaySyncReplicationWALCallable.class,
+        builder.build().toByteArray(), env.getMasterServices().getMasterActiveTime()));
   }
 
-  protected void complete(MasterProcedureEnv env, Throwable error) {
+  protected boolean complete(MasterProcedureEnv env, Throwable error) {
     if (error != null) {
       LOG.warn("Replay wals {} on {} failed for peer id={}", wals, targetServer, peerId, error);
-      this.succ = false;
+      return false;
     } else {
       truncateWALs(env);
       LOG.info("Replay wals {} on {} succeed for peer id={}", wals, targetServer, peerId);
-      this.succ = true;
+      return true;
     }
   }
 
@@ -127,8 +128,13 @@ public class SyncReplicationReplayWALRemoteProcedure extends ServerRemoteProcedu
   protected void serializeStateData(ProcedureStateSerializer serializer) throws IOException {
     SyncReplicationReplayWALRemoteStateData.Builder builder =
       SyncReplicationReplayWALRemoteStateData.newBuilder().setPeerId(peerId)
-        .setTargetServer(ProtobufUtil.toServerName(targetServer));
+        .setTargetServer(ProtobufUtil.toServerName(targetServer)).setState(state);
     wals.stream().forEach(builder::addWal);
+    if (this.remoteError != null) {
+      ErrorHandlingProtos.ForeignExceptionMessage fem =
+        ForeignExceptionUtil.toProtoForeignException(remoteError);
+      builder.setError(fem);
+    }
     serializer.serialize(builder.build());
   }
 
@@ -140,6 +146,10 @@ public class SyncReplicationReplayWALRemoteProcedure extends ServerRemoteProcedu
     wals = new ArrayList<>();
     data.getWalList().forEach(wals::add);
     targetServer = ProtobufUtil.toServerName(data.getTargetServer());
+    state = data.getState();
+    if (data.hasError()) {
+      this.remoteError = ForeignExceptionUtil.toException(data.getError());
+    }
   }
 
   @Override

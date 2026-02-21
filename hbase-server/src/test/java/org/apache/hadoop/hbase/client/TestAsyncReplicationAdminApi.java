@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,13 +18,15 @@
 package org.apache.hadoop.hbase.client;
 
 import static org.apache.hadoop.hbase.client.AsyncConnectionConfiguration.START_LOG_ERRORS_AFTER_COUNT_KEY;
-import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.CoreMatchers.startsWith;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -40,12 +42,13 @@ import java.util.concurrent.ExecutionException;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.ReplicationPeerNotFoundException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfigBuilder;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
+import org.apache.hadoop.hbase.replication.ReplicationQueueData;
 import org.apache.hadoop.hbase.replication.ReplicationQueueStorage;
 import org.apache.hadoop.hbase.replication.ReplicationStorageFactory;
 import org.apache.hadoop.hbase.replication.VerifyWALEntriesReplicationEndpoint;
@@ -83,8 +86,8 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
     TEST_UTIL.getConfiguration().setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 2);
     TEST_UTIL.getConfiguration().setInt(START_LOG_ERRORS_AFTER_COUNT_KEY, 0);
     TEST_UTIL.startMiniCluster();
-    KEY_ONE = TEST_UTIL.getClusterKey() + "-test1";
-    KEY_TWO = TEST_UTIL.getClusterKey() + "-test2";
+    KEY_ONE = TEST_UTIL.getZkConnectionURI() + "-test1";
+    KEY_TWO = TEST_UTIL.getZkConnectionURI() + "-test2";
     ASYNC_CONN = ConnectionFactory.createAsyncConnection(TEST_UTIL.getConfiguration()).get();
   }
 
@@ -99,12 +102,11 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
     } catch (Exception e) {
     }
     ReplicationQueueStorage queueStorage = ReplicationStorageFactory
-      .getReplicationQueueStorage(TEST_UTIL.getZooKeeperWatcher(), TEST_UTIL.getConfiguration());
-    for (ServerName serverName : queueStorage.getListOfReplicators()) {
-      for (String queue : queueStorage.getAllQueues(serverName)) {
-        queueStorage.removeQueue(serverName, queue);
-      }
+      .getReplicationQueueStorage(TEST_UTIL.getConnection(), TEST_UTIL.getConfiguration());
+    for (ReplicationQueueData queueData : queueStorage.listAllQueues()) {
+      queueStorage.removeQueue(queueData.getId());
     }
+    admin.replicationPeerModificationSwitch(true).join();
   }
 
   @Test
@@ -141,11 +143,8 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
 
   @Test
   public void testPeerConfig() throws Exception {
-    ReplicationPeerConfig config = ReplicationPeerConfig.newBuilder()
-      .setClusterKey(KEY_ONE)
-      .putConfiguration("key1", "value1")
-      .putConfiguration("key2", "value2")
-      .build();
+    ReplicationPeerConfig config = ReplicationPeerConfig.newBuilder().setClusterKey(KEY_ONE)
+      .putConfiguration("key1", "value1").putConfiguration("key2", "value2").build();
     admin.addReplicationPeer(ID_ONE, config).join();
 
     List<ReplicationPeerDescription> peers = admin.listReplicationPeers().get();
@@ -309,8 +308,8 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
       tableCFs.clear();
       tableCFs.put(tableName3, null);
       admin.removeReplicationPeerTableCFs(ID_ONE, tableCFs).join();
-      fail("Test case should fail as removing table-cfs from a peer whose" +
-        " table-cfs didn't contain t3");
+      fail("Test case should fail as removing table-cfs from a peer whose"
+        + " table-cfs didn't contain t3");
     } catch (CompletionException e) {
       assertTrue(e.getCause() instanceof ReplicationException);
     }
@@ -448,7 +447,8 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
     ReplicationPeerConfigBuilder rpcBuilder =
       ReplicationPeerConfig.newBuilder().setClusterKey(KEY_ONE);
 
-    admin.addReplicationPeer(ID_ONE, rpcBuilder.build()).join();;
+    admin.addReplicationPeer(ID_ONE, rpcBuilder.build()).join();
+    ;
     assertEquals(0, admin.getReplicationPeerConfig(ID_ONE).get().getBandwidth());
 
     rpcBuilder.setBandwidth(2097152);
@@ -508,5 +508,34 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
     } catch (ExecutionException e) {
       assertThat(e.getCause(), instanceOf(DoNotRetryIOException.class));
     }
+  }
+
+  /**
+   * Tests that admin api throws ReplicationPeerNotFoundException if peer doesn't exist.
+   */
+  @Test
+  public void testReplicationPeerNotFoundException() throws InterruptedException {
+    String dummyPeer = "dummy_peer";
+    try {
+      admin.removeReplicationPeer(dummyPeer).get();
+      fail();
+    } catch (ExecutionException e) {
+      assertThat(e.getCause(), instanceOf(ReplicationPeerNotFoundException.class));
+    }
+  }
+
+  @Test
+  public void testReplicationPeerModificationSwitch() throws Exception {
+    assertTrue(admin.isReplicationPeerModificationEnabled().get());
+    // disable modification, should returns true as it is enabled by default and the above
+    // assertion has confirmed it
+    assertTrue(admin.replicationPeerModificationSwitch(false).get());
+    ExecutionException error = assertThrows(ExecutionException.class, () -> admin
+      .addReplicationPeer(ID_ONE, ReplicationPeerConfig.newBuilder().setClusterKey(KEY_ONE).build())
+      .get());
+    assertThat(error.getCause().getMessage(),
+      containsString("Replication peer modification disabled"));
+    // enable again, and the previous value should be false
+    assertFalse(admin.replicationPeerModificationSwitch(true).get());
   }
 }

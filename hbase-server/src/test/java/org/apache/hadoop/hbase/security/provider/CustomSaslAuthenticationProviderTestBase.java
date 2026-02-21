@@ -75,7 +75,6 @@ import org.apache.hadoop.hbase.ipc.RpcServerFactory;
 import org.apache.hadoop.hbase.security.AccessDeniedException;
 import org.apache.hadoop.hbase.security.HBaseKerberosUtils;
 import org.apache.hadoop.hbase.security.SaslUtil;
-import org.apache.hadoop.hbase.security.SecurityInfo;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.security.token.SecureTestCluster;
 import org.apache.hadoop.hbase.security.token.TokenProvider;
@@ -202,7 +201,7 @@ public abstract class CustomSaslAuthenticationProviderTestBase {
 
     @Override
     public SaslClient createClient(Configuration conf, InetAddress serverAddr,
-      SecurityInfo securityInfo, Token<? extends TokenIdentifier> token, boolean fallbackAllowed,
+      String serverPrincipal, Token<? extends TokenIdentifier> token, boolean fallbackAllowed,
       Map<String, String> saslProps) throws IOException {
       return Sasl.createSaslClient(new String[] { MECHANISM }, null, null,
         SaslUtil.SASL_DEFAULT_REALM, saslProps, new InMemoryClientProviderCallbackHandler(token));
@@ -554,8 +553,8 @@ public abstract class CustomSaslAuthenticationProviderTestBase {
           assertTrue(re.getMessage(), re.getMessage().contains("SaslException"));
         } catch (Exception e) {
           // Any other exception is unexpected.
-          fail("Unexpected exception caught, was expecting a authentication error: " +
-            Throwables.getStackTraceAsString(e));
+          fail("Unexpected exception caught, was expecting a authentication error: "
+            + Throwables.getStackTraceAsString(e));
         }
         return null;
       }

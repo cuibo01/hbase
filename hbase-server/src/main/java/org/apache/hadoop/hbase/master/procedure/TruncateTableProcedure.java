@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.master.procedure;
 
 import java.io.IOException;
@@ -43,14 +42,14 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.TruncateTableState;
 
 @InterfaceAudience.Private
-public class TruncateTableProcedure
-    extends AbstractStateMachineTableProcedure<TruncateTableState> {
+public class TruncateTableProcedure extends AbstractStateMachineTableProcedure<TruncateTableState> {
   private static final Logger LOG = LoggerFactory.getLogger(TruncateTableProcedure.class);
 
   private boolean preserveSplits;
   private List<RegionInfo> regions;
   private TableDescriptor tableDescriptor;
   private TableName tableName;
+  private String recoverySnapshotName;
 
   public TruncateTableProcedure() {
     // Required by the Procedure framework to create the procedure on replay
@@ -58,14 +57,12 @@ public class TruncateTableProcedure
   }
 
   public TruncateTableProcedure(final MasterProcedureEnv env, final TableName tableName,
-      boolean preserveSplits)
-  throws HBaseIOException {
+    boolean preserveSplits) throws HBaseIOException {
     this(env, tableName, preserveSplits, null);
   }
 
   public TruncateTableProcedure(final MasterProcedureEnv env, final TableName tableName,
-      boolean preserveSplits, ProcedurePrepareLatch latch)
-  throws HBaseIOException {
+    boolean preserveSplits, ProcedurePrepareLatch latch) throws HBaseIOException {
     super(env, latch);
     this.tableName = tableName;
     preflightChecks(env, false);
@@ -74,7 +71,7 @@ public class TruncateTableProcedure
 
   @Override
   protected Flow executeFromState(final MasterProcedureEnv env, TruncateTableState state)
-      throws InterruptedException {
+    throws InterruptedException {
     if (LOG.isTraceEnabled()) {
       LOG.trace(this + " execute state=" + state);
     }
@@ -97,10 +94,27 @@ public class TruncateTableProcedure
           // Call coprocessors
           preTruncate(env);
 
-          //We need to cache table descriptor in the initial stage, so that it's saved within
-          //the procedure stage and can get recovered if the procedure crashes between
-          //TRUNCATE_TABLE_REMOVE_FROM_META and TRUNCATE_TABLE_CREATE_FS_LAYOUT
+          // We need to cache table descriptor in the initial stage, so that it's saved within
+          // the procedure stage and can get recovered if the procedure crashes between
+          // TRUNCATE_TABLE_REMOVE_FROM_META and TRUNCATE_TABLE_CREATE_FS_LAYOUT
           tableDescriptor = env.getMasterServices().getTableDescriptors().get(tableName);
+
+          // Check if we should create a recovery snapshot
+          if (RecoverySnapshotUtils.isRecoveryEnabled(env)) {
+            setNextState(TruncateTableState.TRUNCATE_TABLE_SNAPSHOT);
+          } else {
+            setNextState(TruncateTableState.TRUNCATE_TABLE_CLEAR_FS_LAYOUT);
+          }
+          break;
+        case TRUNCATE_TABLE_SNAPSHOT:
+          // Create recovery snapshot procedure as child procedure
+          recoverySnapshotName = RecoverySnapshotUtils.generateSnapshotName(tableName);
+          SnapshotProcedure snapshotProcedure = RecoverySnapshotUtils.createSnapshotProcedure(env,
+            tableName, recoverySnapshotName, tableDescriptor);
+          // Submit snapshot procedure as child procedure
+          addChildProcedure(snapshotProcedure);
+          LOG.debug("Creating recovery snapshot {} for table {} before truncation",
+            recoverySnapshotName, tableName);
           setNextState(TruncateTableState.TRUNCATE_TABLE_CLEAR_FS_LAYOUT);
           break;
         case TRUNCATE_TABLE_CLEAR_FS_LAYOUT:
@@ -120,8 +134,8 @@ public class TruncateTableProcedure
           setNextState(TruncateTableState.TRUNCATE_TABLE_REMOVE_FROM_META);
           break;
         case TRUNCATE_TABLE_REMOVE_FROM_META:
-          List<RegionInfo> originalRegions = env.getAssignmentManager()
-            .getRegionStates().getRegionsOfTable(getTableName());
+          List<RegionInfo> originalRegions =
+            env.getAssignmentManager().getRegionStates().getRegionsOfTable(getTableName());
           DeleteTableProcedure.deleteFromMeta(env, getTableName(), originalRegions);
           DeleteTableProcedure.deleteAssignmentState(env, getTableName());
           setNextState(TruncateTableState.TRUNCATE_TABLE_CREATE_FS_LAYOUT);
@@ -155,8 +169,8 @@ public class TruncateTableProcedure
       if (isRollbackSupported(state)) {
         setFailure("master-truncate-table", e);
       } else {
-        LOG.warn("Retriable error trying to truncate table=" + getTableName()
-          + " state=" + state, e);
+        LOG.warn("Retriable error trying to truncate table=" + getTableName() + " state=" + state,
+          e);
       }
     }
     return Flow.HAS_MORE_STATE;
@@ -164,15 +178,26 @@ public class TruncateTableProcedure
 
   @Override
   protected void rollbackState(final MasterProcedureEnv env, final TruncateTableState state) {
-    if (state == TruncateTableState.TRUNCATE_TABLE_PRE_OPERATION) {
-      // nothing to rollback, pre-truncate is just table-state checks.
-      // We can fail if the table does not exist or is not disabled.
-      // TODO: coprocessor rollback semantic is still undefined.
-      return;
+    switch (state) {
+      case TRUNCATE_TABLE_PRE_OPERATION:
+        // nothing to rollback, pre-truncate is just table-state checks.
+        // We can fail if the table does not exist or is not disabled.
+        // TODO: coprocessor rollback semantic is still undefined.
+        break;
+      case TRUNCATE_TABLE_SNAPSHOT:
+        // Handle recovery snapshot rollback. There is no DeleteSnapshotProcedure as such to use
+        // here directly as a child procedure, so we call a utility method to delete the snapshot
+        // which uses the SnapshotManager to delete the snapshot.
+        if (recoverySnapshotName != null) {
+          RecoverySnapshotUtils.deleteRecoverySnapshot(env, recoverySnapshotName, tableName);
+          recoverySnapshotName = null;
+        }
+        break;
+      default:
+        // Truncate from other states doesn't have a rollback. The execution will succeed, at some
+        // point.
+        throw new UnsupportedOperationException("unhandled state=" + state);
     }
-
-    // The truncate doesn't have a rollback. The execution will succeed, at some point.
-    throw new UnsupportedOperationException("unhandled state=" + state);
   }
 
   @Override
@@ -184,6 +209,7 @@ public class TruncateTableProcedure
   protected boolean isRollbackSupported(final TruncateTableState state) {
     switch (state) {
       case TRUNCATE_TABLE_PRE_OPERATION:
+      case TRUNCATE_TABLE_SNAPSHOT:
         return true;
       default:
         return false;
@@ -231,8 +257,7 @@ public class TruncateTableProcedure
   }
 
   @Override
-  protected void serializeStateData(ProcedureStateSerializer serializer)
-      throws IOException {
+  protected void serializeStateData(ProcedureStateSerializer serializer) throws IOException {
     super.serializeStateData(serializer);
 
     MasterProcedureProtos.TruncateTableStateData.Builder state =
@@ -245,20 +270,22 @@ public class TruncateTableProcedure
       state.setTableName(ProtobufUtil.toProtoTableName(tableName));
     }
     if (regions != null) {
-      for (RegionInfo hri: regions) {
+      for (RegionInfo hri : regions) {
         state.addRegionInfo(ProtobufUtil.toRegionInfo(hri));
       }
+    }
+    if (recoverySnapshotName != null) {
+      state.setSnapshotName(recoverySnapshotName);
     }
     serializer.serialize(state.build());
   }
 
   @Override
-  protected void deserializeStateData(ProcedureStateSerializer serializer)
-      throws IOException {
+  protected void deserializeStateData(ProcedureStateSerializer serializer) throws IOException {
     super.deserializeStateData(serializer);
 
     MasterProcedureProtos.TruncateTableStateData state =
-        serializer.deserialize(MasterProcedureProtos.TruncateTableStateData.class);
+      serializer.deserialize(MasterProcedureProtos.TruncateTableStateData.class);
     setUser(MasterProcedureUtil.toUserInfo(state.getUserInfo()));
     if (state.hasTableSchema()) {
       tableDescriptor = ProtobufUtil.toTableDescriptor(state.getTableSchema());
@@ -271,19 +298,20 @@ public class TruncateTableProcedure
       regions = null;
     } else {
       regions = new ArrayList<>(state.getRegionInfoCount());
-      for (HBaseProtos.RegionInfo hri: state.getRegionInfoList()) {
+      for (HBaseProtos.RegionInfo hri : state.getRegionInfoList()) {
         regions.add(ProtobufUtil.toRegionInfo(hri));
       }
+    }
+    if (state.hasSnapshotName()) {
+      recoverySnapshotName = state.getSnapshotName();
     }
   }
 
   private static List<RegionInfo> recreateRegionInfo(final List<RegionInfo> regions) {
     ArrayList<RegionInfo> newRegions = new ArrayList<>(regions.size());
-    for (RegionInfo hri: regions) {
-      newRegions.add(RegionInfoBuilder.newBuilder(hri.getTable())
-          .setStartKey(hri.getStartKey())
-          .setEndKey(hri.getEndKey())
-          .build());
+    for (RegionInfo hri : regions) {
+      newRegions.add(RegionInfoBuilder.newBuilder(hri.getTable()).setStartKey(hri.getStartKey())
+        .setEndKey(hri.getEndKey()).build());
     }
     return newRegions;
   }
@@ -291,7 +319,7 @@ public class TruncateTableProcedure
   private boolean prepareTruncate(final MasterProcedureEnv env) throws IOException {
     try {
       env.getMasterServices().checkTableModifiable(getTableName());
-    } catch (TableNotFoundException|TableNotDisabledException e) {
+    } catch (TableNotFoundException | TableNotDisabledException e) {
       setFailure("master-truncate-table", e);
       return false;
     }
@@ -299,7 +327,7 @@ public class TruncateTableProcedure
   }
 
   private boolean preTruncate(final MasterProcedureEnv env)
-      throws IOException, InterruptedException {
+    throws IOException, InterruptedException {
     final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
     if (cpHost != null) {
       final TableName tableName = getTableName();
@@ -308,8 +336,7 @@ public class TruncateTableProcedure
     return true;
   }
 
-  private void postTruncate(final MasterProcedureEnv env)
-      throws IOException, InterruptedException {
+  private void postTruncate(final MasterProcedureEnv env) throws IOException, InterruptedException {
     final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
     if (cpHost != null) {
       final TableName tableName = getTableName();

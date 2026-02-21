@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,6 +22,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.TableName;
@@ -42,7 +43,7 @@ public class TestMemStoreFlusher {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMemStoreFlusher.class);
+    HBaseClassTestRule.forClass(TestMemStoreFlusher.class);
 
   @Rule
   public TestName name = new TestName();
@@ -58,9 +59,8 @@ public class TestMemStoreFlusher {
 
   @Test
   public void testReplaceDelayedFlushEntry() {
-    RegionInfo hri =
-      RegionInfoBuilder.newBuilder(TableName.valueOf(name.getMethodName())).setRegionId(1)
-        .setReplicaId(0).build();
+    RegionInfo hri = RegionInfoBuilder.newBuilder(TableName.valueOf(name.getMethodName()))
+      .setRegionId(1).setReplicaId(0).build();
     HRegion r = mock(HRegion.class);
     doReturn(hri).when(r).getRegionInfo();
 
@@ -77,9 +77,8 @@ public class TestMemStoreFlusher {
 
   @Test
   public void testNotReplaceDelayedFlushEntryWhichExpired() {
-    RegionInfo hri =
-      RegionInfoBuilder.newBuilder(TableName.valueOf(name.getMethodName())).setRegionId(1)
-        .setReplicaId(0).build();
+    RegionInfo hri = RegionInfoBuilder.newBuilder(TableName.valueOf(name.getMethodName()))
+      .setRegionId(1).setReplicaId(0).build();
     HRegion r = mock(HRegion.class);
     doReturn(hri).when(r).getRegionInfo();
 
@@ -94,5 +93,27 @@ public class TestMemStoreFlusher {
     assertFalse(msf.requestFlush(r, FlushLifeCycleTracker.DUMMY));
     assertEquals(1, msf.getFlushQueueSize());
     assertTrue(msf.regionsInQueue.get(r).isDelay());
+  }
+
+  @Test
+  public void testChangeFlusherCount() {
+    Configuration conf = new Configuration();
+    conf.set("hbase.hstore.flusher.count", "0");
+    HRegionServer rs = mock(HRegionServer.class);
+    doReturn(false).when(rs).isStopped();
+    doReturn(new RegionServerAccounting(conf)).when(rs).getRegionServerAccounting();
+
+    msf = new MemStoreFlusher(conf, rs);
+    msf.start(Threads.LOGGING_EXCEPTION_HANDLER);
+
+    Configuration newConf = new Configuration();
+
+    newConf.set("hbase.hstore.flusher.count", "3");
+    msf.onConfigurationChange(newConf);
+    assertEquals(3, msf.getFlusherCount());
+
+    newConf.set("hbase.hstore.flusher.count", "0");
+    msf.onConfigurationChange(newConf);
+    assertEquals(1, msf.getFlusherCount());
   }
 }

@@ -130,7 +130,9 @@ if [[ "$1" == "tag" ]]; then
   # So, here we prepend the project name to the version, but only for the hbase sub-projects.
   jira_fix_version="${RELEASE_VERSION}"
   shopt -s nocasematch
-  if [[ "${PROJECT}" =~ ^hbase- ]]; then
+  if [[ "${PROJECT}" == "hbase-thirdparty" ]]; then
+    jira_fix_version="thirdparty-${RELEASE_VERSION}"
+  elif [[ "${PROJECT}" =~ ^hbase- ]]; then
     jira_fix_version="${PROJECT}-${RELEASE_VERSION}"
   fi
   shopt -u nocasematch
@@ -144,16 +146,31 @@ if [[ "$1" == "tag" ]]; then
 
   # Create release version
   maven_set_version "$RELEASE_VERSION"
-  find . -name pom.xml -exec git add {} \;
-  git add RELEASENOTES.md CHANGES.md
+  maven_spotless_apply
+  git_add_poms
+  # Always put CHANGES.md and RELEASENOTES.md to parent directory, so later we do not need to
+  # check their position when generating release data. We can not put them under the source code
+  # directory because for 3.x+, CHANGES.md and RELEASENOTES.md are not tracked so later when
+  # generating src release tarball, we will reset the git repo
+  if is_tracked "CHANGES.md"; then
+    git add RELEASENOTES.md CHANGES.md
+    git commit -s -m "Preparing ${PROJECT} release $RELEASE_TAG; tagging and updates to CHANGES.md and RELEASENOTES.md"
+    cp CHANGES.md ../
+    cp RELEASENOTES.md ../
+  else
+    # CHANGES.md is not tracked, should 3.x+
+    git commit -s -m "Preparing ${PROJECT} release $RELEASE_TAG"
+    mv CHANGES.md ../
+    mv RELEASENOTES.md ../
+  fi
 
-  git commit -s -m "Preparing ${PROJECT} release $RELEASE_TAG; tagging and updates to CHANGES.md and RELEASENOTES.md"
   log "Creating tag $RELEASE_TAG at the head of $GIT_BRANCH"
   git tag -s -m "Via create-release" "$RELEASE_TAG"
 
   # Create next version
   maven_set_version "$NEXT_VERSION"
-  find . -name pom.xml -exec git add {} \;
+  maven_spotless_apply
+  git_add_poms
   git commit -s -m "Preparing development version $NEXT_VERSION"
 
   if ! is_dry_run; then
@@ -198,6 +215,14 @@ log "Checked out ${PROJECT} at ${GIT_REF} commit $git_hash"
 if [ -z "${RELEASE_VERSION}" ]; then
   RELEASE_VERSION="$(maven_get_version)"
 fi
+init_java17
+
+# We need to do following as hbase-thirdparty requires toolchains setup
+if [[ "${PROJECT}" == "hbase-thirdparty" ]]; then
+  log "Setting up toolchains and JDK for hbase-thirdparty"
+  set_java17_as_default_java
+  init_toolchains
+fi
 
 # This is a band-aid fix to avoid the failure of Maven nightly snapshot in some Jenkins
 # machines by explicitly calling /usr/sbin/lsof. Please see SPARK-22377 and the discussion
@@ -237,8 +262,9 @@ if [[ "$1" == "publish-dist" ]]; then
 
   log "Copying release tarballs"
   cp "${PROJECT}"-*.tar.* "$svn_target/${DEST_DIR_NAME}/"
-  cp "${PROJECT}/CHANGES.md" "$svn_target/${DEST_DIR_NAME}/"
-  cp "${PROJECT}/RELEASENOTES.md" "$svn_target/${DEST_DIR_NAME}/"
+  cp "CHANGES.md" "$svn_target/${DEST_DIR_NAME}/"
+  cp "RELEASENOTES.md" "$svn_target/${DEST_DIR_NAME}/"
+
   shopt -s nocasematch
   # Generate api report only if project is hbase for now.
   if [ "${PROJECT}" == "hbase" ]; then
@@ -288,15 +314,31 @@ if [[ "$1" == "publish-release" ]]; then
   mvn_log="${BASE_DIR}/mvn_deploy_release.log"
   log "Staging release in nexus"
   maven_deploy release "$mvn_log"
-  declare staged_repo_id="dryrun-no-repo"
+  declare staged_repo_id
+  declare hadoop3_staged_repo_id
   if ! is_dry_run; then
-    staged_repo_id=$(grep -o "Closing staging repository with ID .*" "$mvn_log" \
+    mapfile -t staged_repo_ids < <(grep -o "Closing staging repository with ID .*" "$mvn_log" \
         | sed -e 's/Closing staging repository with ID "\([^"]*\)"./\1/')
-    log "Release artifacts successfully published to repo ${staged_repo_id}"
+    log "Release artifacts successfully published to repo: " "${staged_repo_ids[@]}"
+    repo_count="${#staged_repo_ids[@]}"
+    if [[ "${repo_count}" == "2" ]]; then
+      staged_repo_id=${staged_repo_ids[0]}
+      hadoop3_staged_repo_id=${staged_repo_ids[1]}
+    elif [[ "${repo_count}" == "1" ]]; then
+      staged_repo_id=${staged_repo_ids[0]}
+      hadoop3_staged_repo_id="not-applicable"
+    else
+      staged_repo_id="not-applicable"
+      hadoop3_staged_repo_id="not-applicable"
+    fi
     rm "$mvn_log"
   else
     log "Dry run: Release artifacts successfully built, but not published due to dry run."
+    staged_repo_id="dryrun-no-repo"
+    hadoop3_staged_repo_id="dryrun-no-repo"
   fi
+  export staged_repo_id
+  export hadoop3_staged_repo_id
   # Dump out email to send. Where we find vote.tmpl depends
   # on where this script is run from
   PROJECT_TEXT="${PROJECT//-/ }" #substitute like 's/-/ /g'

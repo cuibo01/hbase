@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -47,6 +47,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
+import org.apache.hadoop.hbase.wal.NoEOFWALStreamReader;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
@@ -73,7 +74,7 @@ public class TestDurability {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestDurability.class);
+    HBaseClassTestRule.forClass(TestDurability.class);
 
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static FileSystem FS;
@@ -125,8 +126,7 @@ public class TestDurability {
   @Test
   public void testDurability() throws Exception {
     WALFactory wals = new WALFactory(CONF,
-      ServerName.valueOf("TestDurability", 16010, EnvironmentEdgeManager.currentTime())
-        .toString());
+      ServerName.valueOf("TestDurability", 16010, EnvironmentEdgeManager.currentTime()).toString());
     HRegion region = createHRegion(wals, Durability.USE_DEFAULT);
     WAL wal = region.getWAL();
     HRegion deferredRegion = createHRegion(region.getTableDescriptor(), region.getRegionInfo(),
@@ -190,8 +190,7 @@ public class TestDurability {
 
     // Setting up region
     WALFactory wals = new WALFactory(CONF,
-      ServerName.valueOf("TestIncrement", 16010, EnvironmentEdgeManager.currentTime())
-        .toString());
+      ServerName.valueOf("TestIncrement", 16010, EnvironmentEdgeManager.currentTime()).toString());
     HRegion region = createHRegion(wals, Durability.USE_DEFAULT);
     WAL wal = region.getWAL();
 
@@ -255,10 +254,9 @@ public class TestDurability {
     byte[] col1 = Bytes.toBytes("col1");
 
     // Setting up region
-    WALFactory wals = new WALFactory(CONF,
-      ServerName.valueOf("testIncrementWithReturnResultsSetToFalse",
-        16010, EnvironmentEdgeManager.currentTime())
-          .toString());
+    WALFactory wals =
+      new WALFactory(CONF, ServerName.valueOf("testIncrementWithReturnResultsSetToFalse", 16010,
+        EnvironmentEdgeManager.currentTime()).toString());
     HRegion region = createHRegion(wals, Durability.USE_DEFAULT);
 
     Increment inc1 = new Increment(row1);
@@ -279,21 +277,14 @@ public class TestDurability {
 
   private void verifyWALCount(WALFactory wals, WAL log, int expected) throws Exception {
     Path walPath = AbstractFSWALProvider.getCurrentFileName(log);
-    WAL.Reader reader = wals.createReader(FS, walPath);
-    int count = 0;
-    WAL.Entry entry = new WAL.Entry();
-    while (reader.next(entry) != null) {
-      count++;
-    }
-    reader.close();
-    assertEquals(expected, count);
+    assertEquals(expected, NoEOFWALStreamReader.count(wals, FS, walPath));
   }
 
   // lifted from TestAtomicOperation
   private HRegion createHRegion(WALFactory wals, Durability durability) throws IOException {
     TableName tableName = TableName.valueOf(name.getMethodName().replaceAll("[^A-Za-z0-9-_]", "_"));
     TableDescriptor htd = TableDescriptorBuilder.newBuilder(tableName)
-        .setColumnFamily(ColumnFamilyDescriptorBuilder.of(FAMILY)).build();
+      .setColumnFamily(ColumnFamilyDescriptorBuilder.of(FAMILY)).build();
     RegionInfo info = RegionInfoBuilder.newBuilder(tableName).build();
     Path path = new Path(DIR, tableName.getNameAsString());
     if (FS.exists(path)) {
@@ -301,21 +292,21 @@ public class TestDurability {
         throw new IOException("Failed delete of " + path);
       }
     }
-    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0,
-      0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
+    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null,
+      MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
     return HRegion.createHRegion(info, path, CONF, htd, wals.getWAL(info));
   }
 
   private HRegion createHRegion(TableDescriptor td, RegionInfo info, String dir, WAL wal,
-      Durability durability) throws IOException {
+    Durability durability) throws IOException {
     Path path = new Path(DIR, dir);
     if (FS.exists(path)) {
       if (!FS.delete(path, true)) {
         throw new IOException("Failed delete of " + path);
       }
     }
-    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0,
-      0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
+    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null,
+      MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
     return HRegion.createHRegion(info, path, CONF, td, wal);
   }
 }

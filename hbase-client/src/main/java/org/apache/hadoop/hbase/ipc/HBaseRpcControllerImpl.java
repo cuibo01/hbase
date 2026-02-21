@@ -17,19 +17,20 @@
  */
 package org.apache.hadoop.hbase.ipc;
 
-import org.apache.hadoop.hbase.client.RegionInfo;
-import org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback;
-
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-
-import org.apache.hadoop.hbase.CellScannable;
-import org.apache.hadoop.hbase.CellScanner;
-import org.apache.hadoop.hbase.CellUtil;
+import java.util.Map;
+import org.apache.hadoop.hbase.ExtendedCellScannable;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.yetus.audience.InterfaceAudience;
+
+import org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback;
 
 /**
  * Get instances via {@link RpcControllerFactory} on client-side.
@@ -50,6 +51,8 @@ public class HBaseRpcControllerImpl implements HBaseRpcController {
 
   private IOException exception;
 
+  private TableName tableName;
+
   /**
    * Rpc target Region's RegionInfo we are going against. May be null.
    * @see #hasRegionInfo()
@@ -69,26 +72,29 @@ public class HBaseRpcControllerImpl implements HBaseRpcController {
    * sometimes the scanner is backed by a List of Cells and other times, it is backed by an encoded
    * block that implements CellScanner.
    */
-  private CellScanner cellScanner;
+  private ExtendedCellScanner cellScanner;
+
+  private Map<String, byte[]> requestAttributes = Collections.emptyMap();
 
   public HBaseRpcControllerImpl() {
-    this(null, (CellScanner) null);
+    this(null, (ExtendedCellScanner) null);
   }
 
   /**
    * Used server-side. Clients should go via {@link RpcControllerFactory}
    */
-  public HBaseRpcControllerImpl(final CellScanner cellScanner) {
+  public HBaseRpcControllerImpl(final ExtendedCellScanner cellScanner) {
     this(null, cellScanner);
   }
 
-  HBaseRpcControllerImpl(RegionInfo regionInfo, final CellScanner cellScanner) {
+  HBaseRpcControllerImpl(RegionInfo regionInfo, final ExtendedCellScanner cellScanner) {
     this.cellScanner = cellScanner;
     this.regionInfo = regionInfo;
   }
 
-  HBaseRpcControllerImpl(RegionInfo regionInfo, final List<CellScannable> cellIterables) {
-    this.cellScanner = cellIterables == null ? null : CellUtil.createCellScanner(cellIterables);
+  HBaseRpcControllerImpl(RegionInfo regionInfo, final List<ExtendedCellScannable> cellIterables) {
+    this.cellScanner =
+      cellIterables == null ? null : PrivateCellUtil.createExtendedCellScanner(cellIterables);
     this.regionInfo = null;
   }
 
@@ -102,18 +108,16 @@ public class HBaseRpcControllerImpl implements HBaseRpcController {
     return this.regionInfo;
   }
 
-  /**
-   * @return One-shot cell scanner (you cannot back it up and restart)
-   */
+  /** Returns One-shot cell scanner (you cannot back it up and restart) */
   @Override
-  public CellScanner cellScanner() {
+  public ExtendedCellScanner cellScanner() {
     return cellScanner;
   }
 
   @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "IS2_INCONSISTENT_SYNC",
       justification = "The only possible race method is startCancel")
   @Override
-  public void setCellScanner(final CellScanner cellScanner) {
+  public void setCellScanner(final ExtendedCellScanner cellScanner) {
     this.cellScanner = cellScanner;
   }
 
@@ -143,6 +147,7 @@ public class HBaseRpcControllerImpl implements HBaseRpcController {
     exception = null;
     callTimeout = null;
     regionInfo = null;
+    tableName = null;
     // In the implementations of some callable with replicas, rpc calls are executed in a executor
     // and we could cancel the operation from outside which means there could be a race between
     // reset and startCancel. Although I think the race should be handled by the callable since the
@@ -156,7 +161,7 @@ public class HBaseRpcControllerImpl implements HBaseRpcController {
 
   @Override
   public int getCallTimeout() {
-    return callTimeout != null? callTimeout: 0;
+    return callTimeout != null ? callTimeout : 0;
   }
 
   @Override
@@ -167,6 +172,16 @@ public class HBaseRpcControllerImpl implements HBaseRpcController {
   @Override
   public boolean hasCallTimeout() {
     return callTimeout != null;
+  }
+
+  @Override
+  public Map<String, byte[]> getRequestAttributes() {
+    return requestAttributes;
+  }
+
+  @Override
+  public void setRequestAttributes(Map<String, byte[]> requestAttributes) {
+    this.requestAttributes = requestAttributes;
   }
 
   @Override
@@ -226,7 +241,7 @@ public class HBaseRpcControllerImpl implements HBaseRpcController {
   }
 
   @Override
-  public synchronized void setDone(CellScanner cellScanner) {
+  public synchronized void setDone(ExtendedCellScanner cellScanner) {
     if (done) {
       return;
     }
@@ -254,12 +269,22 @@ public class HBaseRpcControllerImpl implements HBaseRpcController {
 
   @Override
   public synchronized void notifyOnCancel(RpcCallback<Object> callback, CancellationCallback action)
-      throws IOException {
+    throws IOException {
     if (cancelled) {
       action.run(true);
     } else {
       cancellationCbs.add(callback);
       action.run(false);
     }
+  }
+
+  @Override
+  public void setTableName(TableName tableName) {
+    this.tableName = tableName;
+  }
+
+  @Override
+  public TableName getTableName() {
+    return tableName;
   }
 }

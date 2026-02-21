@@ -25,12 +25,14 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
@@ -63,10 +65,9 @@ import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 import org.apache.hbase.thirdparty.com.google.common.io.Closeables;
 
 /**
- * This class is only a base for other integration-level replication tests.
- * Do not add tests here.
- * TestReplicationSmallTests is where tests that don't require bring machines up/down should go
- * All other tests should have their own classes and extend this one
+ * This class is only a base for other integration-level replication tests. Do not add tests here.
+ * TestReplicationSmallTests is where tests that don't require bring machines up/down should go All
+ * other tests should have their own classes and extend this one
  */
 public class TestReplicationBase {
   private static final Logger LOG = LoggerFactory.getLogger(TestReplicationBase.class);
@@ -87,8 +88,7 @@ public class TestReplicationBase {
   protected static int NUM_SLAVES1 = 1;
   protected static int NUM_SLAVES2 = 1;
   protected static final int NB_ROWS_IN_BATCH = 100;
-  protected static final int NB_ROWS_IN_BIG_BATCH =
-      NB_ROWS_IN_BATCH * 10;
+  protected static final int NB_ROWS_IN_BIG_BATCH = NB_ROWS_IN_BATCH * 10;
   protected static final long SLEEP_TIME = 500;
   protected static final int NB_RETRIES = 50;
   protected static AtomicInteger replicateCount = new AtomicInteger();
@@ -111,8 +111,7 @@ public class TestReplicationBase {
   protected final void cleanUp() throws IOException, InterruptedException {
     // Starting and stopping replication can make us miss new logs,
     // rolling like this makes sure the most recent one gets added to the queue
-    for (JVMClusterUtil.RegionServerThread r : UTIL1.getHBaseCluster()
-        .getRegionServerThreads()) {
+    for (JVMClusterUtil.RegionServerThread r : UTIL1.getHBaseCluster().getRegionServerThreads()) {
       UTIL1.getAdmin().rollWALWriter(r.getRegionServer().getServerName());
     }
     int rowCount = UTIL1.countRows(tableName);
@@ -145,7 +144,7 @@ public class TestReplicationBase {
   }
 
   protected static void waitForReplication(int expectedRows, int retries)
-      throws IOException, InterruptedException {
+    throws IOException, InterruptedException {
     waitForReplication(htable2, expectedRows, retries);
   }
 
@@ -209,8 +208,7 @@ public class TestReplicationBase {
     conf.setLong("hbase.serial.replication.waiting.ms", 100);
   }
 
-  static void configureClusters(HBaseTestingUtil util1,
-      HBaseTestingUtil util2) {
+  static void configureClusters(HBaseTestingUtil util1, HBaseTestingUtil util2) {
     setupConfig(util1, "/1");
     setupConfig(util2, "/2");
 
@@ -220,7 +218,7 @@ public class TestReplicationBase {
     conf2.setBoolean("hbase.tests.use.shortcircuit.reads", false);
   }
 
-  static void restartSourceCluster(int numSlaves) throws Exception {
+  protected static void restartSourceCluster(int numSlaves) throws Exception {
     Closeables.close(hbaseAdmin, true);
     Closeables.close(htable1, true);
     UTIL1.shutdownMiniHBaseCluster();
@@ -240,8 +238,7 @@ public class TestReplicationBase {
     htable2 = UTIL2.getConnection().getTable(tableName);
   }
 
-  protected static void createTable(TableName tableName)
-    throws IOException {
+  protected static void createTable(TableName tableName) throws IOException {
     TableDescriptor table = TableDescriptorBuilder.newBuilder(tableName)
       .setColumnFamily(ColumnFamilyDescriptorBuilder.newBuilder(famName).setMaxVersions(100)
         .setScope(HConstants.REPLICATION_SCOPE_GLOBAL).build())
@@ -282,26 +279,42 @@ public class TestReplicationBase {
   }
 
   private boolean peerExist(String peerId) throws IOException {
-    return hbaseAdmin.listReplicationPeers().stream().anyMatch(p -> peerId.equals(p.getPeerId()));
+    return peerExist(peerId, UTIL1);
+  }
+
+  private boolean peerExist(String peerId, HBaseTestingUtil util) throws IOException {
+    return util.getAdmin().listReplicationPeers().stream()
+      .anyMatch(p -> peerId.equals(p.getPeerId()));
+  }
+
+  // can be override in tests, in case you need to use zk based uri, or the old style uri
+  protected String getClusterKey(HBaseTestingUtil util) throws Exception {
+    return util.getRpcConnnectionURI();
   }
 
   protected final void addPeer(String peerId, TableName tableName) throws Exception {
-    if (!peerExist(peerId)) {
-      ReplicationPeerConfigBuilder builder = ReplicationPeerConfig.newBuilder()
-        .setClusterKey(UTIL2.getClusterKey()).setSerial(isSerialPeer())
-        .setReplicationEndpointImpl(ReplicationEndpointTest.class.getName());
-      if (isSyncPeer()) {
-        FileSystem fs2 = UTIL2.getTestFileSystem();
-        // The remote wal dir is not important as we do not use it in DA state, here we only need to
-        // confirm that a sync peer in DA state can still replicate data to remote cluster
-        // asynchronously.
-        builder.setReplicateAllUserTables(false)
-          .setTableCFsMap(ImmutableMap.of(tableName, ImmutableList.of()))
-          .setRemoteWALDir(new Path("/RemoteWAL")
-            .makeQualified(fs2.getUri(), fs2.getWorkingDirectory()).toUri().toString());
-      }
-      hbaseAdmin.addReplicationPeer(peerId, builder.build());
+    addPeer(peerId, tableName, UTIL1, UTIL2);
+  }
+
+  protected final void addPeer(String peerId, TableName tableName, HBaseTestingUtil source,
+    HBaseTestingUtil target) throws Exception {
+    if (peerExist(peerId, source)) {
+      return;
     }
+    ReplicationPeerConfigBuilder builder = ReplicationPeerConfig.newBuilder()
+      .setClusterKey(getClusterKey(target)).setSerial(isSerialPeer())
+      .setReplicationEndpointImpl(ReplicationEndpointTest.class.getName());
+    if (isSyncPeer()) {
+      FileSystem fs2 = target.getTestFileSystem();
+      // The remote wal dir is not important as we do not use it in DA state, here we only need to
+      // confirm that a sync peer in DA state can still replicate data to remote cluster
+      // asynchronously.
+      builder.setReplicateAllUserTables(false)
+        .setTableCFsMap(ImmutableMap.of(tableName, ImmutableList.of()))
+        .setRemoteWALDir(new Path("/RemoteWAL")
+          .makeQualified(fs2.getUri(), fs2.getWorkingDirectory()).toUri().toString());
+    }
+    source.getAdmin().addReplicationPeer(peerId, builder.build());
   }
 
   @Before
@@ -310,8 +323,12 @@ public class TestReplicationBase {
   }
 
   protected final void removePeer(String peerId) throws Exception {
-    if (peerExist(peerId)) {
-      hbaseAdmin.removeReplicationPeer(peerId);
+    removePeer(peerId, UTIL1);
+  }
+
+  protected final void removePeer(String peerId, HBaseTestingUtil util) throws Exception {
+    if (peerExist(peerId, util)) {
+      util.getAdmin().removeReplicationPeer(peerId);
     }
   }
 
@@ -374,6 +391,14 @@ public class TestReplicationBase {
     waitForReplication(NB_ROWS_IN_BATCH, NB_RETRIES);
   }
 
+  protected static void stopAllRegionServers(HBaseTestingUtil util) throws IOException {
+    List<ServerName> rses = util.getMiniHBaseCluster().getRegionServerThreads().stream()
+      .map(t -> t.getRegionServer().getServerName()).collect(Collectors.toList());
+    for (ServerName rs : rses) {
+      util.getMiniHBaseCluster().stopRegionServer(rs);
+    }
+  }
+
   @AfterClass
   public static void tearDownAfterClass() throws Exception {
     if (htable2 != null) {
@@ -404,7 +429,8 @@ public class TestReplicationBase {
       replicateCount.set(0);
     }
 
-    @Override public boolean replicate(ReplicateContext replicateContext) {
+    @Override
+    public boolean replicate(ReplicateContext replicateContext) {
       replicateCount.incrementAndGet();
       replicatedEntries.addAll(replicateContext.getEntries());
 

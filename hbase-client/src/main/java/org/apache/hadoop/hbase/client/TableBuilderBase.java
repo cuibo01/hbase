@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,6 +17,9 @@
  */
 package org.apache.hadoop.hbase.client;
 
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.yetus.audience.InterfaceAudience;
 
@@ -36,15 +39,19 @@ abstract class TableBuilderBase implements TableBuilder {
 
   protected int writeRpcTimeout;
 
+  protected Map<String, byte[]> requestAttributes = Collections.emptyMap();
+
   TableBuilderBase(TableName tableName, ConnectionConfiguration connConf) {
     if (tableName == null) {
       throw new IllegalArgumentException("Given table name is null");
     }
     this.tableName = tableName;
-    this.operationTimeout = tableName.isSystemTable() ? connConf.getMetaOperationTimeout()
-        : connConf.getOperationTimeout();
+    this.operationTimeout = tableName.isSystemTable()
+      ? connConf.getMetaOperationTimeout()
+      : connConf.getOperationTimeout();
     this.rpcTimeout = connConf.getRpcTimeout();
-    this.readRpcTimeout = connConf.getReadRpcTimeout();
+    this.readRpcTimeout =
+      tableName.isSystemTable() ? connConf.getMetaReadRpcTimeout() : connConf.getReadRpcTimeout();
     this.writeRpcTimeout = connConf.getWriteRpcTimeout();
   }
 
@@ -69,6 +76,15 @@ abstract class TableBuilderBase implements TableBuilder {
   @Override
   public TableBuilderBase setWriteRpcTimeout(int timeout) {
     this.writeRpcTimeout = timeout;
+    return this;
+  }
+
+  @Override
+  public TableBuilderBase setRequestAttribute(String key, byte[] value) {
+    if (this.requestAttributes.isEmpty()) {
+      this.requestAttributes = new HashMap<>();
+    }
+    this.requestAttributes.put(key, value);
     return this;
   }
 }

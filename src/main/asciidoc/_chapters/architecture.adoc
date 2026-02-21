@@ -101,7 +101,7 @@ The `hbase:meta` table structure is as follows:
 
 .Values
 
-* `info:regioninfo` (serialized link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/HRegionInfo.html[HRegionInfo] instance for this region)
+* `info:regioninfo` (serialized link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/RegionInfo.html[RegionInfo] instance for this region)
 * `info:server` (server:port of the RegionServer containing this region)
 * `info:serverstartcode` (start-time of the RegionServer process containing this region)
 
@@ -119,7 +119,7 @@ If a region has both an empty start and an empty end key, it is the only region 
 ====
 
 In the (hopefully unlikely) event that programmatic processing of catalog metadata
-is required, see the link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/RegionInfo.html#parseFrom-byte:A-[RegionInfo.parseFrom] utility.
+is required, see the link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/RegionInfo.html#parseFrom(byte%5B%5D)[RegionInfo.parseFrom] utility.
 
 [[arch.catalog.startup]]
 === Startup Sequencing
@@ -141,7 +141,7 @@ Should a region be reassigned either by the master load balancer or because a Re
 
 See <<master.runtime>> for more information about the impact of the Master on HBase Client communication.
 
-Administrative functions are done via an instance of link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Admin.html[Admin]
+Administrative functions are done via an instance of link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/Admin.html[Admin]
 
 [[client.connections]]
 === Cluster Connections
@@ -161,8 +161,8 @@ See the link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/pac
 
 ==== API before HBase 1.0.0
 
-Instances of `HTable` are the way to interact with an HBase cluster earlier than 1.0.0. _link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Table.html[Table] instances are not thread-safe_. Only one thread can use an instance of Table at any given time.
-When creating Table instances, it is advisable to use the same link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/HBaseConfiguration[HBaseConfiguration] instance.
+Instances of `HTable` are the way to interact with an HBase cluster earlier than 1.0.0. _link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/Table.html[Table] instances are not thread-safe_. Only one thread can use an instance of Table at any given time.
+When creating Table instances, it is advisable to use the same link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/HBaseConfiguration[HBaseConfiguration] instance.
 This will ensure sharing of ZooKeeper and socket instances to the RegionServers which is usually what you want.
 For example, this is preferred:
 
@@ -183,7 +183,7 @@ HBaseConfiguration conf2 = HBaseConfiguration.create();
 HTable table2 = new HTable(conf2, "myTable");
 ----
 
-For more information about how connections are handled in the HBase client, see link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/ConnectionFactory.html[ConnectionFactory].
+For more information about how connections are handled in the HBase client, see link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/ConnectionFactory.html[ConnectionFactory].
 
 [[client.connection.pooling]]
 ===== Connection Pooling
@@ -207,19 +207,19 @@ try (Connection connection = ConnectionFactory.createConnection(conf);
 [WARNING]
 ====
 Previous versions of this guide discussed `HTablePool`, which was deprecated in HBase 0.94, 0.95, and 0.96, and removed in 0.98.1, by link:https://issues.apache.org/jira/browse/HBASE-6580[HBASE-6580], or `HConnection`, which is deprecated in HBase 1.0 by `Connection`.
-Please use link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Connection.html[Connection] instead.
+Please use link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/Connection.html[Connection] instead.
 ====
 
 [[client.writebuffer]]
 === WriteBuffer and Batch Methods
 
-In HBase 1.0 and later, link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/HTable.html[HTable] is deprecated in favor of link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Table.html[Table]. `Table` does not use autoflush. To do buffered writes, use the BufferedMutator class.
+In HBase 1.0 and later, link:https://hbase.apache.org/1.4/devapidocs/org/apache/hadoop/hbase/client/HTable.html[HTable] is deprecated in favor of link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/Table.html[Table]. `Table` does not use autoflush. To do buffered writes, use the BufferedMutator class.
 
-In HBase 2.0 and later, link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/HTable.html[HTable] does not use BufferedMutator to execute the ``Put`` operation. Refer to link:https://issues.apache.org/jira/browse/HBASE-18500[HBASE-18500] for more information.
+In HBase 2.0 and later, link:https://hbase.apache.org/2.6/devapidocs/org/apache/hadoop/hbase/client/HTable.html[HTable] does not use BufferedMutator to execute the ``Put`` operation. Refer to link:https://issues.apache.org/jira/browse/HBASE-18500[HBASE-18500] for more information.
 
 For additional information on write durability, review the link:/acid-semantics.html[ACID semantics] page.
 
-For fine-grained control of batching of ``Put``s or ``Delete``s, see the link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Table.html#batch-java.util.List-java.lang.Object:A-[batch] methods on Table.
+For fine-grained control of batching of ``Put``s or ``Delete``s, see the link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/Table.html#batch(java.util.List,java.lang.Object%5B%5D)[batch] methods on Table.
 
 [[async.client]]
 === Asynchronous Client ===
@@ -261,8 +261,10 @@ For region name, we only accept `byte[]` as the parameter type and it may be a f
 Information on non-Java clients and custom protocols is covered in <<external_apis>>
 
 [[client.masterregistry]]
-
 === Master Registry (new as of 2.3.0)
+Starting from 2.5.0, MasterRegistry is deprecated. It's functionality is completely superseded by
+the RpcConnectionRegistry. Please see <<client.rpcconnectionregistry>> for more details.
+
 Client internally works with a _connection registry_ to fetch the metadata needed by connections.
 This connection registry implementation is responsible for fetching the following metadata.
 
@@ -294,25 +296,29 @@ HMasters instead of ZooKeeper ensemble`
 To reduce hot-spotting on a single master, all the masters (active & stand-by) expose the needed
 service to fetch the connection metadata. This lets the client connect to any master (not just active).
 Both ZooKeeper-based and Master-based connection registry implementations are available in 2.3+. For
-2.3 and earlier, the ZooKeeper-based implementation remains the default configuration.
-The Master-based implementation becomes the default in 3.0.0.
+2.x and earlier, the ZooKeeper-based implementation remains the default configuration. For 3.0.0,
+RpcConnectionRegistry becomes the default configuration, as the alternate to MasterRegistry.
 
 Change the connection registry implementation by updating the value configured for
 `hbase.client.registry.impl`. To explicitly enable the ZooKeeper-based registry, use
 
 [source, xml]
+----
 <property>
     <name>hbase.client.registry.impl</name>
     <value>org.apache.hadoop.hbase.client.ZKConnectionRegistry</value>
- </property>
+</property>
+----
 
 To explicitly enable the Master-based registry, use
 
 [source, xml]
+----
 <property>
     <name>hbase.client.registry.impl</name>
     <value>org.apache.hadoop.hbase.client.MasterRegistry</value>
- </property>
+</property>
+----
 
 ==== MasterRegistry RPC hedging
 
@@ -338,19 +344,149 @@ management.
 For more implementation details, please refer to the https://github.com/apache/hbase/tree/master/dev-support/design-docs[design doc] and
 https://issues.apache.org/jira/browse/HBASE-18095[HBASE-18095].
 
+[[client.rpcconnectionregistry]]
+=== Rpc Connection Registry (new as of 2.5.0)
+As said in the <<client.masterregistry>> section, there are some disadvantages and limitations
+for MasterRegistry, especially that it puts master in the critical path of read/write operations.
+In order to address these problems, we introduced a more generic RpcConnectionRegistry.
+
+It is also rpc based, like MasterRegistry, with several differences
+
+. Region server also implements the necessary rpc service, so you can config any nodes in the cluster
+as bootstrap nodes, not only masters
+. Support refreshing bootstrap nodes, for spreading loads across the nodes in the cluster, and also
+remove the dead nodes in bootstrap nodes.
+
+To explicitly enable the rpc-based registry, use
+
+[source, xml]
+----
+<property>
+    <name>hbase.client.registry.impl</name>
+    <value>org.apache.hadoop.hbase.client.RpcConnectionRegistry</value>
+</property>
+----
+
+To configure the bootstrap nodes, use
+[source, xml]
+----
+<property>
+    <name>hbase.client.bootstrap.servers</name>
+    <value>server1:16020,server2:16020,server3:16020</value>
+</property>
+----
+
+If not configured, we will fallback to use master addresses as the bootstrap nodes.
+
+RpcConnectionRegistry is available in 2.5+, and becomes the default client registry implementation in 3.0.0.
+
+==== RpcConnectionRegistry RPC hedging
+Hedged read is still supported, the configuration key is now _hbase.client.bootstrap.hedged.fanout_, and
+its default value is still 2.
+
+==== RpcConnectionRegistry bootstrap nodes refreshing
+There are basically two reasons for us to refresh the bootstrap nodes
+
+* Periodically. This is for spreading loads across the nodes in the cluster. There are two configurations
+  . _hbase.client.bootstrap.refresh_interval_secs_: the refresh interval in seconds, default 300. A value
+  less than or equal to zero means disable refreshing.
+  . _hbase.client.bootstrap.initial_refresh_delay_secs_: the initial refresh interval in seconds, the
+  default value is 1/10 of _hbase.client.bootstrap.refresh_interval_secs_. The reason why we want to
+  introduce a separated configuration for the delay for first refreshing is that, as end users could
+  configure any nodes in a cluster as the initial bootstrap nodes, it is possible that different end
+  users will configure the same machine which makes the machine over load. So we should have a shorter
+  delay for the initial refresh, to let users quickly switch to the bootstrap nodes we want them to
+  connect to.
+* When there is a connection error while requesting the nodes, we will refresh immediately, to remove
+the dead nodes. To avoid putting too much pressure to the cluster, there is a configuration
+_hbase.client.bootstrap.min_secs_between_refreshes_, to control the minimum interval between two
+refreshings. The default value is 60, but notice that, if you change
+_hbase.client.bootstrap.refresh_interval_secs_ to a small value, you need to make sure to also change
+_hbase.client.bootstrap.min_secs_between_refreshes_ to a value smaller than
+_hbase.client.bootstrap.refresh_interval_secs_, otherwise an IllegalArgumentException will be thrown.
+
+
 '''
-NOTE: (Advanced) In case of any issues with the master based registry, use the following
+NOTE: (Advanced) In case of any issues with the rpc/master based registry, use the following
 configuration to fallback to the ZooKeeper based connection registry implementation.
 [source, xml]
+----
 <property>
     <name>hbase.client.registry.impl</name>
     <value>org.apache.hadoop.hbase.client.ZKConnectionRegistry</value>
- </property>
+</property>
+----
+
+[[client.connectionuri]]
+=== Connection URI
+Starting from 2.7.0, we add the support for specifying the connection information for a HBase
+cluster through an URI, which we call a "connection URI". And we've added several methods in
+_ConnectionFactory_ to let you get a connection to the cluster specified by the URI. It looks
+like:
+
+[source, java]
+----
+  URI uri = new URI("hbase+rpc://server1:16020,server2:16020,server3:16020");
+  try (Connection conn = ConnectionFactory.createConnection(uri)) {
+    ...
+  }
+----
+
+==== Supported Schemes
+Currently there are two schemes supported, _hbase+rpc_ for _RpcConnectionRegistry_ and _hbase+zk_
+for _ZKConnectionRegistry_. _MasterRegistry_ is deprecated so we do not expose it through
+connection URI.
+
+For _hbase+rpc_, it looks like
+[source, shell]
+----
+hbase+rpc://server1:16020,server2:16020,server3:16020
+----
+
+The authority part _server1:16020,server2:16020,server3:16020_ specifies the bootstrap nodes and
+their rpc ports, i.e, the configuration value for _hbase.client.bootstrap.servers_ in the past.
+
+For _hbase+zk_, it looks like
+[source, shell]
+----
+hbase+zk://zk1:2181,zk2:2181,zk3:2181/hbase
+----
+
+The authority part _zk1:2181,zk2:2181,zk3:2181_ is the zk quorum, i.e, the configuration value
+for _hbase.zookeeper.quorum_ in the past.
+The path part _/hbase_ is the znode parent, i.e, the configuration value for
+_zookeeper.znode.parent_ in the past.
+
+==== Specify Configuration through URI Queries
+To let users fully specify the connection information through a connection URI, we support
+specifying configuration values through URI Queries. It looks like:
+
+[source, shell]
+----
+hbase+rpc://server1:16020?hbase.client.operation.timeout=10000
+----
+
+In this way you can set the operation timeout to 10 seconds. Notice that, the configuration values
+specified in the connection URI will override the ones in the configuration file.
+
+==== Implement Your Own Connection Registry
+We use _ServiceLoader_ to load different connection registry implementations, the entry point is
+_org.apache.hadoop.hbase.client.ConnectionRegistryURIFactory_. So if you implement your own
+_ConnectionRegistryURIFactory_ which has a different scheme, and register it in the services file,
+we can load it at runtime.
+
+Connection URI is still a very new feature which has not been used extensively in production, so
+we do not want to expose the ability to customize _ConnectionRegistryURIFactory_ yet as the API
+may be changed frequently in the beginning.
+
+If you really want to implement your own connection registry, you can use the above way but take
+your own risk.
+
 
 [[client.filter]]
 == Client Request Filters
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Get.html[Get] and link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Scan.html[Scan] instances can be optionally configured with link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/Filter.html[filters] which are applied on the RegionServer.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/Get.html[Get] and link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/Scan.html[Scan] instances can be optionally configured with link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/Filter.html[filters] which are applied on the RegionServer.
 
 Filters can be confusing because there are many different types, and it is best to approach them by understanding the groups of Filter functionality.
 
@@ -362,7 +498,7 @@ Structural Filters contain other Filters.
 [[client.filter.structural.fl]]
 ==== FilterList
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/FilterList.html[FilterList] represents a list of Filters with a relationship of `FilterList.Operator.MUST_PASS_ALL` or `FilterList.Operator.MUST_PASS_ONE` between the Filters.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/FilterList.html[FilterList] represents a list of Filters with a relationship of `FilterList.Operator.MUST_PASS_ALL` or `FilterList.Operator.MUST_PASS_ONE` between the Filters.
 The following example shows an 'or' between two Filters (checking for either 'my value' or 'my other value' on the same attribute).
 
 [source,java]
@@ -392,7 +528,7 @@ scan.setFilter(list);
 ==== SingleColumnValueFilter
 
 A SingleColumnValueFilter (see:
-https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/SingleColumnValueFilter.html)
+https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/SingleColumnValueFilter.html)
 can be used to test column values for equivalence (`CompareOperaor.EQUAL`),
 inequality (`CompareOperaor.NOT_EQUAL`), or ranges (e.g., `CompareOperaor.GREATER`). The following is an
 example of testing equivalence of a column to a String value "my value"...
@@ -452,7 +588,7 @@ These Comparators are used in concert with other Filters, such as <<client.filte
 [[client.filter.cvp.rcs]]
 ==== RegexStringComparator
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/RegexStringComparator.html[RegexStringComparator] supports regular expressions for value comparisons.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/RegexStringComparator.html[RegexStringComparator] supports regular expressions for value comparisons.
 
 [source,java]
 ----
@@ -471,7 +607,7 @@ See the Oracle JavaDoc for link:http://download.oracle.com/javase/6/docs/api/jav
 [[client.filter.cvp.substringcomparator]]
 ==== SubstringComparator
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/SubstringComparator.html[SubstringComparator] can be used to determine if a given substring exists in a value.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/SubstringComparator.html[SubstringComparator] can be used to determine if a given substring exists in a value.
 The comparison is case-insensitive.
 
 [source,java]
@@ -490,17 +626,17 @@ scan.setFilter(filter);
 [[client.filter.cvp.bfp]]
 ==== BinaryPrefixComparator
 
-See link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/BinaryPrefixComparator.html[BinaryPrefixComparator].
+See link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/BinaryPrefixComparator.html[BinaryPrefixComparator].
 
 [[client.filter.cvp.bc]]
 ==== BinaryComparator
 
-See link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/BinaryComparator.html[BinaryComparator].
+See link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/BinaryComparator.html[BinaryComparator].
 
 [[client.filter.cvp.bcc]]
 ==== BinaryComponentComparator
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/BinaryComponentComparator.html[BinaryComponentComparator] can be used to compare specific value at specific location with in the cell value. The comparison can be done for both ascii and binary data.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/BinaryComponentComparator.html[BinaryComponentComparator] can be used to compare specific value at specific location with in the cell value. The comparison can be done for both ascii and binary data.
 
 [source,java]
 ----
@@ -519,18 +655,18 @@ As HBase stores data internally as KeyValue pairs, KeyValue Metadata Filters eva
 [[client.filter.kvm.ff]]
 ==== FamilyFilter
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/FamilyFilter.html[FamilyFilter] can be used to filter on the ColumnFamily.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/FamilyFilter.html[FamilyFilter] can be used to filter on the ColumnFamily.
 It is generally a better idea to select ColumnFamilies in the Scan than to do it with a Filter.
 
 [[client.filter.kvm.qf]]
 ==== QualifierFilter
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/QualifierFilter.html[QualifierFilter] can be used to filter based on Column (aka Qualifier) name.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/QualifierFilter.html[QualifierFilter] can be used to filter based on Column (aka Qualifier) name.
 
 [[client.filter.kvm.cpf]]
 ==== ColumnPrefixFilter
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/ColumnPrefixFilter.html[ColumnPrefixFilter] can be used to filter based on the lead portion of Column (aka Qualifier) names.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/ColumnPrefixFilter.html[ColumnPrefixFilter] can be used to filter based on the lead portion of Column (aka Qualifier) names.
 
 A ColumnPrefixFilter seeks ahead to the first column matching the prefix in each row and for each involved column family.
 It can be used to efficiently get a subset of the columns in very wide rows.
@@ -563,7 +699,7 @@ rs.close();
 [[client.filter.kvm.mcpf]]
 ==== MultipleColumnPrefixFilter
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/MultipleColumnPrefixFilter.html[MultipleColumnPrefixFilter] behaves like ColumnPrefixFilter but allows specifying multiple prefixes.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/MultipleColumnPrefixFilter.html[MultipleColumnPrefixFilter] behaves like ColumnPrefixFilter but allows specifying multiple prefixes.
 
 Like ColumnPrefixFilter, MultipleColumnPrefixFilter efficiently seeks ahead to the first column matching the lowest prefix and also seeks past ranges of columns between prefixes.
 It can be used to efficiently get discontinuous sets of columns from very wide rows.
@@ -593,7 +729,7 @@ rs.close();
 [[client.filter.kvm.crf]]
 ==== ColumnRangeFilter
 
-A link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/ColumnRangeFilter.html[ColumnRangeFilter] allows efficient intra row scanning.
+A link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/ColumnRangeFilter.html[ColumnRangeFilter] allows efficient intra row scanning.
 
 A ColumnRangeFilter can seek ahead to the first matching column for each involved column family.
 It can be used to efficiently get a 'slice' of the columns of a very wide row.
@@ -634,9 +770,9 @@ Note:  Introduced in HBase 0.92
 [[client.filter.row.rf]]
 ==== RowFilter
 
-It is generally a better idea to use the startRow/stopRow methods on Scan for row selection, however link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/RowFilter.html[RowFilter] can also be used.
+It is generally a better idea to use the startRow/stopRow methods on Scan for row selection, however link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/RowFilter.html[RowFilter] can also be used.
 
-You can supplement a scan (both bounded and unbounded) with RowFilter constructed from link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/BinaryComponentComparator.html[BinaryComponentComparator] for further filtering out or filtering in rows. See link:https://issues.apache.org/jira/browse/HBASE-22969[HBASE-22969] for use cases and other details.
+You can supplement a scan (both bounded and unbounded) with RowFilter constructed from link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/BinaryComponentComparator.html[BinaryComponentComparator] for further filtering out or filtering in rows. See link:https://issues.apache.org/jira/browse/HBASE-22969[HBASE-22969] for use cases and other details.
 
 [[client.filter.utility]]
 === Utility
@@ -645,7 +781,7 @@ You can supplement a scan (both bounded and unbounded) with RowFilter constructe
 ==== FirstKeyOnlyFilter
 
 This is primarily used for rowcount jobs.
-See link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/FirstKeyOnlyFilter.html[FirstKeyOnlyFilter].
+See link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/filter/FirstKeyOnlyFilter.html[FirstKeyOnlyFilter].
 
 [[architecture.master]]
 == Master
@@ -653,7 +789,7 @@ See link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/filter/FirstKe
 `HMaster` is the implementation of the Master Server.
 The Master server is responsible for monitoring all RegionServer instances in the cluster, and is the interface for all metadata changes.
 In a distributed cluster, the Master typically runs on the <<arch.hdfs.nn>>.
-J Mohamed Zahoor goes into some more detail on the Master Architecture in this blog posting, link:http://blog.zahoor.in/2012/08/hbase-hmaster-architecture/[HBase HMaster Architecture ].
+J Mohamed Zahoor goes into some more detail on the Master Architecture in this blog posting, link:https://web.archive.org/web/20191211053128/http://blog.zahoor.in/2012/08/hbase-hmaster-architecture/[HBase HMaster Architecture].
 
 [[master.startup]]
 === Startup Behavior
@@ -946,6 +1082,10 @@ Bloom Filters::
 Currently the recommended way to measure HFile indexes and bloom filters sizes is to look at the region server web UI and checkout the relevant metrics.
 For keys, sampling can be done by using the HFile command line tool and look for the average key size metric.
 Since HBase 0.98.3, you can view details on BlockCache stats and metrics in a special Block Cache section in the UI.
+As of HBase 2.4.14, you can estimate HFile indexes and bloom filters vs other DATA blocks using blockCacheCount and blockCacheDataBlockCount in JMX. The
+formula `(blockCacheCount - blockCacheDataBlockCount) * blockSize` will give you an estimate which can be useful when trying to enable the BucketCache. You
+should make sure the post-BucketCache config gives enough memory to the on-heap LRU cache to hold at least the same number of non-DATA blocks from pre-BucketCache.
+Once BucketCache is enabled, the L1 metrics like l1CacheSize, l1CacheCount, and l1CacheEvictionCount can help you further tune the size.
 
 It's generally bad to use block caching when the WSS doesn't fit in memory.
 This is the case when you have for example 40GB available across all your region servers' block caches but you need to process 1TB of data.
@@ -989,7 +1129,7 @@ If the BucketCache is deployed in off-heap mode, this memory is not managed by t
 This is why you'd use BucketCache in pre-2.0.0, so your latencies are less erratic,
 to mitigate GCs and heap fragmentation, and so you can safely use more memory.
 See Nick Dimiduk's link:http://www.n10k.com/blog/blockcache-101/[BlockCache 101] for comparisons running on-heap vs off-heap tests.
-Also see link:https://people.apache.org/~stack/bc/[Comparing BlockCache Deploys] which finds that if your dataset fits inside your LruBlockCache deploy, use it otherwise if you are experiencing cache churn (or you want your cache to exist beyond the vagaries of java GC), use BucketCache.
+Also see link:https://web.archive.org/web/20231109025243/http://people.apache.org/~stack/bc/[Comparing BlockCache Deploys] which finds that if your dataset fits inside your LruBlockCache deploy, use it otherwise if you are experiencing cache churn (or you want your cache to exist beyond the vagaries of java GC), use BucketCache.
 +
 In pre-2.0.0,
 one can configure the BucketCache so it receives the `victim` of an LruBlockCache eviction.
@@ -1008,7 +1148,7 @@ benefit of NOT provoking GC.
 From HBase 2.0.0 onwards, the notions of L1 and L2 have been deprecated. When BucketCache is turned on, the DATA blocks will always go to BucketCache and INDEX/BLOOM blocks go to on heap LRUBlockCache. `cacheDataInL1` support has been removed.
 ====
 
-[[bc.deloy.modes]]
+[[bc.deploy.modes]]
 ====== BucketCache Deploy Modes
 The BucketCache Block Cache can be deployed _offheap_, _file_ or _mmaped_ file mode.
 
@@ -1099,7 +1239,7 @@ The value allocated by `MaxDirectMemorySize` must not exceed physical RAM, and i
 You can see how much memory -- on-heap and off-heap/direct -- a RegionServer is configured to use and how much it is using at any one time by looking at the _Server Metrics: Memory_ tab in the UI.
 It can also be gotten via JMX.
 In particular the direct memory currently used by the server can be found on the `java.nio.type=BufferPool,name=direct` bean.
-Terracotta has a link:http://terracotta.org/documentation/4.0/bigmemorygo/configuration/storage-options[good write up] on using off-heap memory in Java.
+Terracotta has a link:https://web.archive.org/web/20170907032911/http://terracotta.org/documentation/4.0/bigmemorygo/configuration/storage-options[good write up] on using off-heap memory in Java.
 It is for their product BigMemory but a lot of the issues noted apply in general to any attempt at going off-heap. Check it out.
 ====
 
@@ -1116,6 +1256,227 @@ In 1.0, it should be more straight-forward.
 Onheap LruBlockCache size is set as a fraction of java heap using `hfile.block.cache.size setting` (not the best name) and BucketCache is set as above in absolute Megabytes.
 ====
 
+==== Time Based Priority for BucketCache
+
+link:https://issues.apache.org/jira/browse/HBASE-28463[HBASE-28463] introduced time based priority
+for blocks in BucketCache. It allows for defining
+an age threshold at individual column families' configuration, whereby blocks older than this
+configured threshold would be targeted first for eviction.
+
+Blocks from column families that don't define the age threshold wouldn't be evaluated by
+the time based priority, and would only be evicted following the LRU eviction logic.
+
+This feature is mostly useful for use cases where most recent data is more frequently accessed,
+and therefore should get higher priority in the cache. Configuring Time Based Priority with the
+"age" of most accessed data would then give a finer control over blocks allocation in
+the BucketCache than the built-in LRU eviction logic.
+
+Time Based Priority for BucketCache provides three different strategies for defining data age:
+
+* Cell timestamps: Uses the timestamp portion of HBase cells for comparing the data age.
+* Custom cell qualifiers: Uses a custom-defined date qualifier for comparing the data age.
+It uses that value to tier the entire row containing the given qualifier value.
+This requires that the custom qualifier be a valid Java long timestamp.
+* Custom value provider: Allows for defining a pluggable implementation that
+contains the logic for identifying the date value to be used for comparison.
+This also provides additional flexibility for different use cases that might have the date stored
+in other formats or embedded with other data in various portions of a given row.
+
+For use cases where priority is determined by the order of record ingestion in HBase
+(with the most recent being the most relevant), the built-in cell timestamp offers the most
+convenient and efficient method for configuring age-based priority.
+See <<cellts.timebasedpriorityforbucketcache>>.
+
+Some applications may utilize a custom date column to define the priority of table records.
+In such instances, a custom cell qualifier-based priority is advisable.
+See <<customcellqualifier.timebasedpriorityforbucketcache>>.
+
+
+Finally, more intricate schemas may incorporate domain-specific logic for defining the age of
+each record. The custom value provider facilitates the integration of custom code to implement
+the appropriate parsing of the date value that should be used for the priority comparison.
+See <<customvalueprovider.timebasedpriorityforbucketcache>>.
+
+With Time Based Priority for BucketCache, blocks age is evaluated when deciding if a block should
+be cached (i.e. during reads, writes, compaction and prefetch), as well as during the cache
+freeSpace run (mass eviction), prior to executing the LRU logic.
+
+Because blocks don't hold any specific meta information other than type,
+it's necessary to group blocks of the same "age group" on separate files, using specialized compaction
+implementations (see more details in the configuration section below). The time range of all blocks
+in each file is then appended at the file meta info section, and is used for evaluating the age of
+blocks that should be considered in the Time Based Priority logic.
+
+[[enable.timebasedpriorityforbucketcache]]
+===== Configuring Time Based Priority for BucketCache
+
+Finding the age of each block involves an extra overhead, therefore the feature is disabled by
+default at a global configuration level.
+
+To enable it, the following configuration should be set on RegionServers' _hbase-site.xml_:
+
+[source,xml]
+----
+<property>
+  <name>hbase.regionserver.datatiering.enable</name>
+  <value>true</value>
+</property>
+----
+
+Once enabled globally, it's necessary to define the desired strategy-specific settings at
+the individual column family level.
+
+[[cellts.timebasedpriorityforbucketcache]]
+====== Using Cell timestamps for Time Based Priority
+
+This strategy is the most efficient to run, as it uses the timestamp
+portion of each cell containing the data for comparing the age of blocks. It requires
+DateTieredCompaction for splitting the blocks into separate files according to blocks' ages.
+
+The example below sets the hot age threshold to one week (in milliseconds)
+for the column family 'cf1' in table 'orders':
+
+[source]
+----
+hbase(main):003:0> alter 'orders', {NAME => 'cf1',
+  CONFIGURATION => {'hbase.hstore.datatiering.type' => 'TIME_RANGE',
+    'hbase.hstore.datatiering.hot.age.millis' => '604800000',
+    'hbase.hstore.engine.class' => 'org.apache.hadoop.hbase.regionserver.DateTieredStoreEngine',
+    'hbase.hstore.blockingStoreFiles' => '60',
+    'hbase.hstore.compaction.min' => '2',
+    'hbase.hstore.compaction.max' => '60'
+  }
+}
+----
+
+.Date Tiered Compaction specific tunings
+[NOTE]
+====
+In the example above, the properties governing the number of windows and period of each window in
+the date tiered compaction were not set. With the default settings, the compaction will create
+initially four windows of six hours, then four windows of one day each, then another four
+windows of four days each and so on until the minimum timestamp among the selected files is covered.
+This can create a large number of files, therefore, additional changes to the
+'hbase.hstore.blockingStoreFiles', 'hbase.hstore.compaction.min' and 'hbase.hstore.compaction.max'
+are recommended.
+
+Alternatively, consider adjusting the initial window size to the same as the hot age threshold, and
+two windows only per tier:
+
+[source]
+----
+hbase(main):003:0> alter 'orders', {NAME => 'cf1',
+  CONFIGURATION => {'hbase.hstore.datatiering.type' => 'TIME_RANGE',
+    'hbase.hstore.datatiering.hot.age.millis' => '604800000',
+    'hbase.hstore.engine.class' => 'org.apache.hadoop.hbase.regionserver.DateTieredStoreEngine',
+    'hbase.hstore.compaction.date.tiered.base.window.millis' => '604800000',
+    'hbase.hstore.compaction.date.tiered.windows.per.tier' => '2'
+  }
+}
+----
+====
+
+[[customcellqualifier.timebasedpriorityforbucketcache]]
+====== Using Custom Cell Qualifiers for Time Based Priority
+
+This strategy uses a new compaction implementation designed for Time Based Priority. It extends
+date tiered compaction, but instead of producing multiple tiers of various time windows, it
+simply splits files into two groups: the "cold" group, where all blocks are older than the defined
+threshold age, and the "hot" group, where all blocks are newer than the threshold age.
+
+The example below defines a cell qualifier 'event_date' to be used for comparing the age of blocks
+within the custom cell qualifier strategy:
+
+[source]
+----
+hbase(main):003:0> alter 'orders', {NAME => 'cf1',
+  CONFIGURATION => {'hbase.hstore.datatiering.type' => 'CUSTOM',
+    'TIERING_CELL_QUALIFIER' => 'event_date',
+    'hbase.hstore.datatiering.hot.age.millis' => '604800000',
+    'hbase.hstore.engine.class' => 'org.apache.hadoop.hbase.regionserver.CustomTieredStoreEngine',
+    'hbase.hstore.compaction.date.tiered.custom.age.limit.millis' => '604800000'
+  }
+}
+----
+
+.Time Based Priority x Compaction Age Threshold Configurations
+[NOTE]
+====
+Note that there are two different configurations for defining the hot age threshold.
+This is because the Time Based Priority enforcer operates independently of the compaction
+implementation.
+====
+
+[[customvalueprovider.timebasedpriorityforbucketcache]]
+====== Using a Custom value provider for Time Based Priority
+
+It's also possible to hook in domain-specific logic for defining the data age of each row to be
+used for comparing blocks priorities. The Custom Time Based Priority framework defines the
+`CustomTieredCompactor.TieringValueProvider` interface, which can be implemented to provide the
+specific date value to be used by compaction for grouping the blocks according to the threshold age.
+
+In the following example, the `RowKeyPortionTieringValueProvider` implements the
+`getTieringValue` method. This method parses the date from a segment of the row key value,
+specifically between positions 14 and 29, using the "yyyyMMddHHmmss" format.
+The parsed date is then returned as a long timestamp, which is then used by custom tiered compaction
+to group the blocks based on the defined hot age threshold:
+
+[source,java]
+----
+public class RowKeyPortionTieringValueProvider implements CustomTieredCompactor.TieringValueProvider {
+   private SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMddHHmmss");
+   @Override
+   public void init(Configuration configuration) throws Exception {}
+      @Override
+      public long getTieringValue(Cell cell) {
+       byte[] rowArray = new byte[cell.getRowLength()];
+       System.arraycopy(cell.getRowArray(), cell.getRowOffset(), rowArray, 0, cell.getRowLength());
+       String datePortion = Bytes.toString(rowArray).substring(14, 29).trim();
+       try {
+           return sdf.parse(datePortion).getTime();
+       } catch (ParseException e) {
+           //handle error
+       }
+       return Long.MAX_VALUE;
+   }
+}
+----
+
+The Tiering Value Provider above can then be configured for Time Based Priority as follows:
+
+[source]
+----
+hbase(main):003:0> alter 'orders', {NAME => 'cf1',
+  CONFIGURATION => {'hbase.hstore.datatiering.type' => 'CUSTOM',
+    'hbase.hstore.custom-tiering-value.provider.class' =>
+      'org.apache.hbase.client.example.RowKeyPortionTieringValueProvider',
+    'hbase.hstore.datatiering.hot.age.millis' => '604800000',
+    'hbase.hstore.engine.class' => 'org.apache.hadoop.hbase.regionserver.CustomTieredStoreEngine',
+    'hbase.hstore.compaction.date.tiered.custom.age.limit.millis' => '604800000'
+  }
+}
+----
+
+[NOTE]
+====
+Upon enabling Custom Time Based Priority (either the custom qualifier or custom value provider)
+in the column family configuration, it is imperative that major compaction be executed twice on
+the specified tables to ensure the effective application of the newly configured priorities
+within the bucket cache.
+====
+
+
+[NOTE]
+====
+Time Based Priority was originally implemented with the cell timestamp strategy only. The original
+design covering cell timestamp based strategy is available
+link:https://docs.google.com/document/d/1Qd3kvZodBDxHTFCIRtoePgMbvyuUSxeydi2SEWQFQro/edit?tab=t.0#heading=h.gjdgxs[here].
+
+The second phase including the two custom strategies mentioned above is detailed in
+link:https://docs.google.com/document/d/1uBGIO9IQ-FbSrE5dnUMRtQS23NbCbAmRVDkAOADcU_E/edit?tab=t.0[this separate design doc].
+====
+
+
 ==== Compressed BlockCache
 
 link:https://issues.apache.org/jira/browse/HBASE-11331[HBASE-11331] introduced lazy BlockCache decompression, more simply referred to as compressed BlockCache.
@@ -1125,6 +1486,58 @@ For a RegionServer hosting more data than can fit into cache, enabling this feat
 For a RegionServer hosting data that can comfortably fit into cache, or if your workload is sensitive to extra CPU or garbage-collection load, you may receive less benefit.
 
 The compressed BlockCache is disabled by default. To enable it, set `hbase.block.data.cachecompressed` to `true` in _hbase-site.xml_ on all RegionServers.
+
+==== Cache Aware Load Balancer
+
+Depending on the data size and the configured cache size, the cache warm up can take anywhere from a few minutes to a few hours. This becomes even more critical for HBase deployments over cloud storage, where compute is separated from storage. Doing this everytime the region server starts can be a very expensive process. To eliminate this, link:https://issues.apache.org/jira/browse/HBASE-27313[HBASE-27313] implemented the cache persistence feature where the region servers periodically persist the blocks cached in the bucket cache. This persisted information is then used to resurrect the cache in the event of a region server restart because of normal restart or crash.
+
+link:https://issues.apache.org/jira/browse/HBASE-27999[HBASE-27999] implements the cache aware load balancer, which adds to the load balancer the ability to consider the cache allocation of each region on region servers when calculating a new assignment plan, using the region/region server cache allocation information reported by region servers to calculate the percentage of HFiles cached for each region on the hosting server. This information is then used by the balancer as a factor when deciding on an optimal, new assignment plan.
+
+The master node captures the caching information from all the region servers and uses this information to decide on new region assignments while ensuring a minimal impact on the current cache allocation. A region is assigned to the region server where it has a better cache ratio as compared to the region server where it is currently hosted.
+
+The CacheAwareLoadBalancer uses two cost elements for deciding the region allocation. These are described below:
+
+. Cache Cost
++
+
+The cache cost is calculated as the percentage of data for a region cached on the region server where it is either currently hosted or was previously hosted. A region may have multiple HFiles, each of different sizes. A HFile is considered to be fully prefetched when all the data blocks in this file are in the cache. The region server hosting this region calculates the ratio of number of HFiles fully cached in the cache to the total number of HFiles in the region. This ratio will vary from 0 (region hosted on this server, but none of its HFiles are cached into the cache) to 1 (region hosted on this server and all the HFiles for this region are cached into the cache).
++
+Every region server maintains this information for all the regions currently hosted there. In addition to that, this cache ratio is also maintained for the regions which were previously hosted on this region server giving historical information about the regions.
+
+. Skewness Cost
++
+
+
+The cache aware balancer will consider cache cost with the skewness cost to decide on the region assignment plan under following conditions:
+
+. There is an idle server in the cluster. This can happen when an existing server is restarted or a new server is added to the cluster.
+
+. When the cost of maintaining the balance in the cluster is greater than the minimum threshold defined by the configuration _hbase.master.balancer.stochastic.minCostNeedBalance_.
+
+
+The CacheAwareLoadBalancer can be enabled in the cluster by setting the following configuration properties in the master master configuration:
+
+[source,xml]
+----
+<property>
+  <name>hbase.master.loadbalancer.class</name>
+  <value>org.apache.hadoop.hbase.master.balancer.CacheAwareLoadBalancer</value>
+</property>
+<property>
+  <name>hbase.bucketcache.persistent.path</name>
+  <value>/path/to/bucketcache_persistent_file</value>
+</property>
+----
+
+Within HBASE-29168, the CacheAwareLoadBalancer implements region move throttling. This mitigates
+the impact of "losing" cache factor when balancing mainly due to region skewness, i.e. when new
+region servers are added to the cluster, a large bulk of cached regions may move to the new servers
+at once, which can cause noticeable read performance impacts for cache sensitive use cases. The
+throttling sleep time is determined by the *hbase.master.balancer.move.throttlingMillis* property,
+and it defaults to 60000 millis. If a region planned to be moved has a cache ratio on the target
+server above the thershold configurable by the
+*hbase.master.balancer.stochastic.throttling.cacheRatio* property (80% by default), no throttling
+will be applied in this region move.
 
 [[regionserver_splitting_implementation]]
 === RegionServer Splitting Implementation
@@ -1180,7 +1593,7 @@ In 0.94, HLog was the name of the implementation of the WAL.
 You will likely find references to the HLog in documentation tailored to these older versions.
 ====
 
-The WAL resides in HDFS in the _/hbase/WALs/_ directory, with subdirectories per region.
+The WAL resides in HDFS in the _/hbase/WALs/_ directory, with subdirectories per RegionServer.
 
 For more general information about the concept of write ahead logs, see the Wikipedia
 link:http://en.wikipedia.org/wiki/Write-ahead_logging[Write-Ahead Log] article.
@@ -1785,10 +2198,10 @@ Type the following to see usage:
 ----
 $ ${HBASE_HOME}/bin/hbase hfile
 ----
-For example, to view the content of the file _hdfs://10.81.47.41:8020/hbase/default/TEST/1418428042/DSMP/4759508618286845475_, type the following:
+For example, to view the content of the file _hdfs://10.81.47.41:9000/hbase/default/TEST/1418428042/DSMP/4759508618286845475_, type the following:
 [source,bash]
 ----
- $ ${HBASE_HOME}/bin/hbase hfile -v -f hdfs://10.81.47.41:8020/hbase/default/TEST/1418428042/DSMP/4759508618286845475
+ $ ${HBASE_HOME}/bin/hbase hfile -v -f hdfs://10.81.47.41:9000/hbase/default/TEST/1418428042/DSMP/4759508618286845475
 ----
 If you leave off the option -v to see just a summary on the HFile.
 See usage for other things to do with the `hfile` tool.
@@ -2462,7 +2875,7 @@ create 'orders_table', 'blobs_cf', CONFIGURATION => {'hbase.hstore.engine.class'
 +
 [source,sql]
 ----
-alter 'orders_table', CONFIGURATION => {'hbase.hstore.engine.class' => 'rg.apache.hadoop.hbase.regionserver.DefaultStoreEngine'}
+alter 'orders_table', CONFIGURATION => {'hbase.hstore.engine.class' => 'org.apache.hadoop.hbase.regionserver.DefaultStoreEngine'}
 ----
 
 . Enable the table.
@@ -2929,8 +3342,7 @@ Note how the META replication period is distinct from the user-space
 `hbase.regionserver.storefile.refresh.period` value.
 
 ==== Async WAL Replication for META table as of hbase-2.4.0+ ====
-Async WAL replication for META is added as a new feature in 2.4.0. It is still under
-active development. Use with caution. Set
+Async WAL replication for META is added as a new feature in 2.4.0. Set
 `hbase.region.replica.replication.catalog.enabled` to enable async WAL Replication
 for META region replicas. It is off by default.
 
@@ -2951,12 +3363,15 @@ table. And the ability to alter META table is also kept.
 
 ==== Load Balancing META table load ====
 
-hbase-2.4.0 also adds a *new* client-side `LoadBalance` mode. When enabled
+hbase-2.4.0 also adds a new client-side `LoadBalance` mode. When enabled
 client-side, clients will try to read META replicas first before falling back on
 the primary. Before this, the replica lookup mode -- now named `HedgedRead` in
 hbase-2.4.0 -- had clients read the primary and if no response after a
 configurable amount of time had elapsed, it would start up reads against the
-replicas.
+replicas. Starting from hbase-2.4.12(and all higher minor versions), with
+client-side `LoadBalance` mode, clients load balance META scan requests across
+all META replica regions, including the primary META region. In case of exceptions
+such as NotServingRegionException, it will fall back on the primary META region.
 
 The new 'LoadBalance' mode helps alleviate hotspotting on the META
 table distributing META read load.
@@ -2968,8 +3383,6 @@ to "LoadBalance". Valid options for this configuration are `None`, `HedgedRead`,
 through to `HedgedRead`, the current default).  Do NOT put this configuration in any
 hbase server-side's configuration, Master or RegionServer (Master could make decisions
 based off stale state -- to be avoided).
-
-`LoadBalance` also is a new feature. Use with caution.
 
 === Memory accounting
 The secondary region replicas refer to the data files of the primary region replica, but they have their own memstores (in HBase-1.1+) and uses block cache as well. However, one distinction is that the secondary region replicas cannot flush the data when there is memory pressure for their memstores. They can only free up memstore memory when the primary region does a flush and this flush is replicated to the secondary. Since in a region server hosting primary replicas for some regions and secondaries for some others, the secondaries might cause extra flushes to the primary regions in the same host. In extreme situations, there can be no memory left for adding new writes coming from the primary via wal replication. For unblocking this situation (and since secondary cannot flush by itself), the secondary is allowed to do a “store file refresh” by doing a file system list operation to pick up new files from primary, and possibly dropping its memstore. This refresh will only be performed if the memstore size of the biggest secondary region replica is at least `hbase.region.replica.storefile.refresh.memstore.multiplier` (default 4) times bigger than the biggest memstore of a primary replica. One caveat is that if this is performed, the secondary can observe partial row updates across column families (since column families are flushed independently). The default should be good to not do this operation frequently. You can set this value to a large number to disable this feature if desired, but be warned that it might cause the replication to block forever.
@@ -3014,20 +3427,6 @@ Instead you can change the number of region replicas per table to increase or de
       Whether asynchronous WAL replication to the secondary region replicas is enabled or not. If this is enabled, a replication peer named "region_replica_replication" will be created which will tail the logs and replicate the mutations to region replicas for tables that have region replication > 1. If this is enabled once, disabling this replication also requires disabling the replication peer using shell or Admin java class. Replication to secondary region replicas works over standard inter-cluster replication.
     </description>
 </property>
-<property>
-  <name>hbase.region.replica.replication.memstore.enabled</name>
-  <value>true</value>
-  <description>
-    If you set this to `false`, replicas do not receive memstore updates from
-    the primary RegionServer. If you set this to `true`, you can still disable
-    memstore replication on a per-table basis, by setting the table's
-    `REGION_MEMSTORE_REPLICATION` configuration property to `false`. If
-    memstore replication is disabled, the secondaries will only receive
-    updates for events like flushes and bulkloads, and will not have access to
-    data which the primary has not yet flushed. This preserves the guarantee
-    of row-level consistency, even when the read requests `Consistency.TIMELINE`.
-  </description>
-</property>
 
 <property>
     <name>hbase.master.hfilecleaner.ttl</name>
@@ -3048,7 +3447,7 @@ Instead you can change the number of region replicas per table to increase or de
  <name>hbase.region.replica.wait.for.primary.flush</name>
     <value>true</value>
     <description>
-      Whether to wait for observing a full flush cycle from the primary before start serving data in a secondary. Disabling this might cause the secondary region replicas to go back in time for reads between region movements.
+      Whether to wait for observing a full flush cycle from the primary before start serving data in a secondary. Disabling this might cause the secondary region replicas to go back in time for reads between region movements.Please note that if you set per-table property `REGION_MEMSTORE_REPLICATION` to false,`hbase.region.replica.wait.for.primary.flush` will be ignored.
     </description>
 </property>
 ----
@@ -3113,6 +3512,9 @@ You can also see the replica ids shown explicitly in the UI.
 Region replication is a per-table property.
 All tables have `REGION_REPLICATION = 1` by default, which means that there is only one replica per region.
 You can set and change the number of replicas per region of a table by supplying the `REGION_REPLICATION` property in the table descriptor.
+
+There is another per-table property `REGION_MEMSTORE_REPLICATION`.All tables have `REGION_MEMSTORE_REPLICATION = true`
+by default, which means the new data written to the primary region should be replicated. If you set this to `false`, replicas do not receive memstore updates from the primary RegionServer,they will only receive updates for events like flushes and bulkloads, and will not have access to data which the primary has not yet flushed. Please note that if you set `REGION_MEMSTORE_REPLICATION` to false,`hbase.region.replica.wait.for.primary.flush` will be ignored.
 
 
 ==== Shell

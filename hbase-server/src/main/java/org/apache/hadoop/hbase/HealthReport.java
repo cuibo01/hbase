@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -35,8 +35,6 @@ class HealthReport {
 
   /**
    * Gets the status of the region server.
-   *
-   * @return HealthCheckerExitStatus
    */
   HealthCheckerExitStatus getStatus() {
     return status;
@@ -49,8 +47,6 @@ class HealthReport {
 
   /**
    * Gets the health report of the region server.
-   *
-   * @return String
    */
   String getHealthReport() {
     return healthReport;

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver;
 
 import java.util.List;
@@ -35,28 +34,24 @@ public interface MetricsRegionServerWrapper {
 
   /**
    * Get the Cluster ID
-   *
    * @return Cluster ID
    */
   String getClusterId();
 
   /**
    * Get the ZooKeeper Quorum Info
-   *
    * @return ZooKeeper Quorum Info
    */
   String getZookeeperQuorum();
 
   /**
    * Get the co-processors
-   *
    * @return Co-processors
    */
   String getCoprocessors();
 
   /**
    * Get HRegionServer start time
-   *
    * @return Start time of RegionServer in milliseconds
    */
   long getStartCode();
@@ -91,15 +86,30 @@ public interface MetricsRegionServerWrapper {
    */
   long getNumWALSlowAppend();
 
-    /**
-     * Get the number of store files hosted on this region server.
-     */
+  /**
+   * Get the number of store files hosted on this region server.
+   */
   long getNumStoreFiles();
+
+  /**
+   * Get the max number of store files across all regions of this region server.
+   */
+  long getMaxStoreFiles();
 
   /**
    * Get the size of the memstore on this region server.
    */
   long getMemStoreSize();
+
+  /**
+   * Get the size of the on heap memstore on this region server.
+   */
+  long getOnHeapMemStoreSize();
+
+  /**
+   * Get the size of the off heap memstore on this region server.
+   */
+  long getOffHeapMemStoreSize();
 
   /**
    * Get the total size of the store files this region server is serving from.
@@ -111,24 +121,16 @@ public interface MetricsRegionServerWrapper {
    */
   double getStoreFileSizeGrowthRate();
 
-  /**
-   * @return Max age of store files hosted on this region server
-   */
+  /** Returns Max age of store files hosted on this region server */
   long getMaxStoreFileAge();
 
-  /**
-   * @return Min age of store files hosted on this region server
-   */
+  /** Returns Min age of store files hosted on this region server */
   long getMinStoreFileAge();
 
-  /**
-   *  @return Average age of store files hosted on this region server
-   */
+  /** Returns Average age of store files hosted on this region server */
   long getAvgStoreFileAge();
 
-  /**
-   *  @return Number of reference files on this region server
-   */
+  /** Returns Number of reference files on this region server */
   long getNumReferenceFiles();
 
   /**
@@ -197,13 +199,28 @@ public interface MetricsRegionServerWrapper {
   long getTotalStaticBloomSize();
 
   /**
+   * Count of bloom filter requests.
+   */
+  long getBloomFilterRequestsCount();
+
+  /**
+   * Count of bloom filter requests which return a negative result.
+   */
+  long getBloomFilterNegativeResultsCount();
+
+  /**
+   * Count of requests which could have used bloom filters, but they weren't configured or loaded.
+   */
+  long getBloomFilterEligibleRequestsCount();
+
+  /**
    * Number of mutations received with WAL explicitly turned off.
    */
   long getNumMutationsWithoutWAL();
 
   /**
-   * Ammount of data in the memstore but not in the WAL because mutations explicitly had their
-   * WAL turned off.
+   * Ammount of data in the memstore but not in the WAL because mutations explicitly had their WAL
+   * turned off.
    */
   long getDataInMemoryWithoutWAL();
 
@@ -211,6 +228,11 @@ public interface MetricsRegionServerWrapper {
    * Get the percent of HFiles' that are local.
    */
   double getPercentFileLocal();
+
+  /**
+   * Get the percent of HFiles' that are local for primary region replicas.
+   */
+  double getPercentFileLocalPrimaryRegions();
 
   /**
    * Get the percent of HFiles' that are local for secondary region replicas.
@@ -236,7 +258,22 @@ public interface MetricsRegionServerWrapper {
    */
   int getFlushQueueSize();
 
+  /**
+   * Get the limit size of the off heap memstore (if enabled), otherwise get the limit size of the
+   * on heap memstore.
+   */
   long getMemStoreLimit();
+
+  /**
+   * Get the limit size of the on heap memstore.
+   */
+  long getOnHeapMemStoreLimit();
+
+  /**
+   * Get the limit size of the off heap memstore.
+   */
+  long getOffHeapMemStoreLimit();
+
   /**
    * Get the size (in bytes) of the block cache that is free.
    */
@@ -246,6 +283,11 @@ public interface MetricsRegionServerWrapper {
    * Get the number of items in the block cache.
    */
   long getBlockCacheCount();
+
+  /**
+   * Get the number of DATA blocks in the block cache.
+   */
+  long getBlockCacheDataBlockCount();
 
   /**
    * Get the total size (in bytes) of the block cache.
@@ -263,6 +305,11 @@ public interface MetricsRegionServerWrapper {
   long getBlockCachePrimaryHitCount();
 
   /**
+   * Get the count of hits to the block cache, for cacheable requests only.
+   */
+  long getBlockCacheHitCachingCount();
+
+  /**
    * Get the count of misses to the block cache.
    */
   long getBlockCacheMissCount();
@@ -273,6 +320,11 @@ public interface MetricsRegionServerWrapper {
   long getBlockCachePrimaryMissCount();
 
   /**
+   * Get the count of misses to the block cache, for cacheable requests only.
+   */
+  long getBlockCacheMissCachingCount();
+
+  /**
    * Get the number of items evicted from the block cache.
    */
   long getBlockCacheEvictedCount();
@@ -281,7 +333,6 @@ public interface MetricsRegionServerWrapper {
    * Get the number of items evicted from primary replica in the block cache.
    */
   long getBlockCachePrimaryEvictedCount();
-
 
   /**
    * Get the percent of all requests that hit the block cache.
@@ -299,9 +350,34 @@ public interface MetricsRegionServerWrapper {
   long getBlockCacheFailedInsertions();
 
   /**
+   * Cache size (bytes) of L1 cache
+   */
+  long getL1CacheSize();
+
+  /**
+   * Free cache size (bytes) of L1 cache
+   */
+  long getL1CacheFreeSize();
+
+  /**
+   * Number of blocks in L1 cache
+   */
+  long getL1CacheCount();
+
+  /**
+   * Number of blocks evicted from L1 cache
+   */
+  long getL1CacheEvictedCount();
+
+  /**
    * Hit count of L1 cache.
    */
   long getL1CacheHitCount();
+
+  /**
+   * Hit Caching count of L1 cache, for cacheable requests only.
+   */
+  long getL1CacheHitCachingCount();
 
   /**
    * Miss count of L1 cache.
@@ -309,9 +385,19 @@ public interface MetricsRegionServerWrapper {
   long getL1CacheMissCount();
 
   /**
+   * Miss Caching count of L1 cache, for cacheable requests only.
+   */
+  long getL1CacheMissCachingCount();
+
+  /**
    * Hit ratio of L1 cache.
    */
   double getL1CacheHitRatio();
+
+  /**
+   * Hit Caching ratio of L1 cache.
+   */
+  double getL1CacheHitCachingRatio();
 
   /**
    * Miss ratio of L1 cache.
@@ -319,9 +405,39 @@ public interface MetricsRegionServerWrapper {
   double getL1CacheMissRatio();
 
   /**
+   * Miss Caching ratio of L1 cache.
+   */
+  double getL1CacheMissCachingRatio();
+
+  /**
+   * Cache size (bytes) of L2 cache
+   */
+  long getL2CacheSize();
+
+  /**
+   * Free cache size (bytes) of L2 cache
+   */
+  long getL2CacheFreeSize();
+
+  /**
+   * Number of blocks in L2 cache
+   */
+  long getL2CacheCount();
+
+  /**
+   * Number of blocks evicted from L2 cache
+   */
+  long getL2CacheEvictedCount();
+
+  /**
    * Hit count of L2 cache.
    */
   long getL2CacheHitCount();
+
+  /**
+   * Hit Caching count of L2 cache, for cacheable requests only.
+   */
+  long getL2CacheHitCachingCount();
 
   /**
    * Miss count of L2 cache.
@@ -329,14 +445,29 @@ public interface MetricsRegionServerWrapper {
   long getL2CacheMissCount();
 
   /**
+   * Miss Caching count of L2 cache, for cacheable requests only.
+   */
+  long getL2CacheMissCachingCount();
+
+  /**
    * Hit ratio of L2 cache.
    */
   double getL2CacheHitRatio();
 
   /**
+   * Hit Caching ratio of L2 cache.
+   */
+  double getL2CacheHitCachingRatio();
+
+  /**
    * Miss ratio of L2 cache.
    */
   double getL2CacheMissRatio();
+
+  /**
+   * Miss Caching ratio of L2 cache.
+   */
+  double getL2CacheMissCachingRatio();
 
   /**
    * Force a re-computation of the metrics.
@@ -448,43 +579,29 @@ public interface MetricsRegionServerWrapper {
    */
   double getMobFileCacheHitPercent();
 
-  /**
-   * @return Count of hedged read operations
-   */
+  /** Returns Count of hedged read operations */
   long getHedgedReadOps();
 
-  /**
-   * @return Count of times a hedged read beat out the primary read.
-   */
+  /** Returns Count of times a hedged read beat out the primary read. */
   long getHedgedReadWins();
 
-  /**
-   * @return Count of times a hedged read executes in current thread
-   */
+  /** Returns Count of times a hedged read executes in current thread */
   long getHedgedReadOpsInCurThread();
 
-  /**
-   * @return Number of total bytes read from HDFS.
-   */
+  /** Returns Number of total bytes read from HDFS. */
   long getTotalBytesRead();
 
-  /**
-   * @return Number of bytes read from the local HDFS DataNode.
-   */
+  /** Returns Number of bytes read from the local HDFS DataNode. */
   long getLocalBytesRead();
 
-  /**
-   * @return Number of bytes read locally through HDFS short circuit.
-   */
+  /** Returns Number of bytes read locally through HDFS short circuit. */
   long getShortCircuitBytesRead();
 
-  /**
-   * @return Number of bytes read locally through HDFS zero copy.
-   */
+  /** Returns Number of bytes read locally through HDFS zero copy. */
   long getZeroCopyBytesRead();
 
   /**
-   * @return Count of requests blocked because the memstore size is larger than blockingMemStoreSize
+   * Returns Count of requests blocked because the memstore size is larger than blockingMemStoreSize
    */
   long getBlockedRequestsCount();
 
@@ -569,4 +686,6 @@ public interface MetricsRegionServerWrapper {
   long getByteBuffAllocatorTotalBufferCount();
 
   long getByteBuffAllocatorUsedBufferCount();
+
+  int getActiveScanners();
 }

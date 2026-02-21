@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.chaos.actions;
 
 import java.io.IOException;
@@ -29,16 +28,16 @@ import org.slf4j.LoggerFactory;
  */
 public class AddCPULoadAction extends SudoCommandAction {
   private static final Logger LOG = LoggerFactory.getLogger(AddCPULoadAction.class);
+  @SuppressWarnings("InlineFormatString")
   private static final String CPU_LOAD_COMMAND =
-      "seq 1 %s | xargs -I{} -n 1 -P %s timeout %s dd if=/dev/urandom of=/dev/null bs=1M " +
-          "iflag=fullblock";
+    "seq 1 %s | xargs -I{} -n 1 -P %s timeout %s dd if=/dev/urandom of=/dev/null bs=1M "
+      + "iflag=fullblock";
 
   private final long duration;
   private final long processes;
 
   /**
    * Add high load to cpu
-   *
    * @param duration  Duration that this thread should generate the load for in milliseconds
    * @param processes The number of parallel processes, should be equal to cpu threads for max load
    */
@@ -48,10 +47,12 @@ public class AddCPULoadAction extends SudoCommandAction {
     this.processes = processes;
   }
 
-  @Override protected Logger getLogger() {
+  @Override
+  protected Logger getLogger() {
     return LOG;
   }
 
+  @Override
   protected void localPerform() throws IOException {
     getLogger().info("Starting to execute AddCPULoadAction");
     ServerName server = PolicyBasedChaosMonkey.selectRandomItem(getCurrentServers());
@@ -59,14 +60,14 @@ public class AddCPULoadAction extends SudoCommandAction {
 
     try {
       clusterManager.execSudo(hostname, timeout, getCommand());
-    } catch (IOException ex){
-      //This will always happen. We use timeout to kill a continuously running process
-      //after the duration expires
+    } catch (IOException ex) {
+      // This will always happen. We use timeout to kill a continuously running process
+      // after the duration expires
     }
     getLogger().info("Finished to execute AddCPULoadAction");
   }
 
-  private String getCommand(){
-    return String.format(CPU_LOAD_COMMAND, processes, processes, duration/1000f);
+  private String getCommand() {
+    return String.format(CPU_LOAD_COMMAND, processes, processes, duration / 1000f);
   }
 }

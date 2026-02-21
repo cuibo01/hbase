@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,14 +17,9 @@
  */
 package org.apache.hadoop.hbase.security;
 
-import org.apache.hbase.thirdparty.io.netty.channel.ChannelPipeline;
-import org.apache.hbase.thirdparty.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-
 import java.io.IOException;
 import java.net.InetAddress;
-
 import javax.security.sasl.Sasl;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.security.provider.SaslClientAuthenticationProvider;
 import org.apache.hadoop.security.token.Token;
@@ -32,6 +27,9 @@ import org.apache.hadoop.security.token.TokenIdentifier;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.io.netty.channel.ChannelPipeline;
+import org.apache.hbase.thirdparty.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 
 /**
  * Implement SASL logic for netty rpc client.
@@ -42,21 +40,22 @@ public class NettyHBaseSaslRpcClient extends AbstractHBaseSaslRpcClient {
   private static final Logger LOG = LoggerFactory.getLogger(NettyHBaseSaslRpcClient.class);
 
   public NettyHBaseSaslRpcClient(Configuration conf, SaslClientAuthenticationProvider provider,
-      Token<? extends TokenIdentifier> token, InetAddress serverAddr, SecurityInfo securityInfo,
-      boolean fallbackAllowed, String rpcProtection) throws IOException {
-    super(conf, provider, token, serverAddr, securityInfo, fallbackAllowed, rpcProtection);
+    Token<? extends TokenIdentifier> token, InetAddress serverAddr, String serverPrincipal,
+    boolean fallbackAllowed, String rpcProtection) throws IOException {
+    super(conf, provider, token, serverAddr, serverPrincipal, fallbackAllowed, rpcProtection);
   }
 
-  public void setupSaslHandler(ChannelPipeline p) {
+  public void setupSaslHandler(ChannelPipeline p, String addAfter) throws IOException {
     String qop = (String) saslClient.getNegotiatedProperty(Sasl.QOP);
     LOG.trace("SASL client context established. Negotiated QoP {}", qop);
+    verifyNegotiatedQop();
     if (qop == null || "auth".equalsIgnoreCase(qop)) {
       return;
     }
     // add wrap and unwrap handlers to pipeline.
-    p.addFirst(new SaslWrapHandler(saslClient),
-      new LengthFieldBasedFrameDecoder(Integer.MAX_VALUE, 0, 4, 0, 4),
-      new SaslUnwrapHandler(saslClient));
+    p.addAfter(addAfter, null, new SaslUnwrapHandler(saslClient::unwrap))
+      .addAfter(addAfter, null, new LengthFieldBasedFrameDecoder(Integer.MAX_VALUE, 0, 4, 0, 4))
+      .addAfter(addAfter, null, new SaslWrapHandler(saslClient::wrap));
   }
 
   public String getSaslQOP() {

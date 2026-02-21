@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,7 +24,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.RegionReplicaUtil;
 import org.apache.hadoop.hbase.master.HMaster;
@@ -45,8 +43,6 @@ import org.apache.yetus.audience.InterfaceStability;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionServerStartupResponse;
-
 /**
  * This class creates a single process HBase cluster. each server. The master uses the 'default'
  * FileSystem. The RegionServers, if we are running on DistributedFilesystem, create a FileSystem
@@ -62,7 +58,7 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
 
   /**
    * Start a MiniHBaseCluster.
-   * @param conf Configuration to be used for cluster
+   * @param conf             Configuration to be used for cluster
    * @param numRegionServers initial number of region servers to start.
    */
   public SingleProcessHBaseCluster(Configuration conf, int numRegionServers)
@@ -72,8 +68,8 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
 
   /**
    * Start a MiniHBaseCluster.
-   * @param conf Configuration to be used for cluster
-   * @param numMasters initial number of masters to start.
+   * @param conf             Configuration to be used for cluster
+   * @param numMasters       initial number of masters to start.
    * @param numRegionServers initial number of region servers to start.
    */
   public SingleProcessHBaseCluster(Configuration conf, int numMasters, int numRegionServers)
@@ -83,8 +79,8 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
 
   /**
    * Start a MiniHBaseCluster.
-   * @param conf Configuration to be used for cluster
-   * @param numMasters initial number of masters to start.
+   * @param conf             Configuration to be used for cluster
+   * @param numMasters       initial number of masters to start.
    * @param numRegionServers initial number of region servers to start.
    */
   public SingleProcessHBaseCluster(Configuration conf, int numMasters, int numRegionServers,
@@ -96,9 +92,9 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
 
   /**
    * @param rsPorts Ports that RegionServer should use; pass ports if you want to test cluster
-   *          restart where for sure the regionservers come up on same address+port (but just with
-   *          different startcode); by default mini hbase clusters choose new arbitrary ports on
-   *          each cluster start.
+   *                restart where for sure the regionservers come up on same address+port (but just
+   *                with different startcode); by default mini hbase clusters choose new arbitrary
+   *                ports on each cluster start.
    */
   public SingleProcessHBaseCluster(Configuration conf, int numMasters, int numAlwaysStandByMasters,
     int numRegionServers, List<Integer> rsPorts, Class<? extends HMaster> masterClass,
@@ -124,7 +120,7 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
    * only, not All filesystems as the FileSystem system exit hook does.
    */
   public static class MiniHBaseClusterRegionServer extends HRegionServer {
-    private Thread shutdownThread = null;
+
     private User user = null;
     /**
      * List of RegionServers killed so far. ServerName also comprises startCode of a server, so any
@@ -140,14 +136,6 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
     }
 
     @Override
-    protected void handleReportForDutyResponse(final RegionServerStartupResponse c)
-      throws IOException {
-      super.handleReportForDutyResponse(c);
-      // Run this thread to shutdown our filesystem on way out.
-      this.shutdownThread = new SingleFileSystemShutdownThread(getFileSystem());
-    }
-
-    @Override
     public void run() {
       try {
         this.user.runAs(new PrivilegedAction<Object>() {
@@ -159,12 +147,6 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
         });
       } catch (Throwable t) {
         LOG.error("Exception in run", t);
-      } finally {
-        // Run this on the way out.
-        if (this.shutdownThread != null) {
-          this.shutdownThread.start();
-          Threads.shutdown(this.shutdownThread, 30000);
-        }
       }
     }
 
@@ -191,31 +173,6 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
 
     private void abortRegionServer(String reason, Throwable cause) {
       super.abort(reason, cause);
-    }
-  }
-
-  /**
-   * Alternate shutdown hook. Just shuts down the passed fs, not all as default filesystem hook
-   * does.
-   */
-  static class SingleFileSystemShutdownThread extends Thread {
-    private final FileSystem fs;
-
-    SingleFileSystemShutdownThread(final FileSystem fs) {
-      super("Shutdown of " + fs);
-      this.fs = fs;
-    }
-
-    @Override
-    public void run() {
-      try {
-        LOG.info("Hook closing fs=" + this.fs);
-        this.fs.close();
-      } catch (NullPointerException npe) {
-        LOG.debug("Need to fix these: " + npe.toString());
-      } catch (IOException e) {
-        LOG.warn("Running hook", e);
-      }
     }
   }
 
@@ -301,6 +258,16 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
   }
 
   @Override
+  public void waitForRegionServerToSuspend(ServerName serverName, long timeout) throws IOException {
+    LOG.warn("Waiting for regionserver to suspend on mini cluster is not supported");
+  }
+
+  @Override
+  public void waitForRegionServerToResume(ServerName serverName, long timeout) throws IOException {
+    LOG.warn("Waiting for regionserver to resume on mini cluster is not supported");
+  }
+
+  @Override
   public void startZkNode(String hostname, int port) throws IOException {
     LOG.warn("Starting zookeeper nodes on mini cluster is not supported");
   }
@@ -373,6 +340,31 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
   @Override
   public void waitForNameNodeToStop(ServerName serverName, long timeout) throws IOException {
     LOG.warn("Waiting for namenodes to stop on mini cluster is not supported");
+  }
+
+  @Override
+  public void startJournalNode(ServerName serverName) {
+    LOG.warn("Starting journalnodes on mini cluster is not supported");
+  }
+
+  @Override
+  public void killJournalNode(ServerName serverName) {
+    LOG.warn("Aborting journalnodes on mini cluster is not supported");
+  }
+
+  @Override
+  public void stopJournalNode(ServerName serverName) {
+    LOG.warn("Stopping journalnodes on mini cluster is not supported");
+  }
+
+  @Override
+  public void waitForJournalNodeToStart(ServerName serverName, long timeout) {
+    LOG.warn("Waiting for journalnodes to start on mini cluster is not supported");
+  }
+
+  @Override
+  public void waitForJournalNodeToStop(ServerName serverName, long timeout) {
+    LOG.warn("Waiting for journalnodes to stop on mini cluster is not supported");
   }
 
   @Override
@@ -470,9 +462,10 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
   /**
    * Shut down the specified region server cleanly
    * @param serverNumber Used as index into a list.
-   * @param shutdownFS True is we are to shutdown the filesystem as part of this regionserver's
-   *          shutdown. Usually we do but you do not want to do this if you are running multiple
-   *          regionservers in a test and you shut down one before end of the test.
+   * @param shutdownFS   True is we are to shutdown the filesystem as part of this regionserver's
+   *                     shutdown. Usually we do but you do not want to do this if you are running
+   *                     multiple regionservers in a test and you shut down one before end of the
+   *                     test.
    * @return the region server that was stopped
    */
   public JVMClusterUtil.RegionServerThread stopRegionServer(int serverNumber,
@@ -585,9 +578,9 @@ public class SingleProcessHBaseCluster extends HBaseClusterInterface {
   /**
    * Shut down the specified master cleanly
    * @param serverNumber Used as index into a list.
-   * @param shutdownFS True is we are to shutdown the filesystem as part of this master's shutdown.
-   *          Usually we do but you do not want to do this if you are running multiple master in a
-   *          test and you shut down one before end of the test.
+   * @param shutdownFS   True is we are to shutdown the filesystem as part of this master's
+   *                     shutdown. Usually we do but you do not want to do this if you are running
+   *                     multiple master in a test and you shut down one before end of the test.
    * @return the master that was stopped
    */
   public JVMClusterUtil.MasterThread stopMaster(int serverNumber, final boolean shutdownFS) {

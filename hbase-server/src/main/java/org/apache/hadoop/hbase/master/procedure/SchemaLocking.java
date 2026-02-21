@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,6 +22,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import org.apache.commons.lang3.builder.ToStringBuilder;
+import org.apache.commons.lang3.builder.ToStringStyle;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.master.locking.LockProcedure;
@@ -53,6 +56,7 @@ class SchemaLocking {
   // Single map for all regions irrespective of tables. Key is encoded region name.
   private final Map<String, LockAndQueue> regionLocks = new HashMap<>();
   private final Map<String, LockAndQueue> peerLocks = new HashMap<>();
+  private final Map<String, LockAndQueue> globalLocks = new HashMap<>();
   private final LockAndQueue metaLock;
 
   public SchemaLocking(Function<Long, Procedure<?>> procedureRetriever) {
@@ -94,6 +98,10 @@ class SchemaLocking {
     return metaLock;
   }
 
+  LockAndQueue getGlobalLock(String globalId) {
+    return getLock(globalLocks, globalId);
+  }
+
   LockAndQueue removeRegionLock(String encodedRegionName) {
     return regionLocks.remove(encodedRegionName);
   }
@@ -114,8 +122,12 @@ class SchemaLocking {
     return peerLocks.remove(peerId);
   }
 
+  LockAndQueue removeGlobalLock(String globalId) {
+    return globalLocks.remove(globalId);
+  }
+
   private LockedResource createLockedResource(LockedResourceType resourceType, String resourceName,
-      LockAndQueue queue) {
+    LockAndQueue queue) {
     LockType lockType;
     Procedure<?> exclusiveLockOwnerProcedure;
     int sharedLockCount;
@@ -140,8 +152,8 @@ class SchemaLocking {
   }
 
   private <T> void addToLockedResources(List<LockedResource> lockedResources,
-      Map<T, LockAndQueue> locks, Function<T, String> keyTransformer,
-      LockedResourceType resourcesType) {
+    Map<T, LockAndQueue> locks, Function<T, String> keyTransformer,
+    LockedResourceType resourcesType) {
     locks.entrySet().stream().filter(e -> e.getValue().isLocked())
       .map(e -> createLockedResource(resourcesType, keyTransformer.apply(e.getKey()), e.getValue()))
       .forEachOrdered(lockedResources::add);
@@ -164,6 +176,8 @@ class SchemaLocking {
     addToLockedResources(lockedResources, peerLocks, Function.identity(), LockedResourceType.PEER);
     addToLockedResources(lockedResources, ImmutableMap.of(TableName.META_TABLE_NAME, metaLock),
       tn -> tn.getNameAsString(), LockedResourceType.META);
+    addToLockedResources(lockedResources, globalLocks, Function.identity(),
+      LockedResourceType.GLOBAL);
     return lockedResources;
   }
 
@@ -191,6 +205,10 @@ class SchemaLocking {
         break;
       case META:
         queue = metaLock;
+        break;
+      case GLOBAL:
+        queue = globalLocks.get(resourceName);
+        break;
       default:
         queue = null;
         break;
@@ -212,26 +230,18 @@ class SchemaLocking {
 
   @Override
   public String toString() {
-    return "serverLocks=" + filterUnlocked(this.serverLocks) + ", namespaceLocks=" +
-      filterUnlocked(this.namespaceLocks) + ", tableLocks=" + filterUnlocked(this.tableLocks) +
-      ", regionLocks=" + filterUnlocked(this.regionLocks) + ", peerLocks=" +
-      filterUnlocked(this.peerLocks) + ", metaLocks=" +
-      filterUnlocked(ImmutableMap.of(TableName.META_TABLE_NAME, metaLock));
+    return new ToStringBuilder(this, ToStringStyle.SHORT_PREFIX_STYLE)
+      .append("serverLocks", filterUnlocked(serverLocks))
+      .append("namespaceLocks", filterUnlocked(namespaceLocks))
+      .append("tableLocks", filterUnlocked(tableLocks))
+      .append("regionLocks", filterUnlocked(regionLocks))
+      .append("peerLocks", filterUnlocked(peerLocks))
+      .append("metaLocks", filterUnlocked(ImmutableMap.of(TableName.META_TABLE_NAME, metaLock)))
+      .append("globalLocks", filterUnlocked(globalLocks)).build();
   }
 
   private String filterUnlocked(Map<?, LockAndQueue> locks) {
-    StringBuilder sb = new StringBuilder("{");
-    int initialLength = sb.length();
-    for (Map.Entry<?, LockAndQueue> entry : locks.entrySet()) {
-      if (!entry.getValue().isLocked()) {
-        continue;
-      }
-      if (sb.length() > initialLength) {
-        sb.append(", ");
-      }
-      sb.append("{").append(entry.getKey()).append("=").append(entry.getValue()).append("}");
-    }
-    sb.append("}");
-    return sb.toString();
+    return locks.entrySet().stream().filter(val -> !val.getValue().isLocked())
+      .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)).toString();
   }
 }

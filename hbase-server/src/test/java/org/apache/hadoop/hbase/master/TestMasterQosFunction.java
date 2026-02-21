@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -37,21 +37,22 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.mockito.Mockito;
 
+import org.apache.hbase.thirdparty.com.google.protobuf.ByteString;
+
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos;
 
-@Category({MasterTests.class, SmallTests.class})
+@Category({ MasterTests.class, SmallTests.class })
 public class TestMasterQosFunction extends QosTestBase {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMasterQosFunction.class);
+    HBaseClassTestRule.forClass(TestMasterQosFunction.class);
 
   private Configuration conf;
   private MasterRpcServices rpcServices;
   private MasterAnnotationReadingPriorityFunction qosFunction;
-
 
   @Before
   public void setUp() {
@@ -70,38 +71,61 @@ public class TestMasterQosFunction extends QosTestBase {
       ProtobufUtil.toRegionInfo(RegionInfoBuilder.newBuilder(TableName.valueOf("test:table"))
         .setStartKey(Bytes.toBytes("a")).setEndKey(Bytes.toBytes("b")).build());
 
-
-    RegionServerStatusProtos.RegionStateTransition metaTransition = RegionServerStatusProtos
-        .RegionStateTransition.newBuilder()
-        .addRegionInfo(meta_ri)
+    RegionServerStatusProtos.RegionStateTransition metaTransition =
+      RegionServerStatusProtos.RegionStateTransition.newBuilder().addRegionInfo(meta_ri)
         .setTransitionCode(RegionServerStatusProtos.RegionStateTransition.TransitionCode.CLOSED)
         .build();
 
-    RegionServerStatusProtos.RegionStateTransition normalTransition = RegionServerStatusProtos
-        .RegionStateTransition.newBuilder()
-        .addRegionInfo(normal_ri)
+    RegionServerStatusProtos.RegionStateTransition normalTransition =
+      RegionServerStatusProtos.RegionStateTransition.newBuilder().addRegionInfo(normal_ri)
         .setTransitionCode(RegionServerStatusProtos.RegionStateTransition.TransitionCode.CLOSED)
         .build();
 
     RegionServerStatusProtos.ReportRegionStateTransitionRequest metaTransitionRequest =
-        RegionServerStatusProtos.ReportRegionStateTransitionRequest.newBuilder()
-            .setServer(ProtobufUtil.toServerName(ServerName.valueOf("locahost:60020", 100)))
-            .addTransition(normalTransition)
-            .addTransition(metaTransition).build();
+      RegionServerStatusProtos.ReportRegionStateTransitionRequest.newBuilder()
+        .setServer(ProtobufUtil.toServerName(ServerName.valueOf("locahost:60020", 100)))
+        .addTransition(normalTransition).addTransition(metaTransition).build();
 
     RegionServerStatusProtos.ReportRegionStateTransitionRequest normalTransitionRequest =
-        RegionServerStatusProtos.ReportRegionStateTransitionRequest.newBuilder()
-            .setServer(ProtobufUtil.toServerName(ServerName.valueOf("locahost:60020", 100)))
-            .addTransition(normalTransition).build();
+      RegionServerStatusProtos.ReportRegionStateTransitionRequest.newBuilder()
+        .setServer(ProtobufUtil.toServerName(ServerName.valueOf("locahost:60020", 100)))
+        .addTransition(normalTransition).build();
 
     final String reportFuncName = "ReportRegionStateTransition";
-    checkMethod(conf, reportFuncName, 300, qosFunction,
-        metaTransitionRequest);
+    checkMethod(conf, reportFuncName, 300, qosFunction, metaTransitionRequest);
     checkMethod(conf, reportFuncName, HConstants.HIGH_QOS, qosFunction, normalTransitionRequest);
   }
 
   @Test
   public void testAnnotations() {
-    checkMethod(conf, "GetLastFlushedSequenceId", HConstants.ADMIN_QOS, qosFunction);
+    checkMethod(conf, "GetRegionInfo", HConstants.ADMIN_QOS, qosFunction);
+  }
+
+  @Test
+  public void testRegionServerStatusProtos() {
+    RegionServerStatusProtos.RemoteProcedureResult splitWalProcedureResult =
+      RegionServerStatusProtos.RemoteProcedureResult.newBuilder()
+        .setStatus(RegionServerStatusProtos.RemoteProcedureResult.Status.SUCCESS).setProcId(100)
+        .build();
+
+    RegionServerStatusProtos.ReportProcedureDoneRequest splitWalProcedureDoneReport =
+      RegionServerStatusProtos.ReportProcedureDoneRequest.newBuilder()
+        .addResult(splitWalProcedureResult).build();
+
+    RegionServerStatusProtos.GetLastFlushedSequenceIdRequest lastFlushedSequenceIdRequest =
+      RegionServerStatusProtos.GetLastFlushedSequenceIdRequest.newBuilder()
+        .setRegionName(ByteString.copyFrom(RegionInfoBuilder.FIRST_META_REGIONINFO.getRegionName()))
+        .build();
+
+    RegionServerStatusProtos.RegionServerReportRequest regionServerReportRequest =
+      RegionServerStatusProtos.RegionServerReportRequest.newBuilder()
+        .setServer(ProtobufUtil.toServerName(ServerName.valueOf("locahost:60020", 100))).build();
+
+    checkMethod(conf, "ReportProcedureDone", HConstants.HIGH_QOS, qosFunction,
+      splitWalProcedureDoneReport);
+    checkMethod(conf, "GetLastFlushedSequenceId", HConstants.HIGH_QOS, qosFunction,
+      lastFlushedSequenceIdRequest);
+    checkMethod(conf, "RegionServerReport", HConstants.HIGH_QOS, qosFunction,
+      regionServerReportRequest);
   }
 }

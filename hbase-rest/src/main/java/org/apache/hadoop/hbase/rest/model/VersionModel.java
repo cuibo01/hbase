@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.rest.model;
 
 import java.io.IOException;
@@ -26,16 +24,17 @@ import javax.xml.bind.annotation.XmlAttribute;
 import javax.xml.bind.annotation.XmlRootElement;
 import org.apache.hadoop.hbase.rest.ProtobufMessageHandler;
 import org.apache.hadoop.hbase.rest.RESTServlet;
+import org.apache.hadoop.hbase.rest.RestUtil;
+import org.apache.hadoop.hbase.rest.protobuf.generated.VersionMessage.Version;
+import org.apache.hadoop.hbase.util.VersionInfo;
 import org.apache.yetus.audience.InterfaceAudience;
 
+import org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream;
+import org.apache.hbase.thirdparty.com.google.protobuf.Message;
 import org.apache.hbase.thirdparty.org.glassfish.jersey.servlet.ServletContainer;
 
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.shaded.rest.protobuf.generated.VersionMessage.Version;
-
 /**
- * A representation of the collection of versions of the REST gateway software
- * components.
+ * A representation of the collection of versions of the REST gateway software components.
  * <ul>
  * <li>restVersion: REST gateway revision</li>
  * <li>jvmVersion: the JVM vendor and version information</li>
@@ -44,7 +43,7 @@ import org.apache.hadoop.hbase.shaded.rest.protobuf.generated.VersionMessage.Ver
  * <li>jerseyVersion: the version of the embedded Jersey framework</li>
  * </ul>
  */
-@XmlRootElement(name="Version")
+@XmlRootElement(name = "Version")
 @InterfaceAudience.Private
 public class VersionModel implements Serializable, ProtobufMessageHandler {
 
@@ -55,11 +54,14 @@ public class VersionModel implements Serializable, ProtobufMessageHandler {
   private String osVersion;
   private String serverVersion;
   private String jerseyVersion;
+  private String version;
+  private String revision;
 
   /**
    * Default constructor. Do not use.
    */
-  public VersionModel() {}
+  public VersionModel() {
+  }
 
   /**
    * Constructor
@@ -67,56 +69,59 @@ public class VersionModel implements Serializable, ProtobufMessageHandler {
    */
   public VersionModel(ServletContext context) {
     restVersion = RESTServlet.VERSION_STRING;
-    jvmVersion = System.getProperty("java.vm.vendor") + ' ' +
-      System.getProperty("java.version") + '-' +
-      System.getProperty("java.vm.version");
-    osVersion = System.getProperty("os.name") + ' ' +
-      System.getProperty("os.version") + ' ' +
-      System.getProperty("os.arch");
+    jvmVersion = System.getProperty("java.vm.vendor") + ' ' + System.getProperty("java.version")
+      + '-' + System.getProperty("java.vm.version");
+    osVersion = System.getProperty("os.name") + ' ' + System.getProperty("os.version") + ' '
+      + System.getProperty("os.arch");
     serverVersion = context.getServerInfo();
     jerseyVersion = ServletContainer.class.getPackage().getImplementationVersion();
     // Currently, this will always be null because the manifest doesn't have any useful information
     if (jerseyVersion == null) jerseyVersion = "";
+
+    version = VersionInfo.getVersion();
+    revision = VersionInfo.getRevision();
   }
 
-  /**
-   * @return the REST gateway version
-   */
-  @XmlAttribute(name="REST")
+  /** Returns the REST gateway version */
+  @XmlAttribute(name = "REST")
   public String getRESTVersion() {
     return restVersion;
   }
 
-  /**
-   * @return the JVM vendor and version
-   */
-  @XmlAttribute(name="JVM")
+  /** Returns the JVM vendor and version */
+  @XmlAttribute(name = "JVM")
   public String getJVMVersion() {
     return jvmVersion;
   }
 
-  /**
-   * @return the OS name, version, and hardware architecture
-   */
-  @XmlAttribute(name="OS")
+  /** Returns the OS name, version, and hardware architecture */
+  @XmlAttribute(name = "OS")
   public String getOSVersion() {
     return osVersion;
   }
 
-  /**
-   * @return the servlet container version
-   */
-  @XmlAttribute(name="Server")
+  /** Returns the servlet container version */
+  @XmlAttribute(name = "Server")
   public String getServerVersion() {
     return serverVersion;
   }
 
-  /**
-   * @return the version of the embedded Jersey framework
-   */
-  @XmlAttribute(name="Jersey")
+  /** Returns the version of the embedded Jersey framework */
+  @XmlAttribute(name = "Jersey")
   public String getJerseyVersion() {
     return jerseyVersion;
+  }
+
+  /** Returns the build version of the REST server component */
+  @XmlAttribute(name = "Version")
+  public String getVersion() {
+    return version;
+  }
+
+  /** Returns the source control revision of the REST server component */
+  @XmlAttribute(name = "Revision")
+  public String getRevision() {
+    return revision;
   }
 
   /**
@@ -154,7 +159,22 @@ public class VersionModel implements Serializable, ProtobufMessageHandler {
     this.jerseyVersion = version;
   }
 
-  /* (non-Javadoc)
+  /**
+   * @param version the REST server component build version string
+   */
+  public void setVersion(String version) {
+    this.version = version;
+  }
+
+  /**
+   * @param revision the REST server component source control revision string
+   */
+  public void setRevision(String revision) {
+    this.revision = revision;
+  }
+
+  /*
+   * (non-Javadoc)
    * @see java.lang.Object#toString()
    */
   @Override
@@ -170,26 +190,31 @@ public class VersionModel implements Serializable, ProtobufMessageHandler {
     sb.append(serverVersion);
     sb.append("] [Jersey: ");
     sb.append(jerseyVersion);
+    sb.append("] [Version: ");
+    sb.append(version);
+    sb.append("] [Revision: ");
+    sb.append(revision);
     sb.append("]\n");
     return sb.toString();
   }
 
   @Override
-  public byte[] createProtobufOutput() {
+  public Message messageFromObject() {
     Version.Builder builder = Version.newBuilder();
     builder.setRestVersion(restVersion);
     builder.setJvmVersion(jvmVersion);
     builder.setOsVersion(osVersion);
     builder.setServerVersion(serverVersion);
     builder.setJerseyVersion(jerseyVersion);
-    return builder.build().toByteArray();
+    builder.setVersion(version);
+    builder.setRevision(revision);
+    return builder.build();
   }
 
   @Override
-  public ProtobufMessageHandler getObjectFromMessage(byte[] message)
-      throws IOException {
+  public ProtobufMessageHandler getObjectFromMessage(CodedInputStream cis) throws IOException {
     Version.Builder builder = Version.newBuilder();
-    ProtobufUtil.mergeFrom(builder, message);
+    RestUtil.mergeFrom(builder, cis);
     if (builder.hasRestVersion()) {
       restVersion = builder.getRestVersion();
     }
@@ -204,6 +229,12 @@ public class VersionModel implements Serializable, ProtobufMessageHandler {
     }
     if (builder.hasJerseyVersion()) {
       jerseyVersion = builder.getJerseyVersion();
+    }
+    if (builder.hasVersion()) {
+      version = builder.getVersion();
+    }
+    if (builder.hasRevision()) {
+      revision = builder.getRevision();
     }
     return this;
   }

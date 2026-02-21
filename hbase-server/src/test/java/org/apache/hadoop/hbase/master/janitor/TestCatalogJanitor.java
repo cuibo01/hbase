@@ -21,19 +21,21 @@ import static org.apache.hadoop.hbase.util.HFileArchiveTestingUtil.assertArchive
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.SortedMap;
-import java.util.SortedSet;
 import java.util.TreeMap;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -42,7 +44,6 @@ import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.MetaMockingUtil;
-import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
@@ -52,6 +53,7 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.io.Reference;
+import org.apache.hadoop.hbase.master.MasterFileSystem;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.master.assignment.MockMasterServices;
 import org.apache.hadoop.hbase.master.janitor.CatalogJanitor.SplitParentFirstComparator;
@@ -59,13 +61,15 @@ import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility;
 import org.apache.hadoop.hbase.regionserver.ChunkCreator;
 import org.apache.hadoop.hbase.regionserver.HRegionFileSystem;
 import org.apache.hadoop.hbase.regionserver.MemStoreLAB;
+import org.apache.hadoop.hbase.regionserver.StoreContext;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTracker;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerFactory;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.HFileArchiveUtil;
-import org.apache.zookeeper.KeeperException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -101,11 +105,9 @@ public class TestCatalogJanitor {
   }
 
   @Before
-  public void setup() throws IOException, KeeperException {
+  public void setup() throws Exception {
     setRootDirAndCleanIt(HTU, this.name.getMethodName());
-    NavigableMap<ServerName, SortedSet<byte[]>> regionsToRegionServers =
-      new ConcurrentSkipListMap<ServerName, SortedSet<byte[]>>();
-    this.masterServices = new MockMasterServices(HTU.getConfiguration(), regionsToRegionServers);
+    this.masterServices = new MockMasterServices(HTU.getConfiguration());
     this.masterServices.start(10, null);
     this.janitor = new CatalogJanitor(masterServices);
   }
@@ -124,6 +126,110 @@ public class TestCatalogJanitor {
     boolean split) {
     return RegionInfoBuilder.newBuilder(tableName).setStartKey(startKey).setEndKey(endKey)
       .setSplit(split).build();
+  }
+
+  @Test
+  public void testCleanMerge() throws IOException {
+    TableDescriptor td = createTableDescriptorForCurrentMethod();
+    // Create regions.
+    RegionInfo merged =
+      createRegionInfo(td.getTableName(), Bytes.toBytes("aaa"), Bytes.toBytes("eee"));
+    RegionInfo parenta =
+      createRegionInfo(td.getTableName(), Bytes.toBytes("aaa"), Bytes.toBytes("ccc"));
+    RegionInfo parentb =
+      createRegionInfo(td.getTableName(), Bytes.toBytes("ccc"), Bytes.toBytes("eee"));
+
+    List<RegionInfo> parents = new ArrayList<>();
+    parents.add(parenta);
+    parents.add(parentb);
+
+    Path rootdir = this.masterServices.getMasterFileSystem().getRootDir();
+    Path tabledir = CommonFSUtils.getTableDir(rootdir, td.getTableName());
+    Path storedir =
+      HRegionFileSystem.getStoreHomedir(tabledir, merged, td.getColumnFamilies()[0].getName());
+
+    Path parentaRef =
+      createMergeReferenceFile(storedir, tabledir, td.getColumnFamilies()[0], merged, parenta);
+    Path parentbRef =
+      createMergeReferenceFile(storedir, tabledir, td.getColumnFamilies()[0], merged, parentb);
+
+    // references exist, should not clean
+    assertFalse(CatalogJanitor.cleanMergeRegion(masterServices, merged, parents));
+
+    masterServices.getMasterFileSystem().getFileSystem().delete(parentaRef, false);
+
+    // one reference still exists, should not clean
+    assertFalse(CatalogJanitor.cleanMergeRegion(masterServices, merged, parents));
+
+    masterServices.getMasterFileSystem().getFileSystem().delete(parentbRef, false);
+
+    // all references removed, should clean
+    assertTrue(CatalogJanitor.cleanMergeRegion(masterServices, merged, parents));
+  }
+
+  @Test
+  public void testDontCleanMergeIfFileSystemException() throws IOException {
+    TableDescriptor td = createTableDescriptorForCurrentMethod();
+    // Create regions.
+    RegionInfo merged =
+      createRegionInfo(td.getTableName(), Bytes.toBytes("aaa"), Bytes.toBytes("eee"));
+    RegionInfo parenta =
+      createRegionInfo(td.getTableName(), Bytes.toBytes("aaa"), Bytes.toBytes("ccc"));
+    RegionInfo parentb =
+      createRegionInfo(td.getTableName(), Bytes.toBytes("ccc"), Bytes.toBytes("eee"));
+
+    List<RegionInfo> parents = new ArrayList<>();
+    parents.add(parenta);
+    parents.add(parentb);
+
+    Path rootdir = this.masterServices.getMasterFileSystem().getRootDir();
+    Path tabledir = CommonFSUtils.getTableDir(rootdir, td.getTableName());
+    Path storedir =
+      HRegionFileSystem.getStoreHomedir(tabledir, merged, td.getColumnFamilies()[0].getName());
+    createMergeReferenceFile(storedir, tabledir, td.getColumnFamilies()[0], merged, parenta);
+
+    MasterServices mockedMasterServices = spy(masterServices);
+    MasterFileSystem mockedMasterFileSystem = spy(masterServices.getMasterFileSystem());
+    FileSystem mockedFileSystem = spy(masterServices.getMasterFileSystem().getFileSystem());
+
+    when(mockedMasterServices.getMasterFileSystem()).thenReturn(mockedMasterFileSystem);
+    when(mockedMasterFileSystem.getFileSystem()).thenReturn(mockedFileSystem);
+
+    // throw on the first exists check
+    doThrow(new IOException("Some exception")).when(mockedFileSystem).exists(any());
+
+    assertFalse(CatalogJanitor.cleanMergeRegion(mockedMasterServices, merged, parents));
+
+    // throw on the second exists check (within HRegionfileSystem)
+    AtomicBoolean returned = new AtomicBoolean(false);
+    doAnswer(invocationOnMock -> {
+      if (!returned.get()) {
+        returned.set(true);
+        return masterServices.getMasterFileSystem().getFileSystem()
+          .exists(invocationOnMock.getArgument(0));
+      }
+      throw new IOException("Some exception");
+    }).when(mockedFileSystem).exists(any());
+
+    assertFalse(CatalogJanitor.cleanMergeRegion(mockedMasterServices, merged, parents));
+  }
+
+  private Path createMergeReferenceFile(Path storeDir, Path tableDir,
+    ColumnFamilyDescriptor columnFamilyDescriptor, RegionInfo mergedRegion, RegionInfo parentRegion)
+    throws IOException {
+    Reference ref = Reference.createTopReference(mergedRegion.getStartKey());
+    long now = EnvironmentEdgeManager.currentTime();
+    // Reference name has this format: StoreFile#REF_NAME_PARSER
+    Path p = new Path(storeDir, Long.toString(now) + "." + parentRegion.getEncodedName());
+    FileSystem fs = this.masterServices.getMasterFileSystem().getFileSystem();
+    HRegionFileSystem mergedRegionFS =
+      HRegionFileSystem.create(fs.getConf(), fs, tableDir, mergedRegion);
+    StoreContext storeContext =
+      StoreContext.getBuilder().withColumnFamilyDescriptor(columnFamilyDescriptor)
+        .withFamilyStoreDirectoryPath(storeDir).withRegionFileSystem(mergedRegionFS).build();
+    StoreFileTracker sft = StoreFileTrackerFactory.create(fs.getConf(), false, storeContext);
+    sft.createReference(ref, p);
+    return p;
   }
 
   /**
@@ -145,16 +251,23 @@ public class TestCatalogJanitor {
     Path rootdir = this.masterServices.getMasterFileSystem().getRootDir();
     Path tabledir = CommonFSUtils.getTableDir(rootdir, td.getTableName());
     Path parentdir = new Path(tabledir, parent.getEncodedName());
-    Path storedir = HRegionFileSystem.getStoreHomedir(tabledir, splita,
-      td.getColumnFamilies()[0].getName());
+    Path storedir =
+      HRegionFileSystem.getStoreHomedir(tabledir, splita, td.getColumnFamilies()[0].getName());
     Reference ref = Reference.createTopReference(Bytes.toBytes("ccc"));
     long now = EnvironmentEdgeManager.currentTime();
     // Reference name has this format: StoreFile#REF_NAME_PARSER
     Path p = new Path(storedir, Long.toString(now) + "." + parent.getEncodedName());
     FileSystem fs = this.masterServices.getMasterFileSystem().getFileSystem();
-    Path path = ref.write(fs, p);
-    assertTrue(fs.exists(path));
-    LOG.info("Created reference " + path);
+    HRegionFileSystem regionFS =
+      HRegionFileSystem.create(this.masterServices.getConfiguration(), fs, tabledir, splita);
+    StoreContext storeContext =
+      StoreContext.getBuilder().withColumnFamilyDescriptor(td.getColumnFamilies()[0])
+        .withFamilyStoreDirectoryPath(storedir).withRegionFileSystem(regionFS).build();
+    StoreFileTracker sft =
+      StoreFileTrackerFactory.create(this.masterServices.getConfiguration(), false, storeContext);
+    sft.createReference(ref, p);
+    assertTrue(fs.exists(p));
+    LOG.info("Created reference " + p);
     // Add a parentdir for kicks so can check it gets removed by the catalogjanitor.
     fs.mkdirs(parentdir);
     assertFalse(CatalogJanitor.cleanParent(masterServices, parent, r));
@@ -201,7 +314,7 @@ public class TestCatalogJanitor {
   /**
    * Make sure parent with specified end key gets cleaned up even if daughter is cleaned up before
    * it.
-   * @param rootDir the test case name, used as the HBase testing utility root
+   * @param rootDir    the test case name, used as the HBase testing utility root
    * @param lastEndKey the end key of the split parent
    */
   private void parentWithSpecifiedEndKeyCleanedEvenIfDaughterGoneFirst(final String rootDir,
@@ -327,7 +440,7 @@ public class TestCatalogJanitor {
     final Map<RegionInfo, Result> mergedRegions = new TreeMap<>();
     CatalogJanitor spy = spy(this.janitor);
 
-    Report report = new Report();
+    CatalogJanitorReport report = new CatalogJanitorReport();
     report.count = 10;
     report.mergedRegions.putAll(mergedRegions);
     report.splitParents.putAll(splitParents);
@@ -355,7 +468,6 @@ public class TestCatalogJanitor {
 
   /**
    * Test that we correctly archive all the storefiles when a region is deleted
-   * @throws Exception
    */
   @Test
   public void testSplitParentFirstComparator() {
@@ -447,8 +559,8 @@ public class TestCatalogJanitor {
     // the single test passes, but when the full suite is run, things get borked).
     CommonFSUtils.setRootDir(fs.getConf(), rootdir);
     Path tabledir = CommonFSUtils.getTableDir(rootdir, td.getTableName());
-    Path storedir = HRegionFileSystem.getStoreHomedir(tabledir, parent,
-      td.getColumnFamilies()[0].getName());
+    Path storedir =
+      HRegionFileSystem.getStoreHomedir(tabledir, parent, td.getColumnFamilies()[0].getName());
     Path storeArchive = HFileArchiveUtil.getStoreArchivePath(this.masterServices.getConfiguration(),
       parent, tabledir, td.getColumnFamilies()[0].getName());
     LOG.debug("Table dir:" + tabledir);
@@ -488,7 +600,7 @@ public class TestCatalogJanitor {
 
   /**
    * @param description description of the files for logging
-   * @param storeFiles the status of the files to log
+   * @param storeFiles  the status of the files to log
    */
   private void logFiles(String description, FileStatus[] storeFiles) {
     LOG.debug("Current " + description + ": ");
@@ -522,8 +634,8 @@ public class TestCatalogJanitor {
     // the single test passes, but when the full suite is run, things get borked).
     CommonFSUtils.setRootDir(fs.getConf(), rootdir);
     Path tabledir = CommonFSUtils.getTableDir(rootdir, parent.getTable());
-    Path storedir = HRegionFileSystem.getStoreHomedir(tabledir, parent,
-      td.getColumnFamilies()[0].getName());
+    Path storedir =
+      HRegionFileSystem.getStoreHomedir(tabledir, parent, td.getColumnFamilies()[0].getName());
     LOG.info("Old root:" + rootdir);
     LOG.info("Old table:" + tabledir);
     LOG.info("Old store:" + storedir);
@@ -617,15 +729,22 @@ public class TestCatalogJanitor {
     throws IOException {
     Path rootdir = services.getMasterFileSystem().getRootDir();
     Path tabledir = CommonFSUtils.getTableDir(rootdir, parent.getTable());
-    Path storedir = HRegionFileSystem.getStoreHomedir(tabledir, daughter,
-      td.getColumnFamilies()[0].getName());
+    Path storedir =
+      HRegionFileSystem.getStoreHomedir(tabledir, daughter, td.getColumnFamilies()[0].getName());
     Reference ref =
       top ? Reference.createTopReference(midkey) : Reference.createBottomReference(midkey);
     long now = EnvironmentEdgeManager.currentTime();
     // Reference name has this format: StoreFile#REF_NAME_PARSER
     Path p = new Path(storedir, Long.toString(now) + "." + parent.getEncodedName());
     FileSystem fs = services.getMasterFileSystem().getFileSystem();
-    ref.write(fs, p);
+    HRegionFileSystem regionFS =
+      HRegionFileSystem.create(services.getConfiguration(), fs, tabledir, daughter);
+    StoreContext storeContext =
+      StoreContext.getBuilder().withColumnFamilyDescriptor(td.getColumnFamilies()[0])
+        .withFamilyStoreDirectoryPath(storedir).withRegionFileSystem(regionFS).build();
+    StoreFileTracker sft =
+      StoreFileTrackerFactory.create(services.getConfiguration(), false, storeContext);
+    sft.createReference(ref, p);
     return p;
   }
 

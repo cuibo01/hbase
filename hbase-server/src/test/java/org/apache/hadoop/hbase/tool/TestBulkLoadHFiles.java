@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,12 +18,16 @@
 package org.apache.hadoop.hbase.tool;
 
 import static org.apache.hadoop.hbase.HBaseTestingUtil.countRows;
+import static org.apache.hadoop.hbase.util.LocatedBlockHelper.getLocatedBlockLocations;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -41,10 +45,12 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.client.AsyncClusterConnection;
+import org.apache.hadoop.hbase.client.AsyncTableRegionLocator;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Table;
@@ -61,7 +67,13 @@ import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
+import org.apache.hadoop.hbase.util.FutureUtils;
 import org.apache.hadoop.hbase.util.HFileTestUtil;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.hamcrest.MatcherAssert;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
@@ -246,22 +258,22 @@ public class TestBulkLoadHFiles {
   }
 
   private void runTest(String testName, BloomType bloomType, byte[][][] hfileRanges)
-      throws Exception {
+    throws Exception {
     runTest(testName, bloomType, null, hfileRanges);
   }
 
   private void runTest(String testName, BloomType bloomType, byte[][][] hfileRanges, boolean useMap)
-      throws Exception {
+    throws Exception {
     runTest(testName, bloomType, null, hfileRanges, useMap);
   }
 
   private void runTest(String testName, BloomType bloomType, byte[][] tableSplitKeys,
-      byte[][][] hfileRanges) throws Exception {
+    byte[][][] hfileRanges) throws Exception {
     runTest(testName, bloomType, tableSplitKeys, hfileRanges, false);
   }
 
   private void runTest(String testName, BloomType bloomType, byte[][] tableSplitKeys,
-      byte[][][] hfileRanges, boolean useMap) throws Exception {
+    byte[][][] hfileRanges, boolean useMap) throws Exception {
     final byte[] TABLE_NAME = Bytes.toBytes("mytable_" + testName);
     final boolean preCreateTable = tableSplitKeys != null;
 
@@ -286,24 +298,16 @@ public class TestBulkLoadHFiles {
   }
 
   private void runTest(String testName, TableName tableName, BloomType bloomType,
-      boolean preCreateTable, byte[][] tableSplitKeys, byte[][][] hfileRanges, boolean useMap,
-      int depth) throws Exception {
+    boolean preCreateTable, byte[][] tableSplitKeys, byte[][][] hfileRanges, boolean useMap,
+    int depth) throws Exception {
     TableDescriptor htd = buildHTD(tableName, bloomType);
     runTest(testName, htd, preCreateTable, tableSplitKeys, hfileRanges, useMap, false, depth);
   }
 
   public static int loadHFiles(String testName, TableDescriptor htd, HBaseTestingUtil util,
-      byte[] fam, byte[] qual, boolean preCreateTable, byte[][] tableSplitKeys,
-      byte[][][] hfileRanges, boolean useMap, boolean deleteFile, boolean copyFiles,
-      int initRowCount, int factor) throws Exception {
-    return loadHFiles(testName, htd, util, fam, qual, preCreateTable, tableSplitKeys, hfileRanges,
-      useMap, deleteFile, copyFiles, initRowCount, factor, 2);
-  }
-
-  public static int loadHFiles(String testName, TableDescriptor htd, HBaseTestingUtil util,
-      byte[] fam, byte[] qual, boolean preCreateTable, byte[][] tableSplitKeys,
-      byte[][][] hfileRanges, boolean useMap, boolean deleteFile, boolean copyFiles,
-      int initRowCount, int factor, int depth) throws Exception {
+    byte[] fam, byte[] qual, boolean preCreateTable, byte[][] tableSplitKeys,
+    byte[][][] hfileRanges, boolean useMap, boolean deleteFile, boolean copyFiles, int initRowCount,
+    int factor, int depth) throws Exception {
     Path baseDirectory = util.getDataTestDirOnTestFS(testName);
     FileSystem fs = util.getTestFileSystem();
     baseDirectory = baseDirectory.makeQualified(fs.getUri(), fs.getWorkingDirectory());
@@ -473,8 +477,8 @@ public class TestBulkLoadHFiles {
       // further check whether the exception message is correct
       String errMsg = e.getMessage();
       assertTrue(
-        "Incorrect exception message, expected message: [" + EXPECTED_MSG_FOR_NON_EXISTING_FAMILY +
-          "], current message: [" + errMsg + "]",
+        "Incorrect exception message, expected message: [" + EXPECTED_MSG_FOR_NON_EXISTING_FAMILY
+          + "], current message: [" + errMsg + "]",
         errMsg.contains(EXPECTED_MSG_FOR_NON_EXISTING_FAMILY));
     }
   }
@@ -552,18 +556,73 @@ public class TestBulkLoadHFiles {
     FileSystem fs = util.getTestFileSystem();
     Path testIn = new Path(dir, "testhfile");
     ColumnFamilyDescriptor familyDesc = ColumnFamilyDescriptorBuilder.of(FAMILY);
+    String tableName = tn.getMethodName();
+    util.createTable(TableName.valueOf(tableName), familyDesc.getNameAsString());
     HFileTestUtil.createHFile(util.getConfiguration(), fs, testIn, FAMILY, QUALIFIER,
       Bytes.toBytes("aaa"), Bytes.toBytes("zzz"), 1000);
 
     Path bottomOut = new Path(dir, "bottom.out");
     Path topOut = new Path(dir, "top.out");
 
-    BulkLoadHFilesTool.splitStoreFile(util.getConfiguration(), testIn, familyDesc,
-      Bytes.toBytes("ggg"), bottomOut, topOut);
+    BulkLoadHFilesTool.splitStoreFile(
+      util.getAsyncConnection().getRegionLocator(TableName.valueOf(tableName)),
+      util.getConfiguration(), testIn, familyDesc, Bytes.toBytes("ggg"), bottomOut, topOut);
 
     int rowCount = verifyHFile(bottomOut);
     rowCount += verifyHFile(topOut);
     assertEquals(1000, rowCount);
+  }
+
+  /**
+   * Test hfile splits with the favored nodes
+   */
+  @Test
+  public void testSplitStoreFileWithFavoriteNodes() throws IOException {
+
+    Path dir = new Path(util.getDefaultRootDirPath(), "testhfile");
+    FileSystem fs = util.getDFSCluster().getFileSystem();
+
+    Path testIn = new Path(dir, "testSplitStoreFileWithFavoriteNodes");
+    ColumnFamilyDescriptor familyDesc = ColumnFamilyDescriptorBuilder.of(FAMILY);
+    String tableName = tn.getMethodName();
+    Table table = util.createTable(TableName.valueOf(tableName), familyDesc.getNameAsString());
+    HFileTestUtil.createHFile(util.getConfiguration(), fs, testIn, FAMILY, QUALIFIER,
+      Bytes.toBytes("aaa"), Bytes.toBytes("zzz"), 1000);
+
+    Path bottomOut = new Path(dir, "bottom.out");
+    Path topOut = new Path(dir, "top.out");
+
+    final AsyncTableRegionLocator regionLocator =
+      util.getAsyncConnection().getRegionLocator(TableName.valueOf(tableName));
+    BulkLoadHFilesTool.splitStoreFile(regionLocator, util.getConfiguration(), testIn, familyDesc,
+      Bytes.toBytes("ggg"), bottomOut, topOut);
+    verifyHFileFavoriteNode(topOut, regionLocator, fs);
+    verifyHFileFavoriteNode(bottomOut, regionLocator, fs);
+    int rowCount = verifyHFile(bottomOut);
+    rowCount += verifyHFile(topOut);
+    assertEquals(1000, rowCount);
+  }
+
+  @Test
+  public void testSplitStoreFileWithCreateTimeTS() throws IOException {
+    Path dir = util.getDataTestDirOnTestFS("testSplitStoreFileWithCreateTimeTS");
+    FileSystem fs = util.getTestFileSystem();
+    Path testIn = new Path(dir, "testhfile");
+    ColumnFamilyDescriptor familyDesc = ColumnFamilyDescriptorBuilder.of(FAMILY);
+    String tableName = tn.getMethodName();
+    util.createTable(TableName.valueOf(tableName), familyDesc.getNameAsString());
+    HFileTestUtil.createHFile(util.getConfiguration(), fs, testIn, FAMILY, QUALIFIER,
+      Bytes.toBytes("aaa"), Bytes.toBytes("zzz"), 1000);
+
+    Path bottomOut = new Path(dir, "bottom.out");
+    Path topOut = new Path(dir, "top.out");
+
+    BulkLoadHFilesTool.splitStoreFile(
+      util.getAsyncConnection().getRegionLocator(TableName.valueOf(tableName)),
+      util.getConfiguration(), testIn, familyDesc, Bytes.toBytes("ggg"), bottomOut, topOut);
+
+    verifyHFileCreateTimeTS(bottomOut);
+    verifyHFileCreateTimeTS(topOut);
   }
 
   @Test
@@ -587,20 +646,23 @@ public class TestBulkLoadHFiles {
   }
 
   private void testSplitStoreFileWithDifferentEncoding(DataBlockEncoding bulkloadEncoding,
-      DataBlockEncoding cfEncoding) throws IOException {
+    DataBlockEncoding cfEncoding) throws IOException {
     Path dir = util.getDataTestDirOnTestFS("testSplitHFileWithDifferentEncoding");
     FileSystem fs = util.getTestFileSystem();
     Path testIn = new Path(dir, "testhfile");
     ColumnFamilyDescriptor familyDesc =
       ColumnFamilyDescriptorBuilder.newBuilder(FAMILY).setDataBlockEncoding(cfEncoding).build();
+    String tableName = tn.getMethodName();
+    util.createTable(TableName.valueOf(tableName), familyDesc.getNameAsString());
     HFileTestUtil.createHFileWithDataBlockEncoding(util.getConfiguration(), fs, testIn,
       bulkloadEncoding, FAMILY, QUALIFIER, Bytes.toBytes("aaa"), Bytes.toBytes("zzz"), 1000);
 
     Path bottomOut = new Path(dir, "bottom.out");
     Path topOut = new Path(dir, "top.out");
 
-    BulkLoadHFilesTool.splitStoreFile(util.getConfiguration(), testIn, familyDesc,
-      Bytes.toBytes("ggg"), bottomOut, topOut);
+    BulkLoadHFilesTool.splitStoreFile(
+      util.getAsyncConnection().getRegionLocator(TableName.valueOf(tableName)),
+      util.getConfiguration(), testIn, familyDesc, Bytes.toBytes("ggg"), bottomOut, topOut);
 
     int rowCount = verifyHFile(bottomOut);
     rowCount += verifyHFile(topOut);
@@ -620,6 +682,71 @@ public class TestBulkLoadHFiles {
     assertTrue(count > 0);
     reader.close();
     return count;
+  }
+
+  private void verifyHFileCreateTimeTS(Path p) throws IOException {
+    Configuration conf = util.getConfiguration();
+
+    try (HFile.Reader reader =
+      HFile.createReader(p.getFileSystem(conf), p, new CacheConfig(conf), true, conf)) {
+      long fileCreateTime = reader.getHFileInfo().getHFileContext().getFileCreateTime();
+      MatcherAssert.assertThat(fileCreateTime, greaterThan(0L));
+    }
+  }
+
+  /**
+   * test split storefile with favorite node information
+   */
+  private void verifyHFileFavoriteNode(Path p, AsyncTableRegionLocator regionLocator, FileSystem fs)
+    throws IOException {
+    Configuration conf = util.getConfiguration();
+
+    try (HFile.Reader reader = HFile.createReader(fs, p, new CacheConfig(conf), true, conf);) {
+
+      final byte[] firstRowkey = reader.getFirstRowKey().get();
+      final HRegionLocation hRegionLocation =
+        FutureUtils.get(regionLocator.getRegionLocation(firstRowkey));
+
+      final String targetHostName = hRegionLocation.getHostname();
+
+      if (fs instanceof DistributedFileSystem) {
+        String pathStr = p.toUri().getPath();
+        LocatedBlocks blocks =
+          ((DistributedFileSystem) fs).getClient().getLocatedBlocks(pathStr, 0L);
+
+        boolean isFavoriteNode = false;
+        List<LocatedBlock> locatedBlocks = blocks.getLocatedBlocks();
+        int index = 0;
+        do {
+          if (index > 0) {
+            assertTrue("failed use favored nodes", isFavoriteNode);
+          }
+          isFavoriteNode = false;
+          final LocatedBlock block = locatedBlocks.get(index);
+
+          final DatanodeInfo[] locations = getLocatedBlockLocations(block);
+          for (DatanodeInfo location : locations) {
+
+            final String hostName = location.getHostName();
+            if (
+              targetHostName.equals(hostName.equals("127.0.0.1")
+                ? InetAddress.getLocalHost().getHostName()
+                : "127.0.0.1") || targetHostName.equals(hostName)
+            ) {
+              isFavoriteNode = true;
+              break;
+            }
+          }
+
+          index++;
+        } while (index < locatedBlocks.size());
+        if (index > 0) {
+          assertTrue("failed use favored nodes", isFavoriteNode);
+        }
+
+      }
+
+    }
   }
 
   private void addStartEndKeysForTest(TreeMap<byte[], Integer> map, byte[] first, byte[] last) {
@@ -765,8 +892,8 @@ public class TestBulkLoadHFiles {
     BulkLoadHFiles loader = new BulkLoadHFilesTool(util.getConfiguration()) {
       @Override
       protected CompletableFuture<Collection<LoadQueueItem>> tryAtomicRegionLoad(
-          final AsyncClusterConnection conn, final TableName tableName, boolean copyFiles,
-          final byte[] first, Collection<LoadQueueItem> lqis) {
+        final AsyncClusterConnection conn, final TableName tableName, boolean copyFiles,
+        final byte[] first, Collection<LoadQueueItem> lqis) {
         attmptedCalls.incrementAndGet();
         return super.tryAtomicRegionLoad(conn, tableName, copyFiles, first, lqis);
       }
@@ -781,5 +908,30 @@ public class TestBulkLoadHFiles {
       }
       util.getConfiguration().setBoolean(BulkLoadHFilesTool.BULK_LOAD_HFILES_BY_FAMILY, false);
     }
+  }
+
+  @Test
+  public void testFailIfNeedSplitHFile() throws IOException {
+    TableName tableName = TableName.valueOf(tn.getMethodName());
+    Table table = util.createTable(tableName, FAMILY);
+
+    util.loadTable(table, FAMILY);
+
+    FileSystem fs = util.getTestFileSystem();
+    Path sfPath = new Path(fs.getWorkingDirectory(), new Path(Bytes.toString(FAMILY), "file"));
+    HFileTestUtil.createHFile(util.getConfiguration(), fs, sfPath, FAMILY, QUALIFIER,
+      Bytes.toBytes("aaa"), Bytes.toBytes("zzz"), 1000);
+
+    util.getAdmin().split(tableName);
+    util.waitFor(10000, 1000, () -> util.getAdmin().getRegions(tableName).size() > 1);
+
+    Configuration config = new Configuration(util.getConfiguration());
+    config.setBoolean(BulkLoadHFilesTool.FAIL_IF_NEED_SPLIT_HFILE, true);
+    BulkLoadHFilesTool tool = new BulkLoadHFilesTool(config);
+
+    String[] args = new String[] { fs.getWorkingDirectory().toString(), tableName.toString() };
+    assertThrows(IOException.class, () -> tool.run(args));
+    util.getHBaseCluster().getRegions(tableName)
+      .forEach(r -> assertEquals(1, r.getStore(FAMILY).getStorefiles().size()));
   }
 }

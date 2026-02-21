@@ -48,6 +48,12 @@ do
   esac
 done
 
+if [ -z "${JAVA_HOME}" ]; then
+  echo "[ERROR] Must have JAVA_HOME defined." 1>&2
+  exit 1
+fi
+JAR="${JAVA_HOME}/bin/jar"
+
 # should still have jars to check.
 if [ $# -lt 1 ]; then
   usage
@@ -69,6 +75,8 @@ allowed_expr="(^org/$|^org/apache/$|^org/apache/hadoop/$"
 allowed_expr+="|^org/apache/hadoop/hbase"
 #   * classes in packages that start with org.apache.hbase
 allowed_expr+="|^org/apache/hbase/"
+# We have a dummy DFSOutputStream implementation in hbase
+allowed_expr+="|^org/apache/hadoop/hdfs/$|^org/apache/hadoop/hdfs/DummyDFSOutputStream.class"
 #   * whatever in the "META-INF" directory
 allowed_expr+="|^META-INF/"
 #   * the folding tables from jcodings
@@ -88,7 +96,10 @@ allowed_expr+="|^PropertyList-1.0.dtd$"
 # Shaded jetty resources
 allowed_expr+="|^about.html$"
 allowed_expr+="|^jetty-dir.css$"
-
+# Coming from Guava, see https://github.com/google/guava/commit/2cc8c5eddb587db3ac12dacdd5563e79a4681ec4
+allowed_expr+="|^org/jspecify/$|^org/jspecify/annotations/$|^org/jspecify/annotations/.*\.class$"
+# Required by jetty 12 on ee8
+allowed_expr="(|^javax/$)"
 
 if [ -n "${allow_hadoop}" ]; then
   #   * classes in packages that start with org.apache.hadoop, which by
@@ -102,6 +113,8 @@ if [ -n "${allow_hadoop}" ]; then
   allowed_expr+="|^[^-]*-version-info.properties$"
   #   * Hadoop's application classloader properties file.
   allowed_expr+="|^org.apache.hadoop.application-classloader.properties$"
+  #   * Comes from dnssecjava via Hadoop
+  allowed_expr+="|^messages.properties$"
 else
   # We have some classes for integrating with the Hadoop Metrics2 system
   # that have to be in a particular package space due to access rules.
@@ -113,7 +126,11 @@ allowed_expr+=")"
 declare -i bad_artifacts=0
 declare -a bad_contents
 for artifact in "${artifact_list[@]}"; do
-  bad_contents=($(jar tf "${artifact}" | grep -v -E "${allowed_expr}" || true))
+  bad_contents=($("${JAR}" tf "${artifact}" | grep -v -E "${allowed_expr}" || true))
+  class_count=$("${JAR}" tf "${artifact}" | grep -c -E '\.class$' || true)
+  if [ ${#bad_contents[@]} -eq 0 ] && [ "${class_count}" -lt 1 ]; then
+    bad_contents=("The artifact contains no java class files.")
+  fi
   if [ ${#bad_contents[@]} -gt 0 ]; then
     echo "[ERROR] Found artifact with unexpected contents: '${artifact}'"
     echo "    Please check the following and either correct the build or update"

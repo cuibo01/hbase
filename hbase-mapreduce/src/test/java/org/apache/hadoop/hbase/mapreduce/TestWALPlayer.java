@@ -17,6 +17,10 @@
  */
 package org.apache.hadoop.hbase.mapreduce;
 
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.notNullValue;
+import static org.hamcrest.CoreMatchers.nullValue;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -24,10 +28,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.PrintStream;
 import java.util.ArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -49,13 +55,16 @@ import org.apache.hadoop.hbase.mapreduce.WALPlayer.WALKeyValueMapper;
 import org.apache.hadoop.hbase.regionserver.TestRecoveredEdits;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.MapReduceTests;
+import org.apache.hadoop.hbase.tool.BulkLoadHFiles;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.LauncherSecurityManager;
 import org.apache.hadoop.hbase.util.MapReduceExtendedCell;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.hadoop.hbase.wal.WALKey;
+import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Mapper.Context;
 import org.apache.hadoop.util.ToolRunner;
@@ -72,11 +81,11 @@ import org.mockito.stubbing.Answer;
 /**
  * Basic test for the WALPlayer M/R tool
  */
-@Category({MapReduceTests.class, LargeTests.class})
+@Category({ MapReduceTests.class, LargeTests.class })
 public class TestWALPlayer {
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestWALPlayer.class);
+    HBaseClassTestRule.forClass(TestWALPlayer.class);
 
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static SingleProcessHBaseCluster cluster;
@@ -115,19 +124,105 @@ public class TestWALPlayer {
     TEST_UTIL.createTable(tn, TestRecoveredEdits.RECOVEREDEDITS_COLUMNFAMILY);
     // Copy testing recovered.edits file that is over under hbase-server test resources
     // up into a dir in our little hdfs cluster here.
-    String hbaseServerTestResourcesEdits = System.getProperty("test.build.classes") +
-        "/../../../hbase-server/src/test/resources/" +
-      TestRecoveredEdits.RECOVEREDEDITS_PATH.getName();
-    assertTrue(new File(hbaseServerTestResourcesEdits).exists());
-    FileSystem dfs = TEST_UTIL.getDFSCluster().getFileSystem();
-    // Target dir.
-    Path targetDir = new Path("edits").makeQualified(dfs.getUri(), dfs.getHomeDirectory());
-    assertTrue(dfs.mkdirs(targetDir));
-    dfs.copyFromLocalFile(new Path(hbaseServerTestResourcesEdits), targetDir);
-    assertEquals(0,
-      ToolRunner.run(new WALPlayer(this.conf), new String [] {targetDir.toString()}));
-    // I don't know how many edits are in this file for this table... so just check more than 1.
-    assertTrue(TEST_UTIL.countRows(tn) > 0);
+    runWithDiskBasedSortingDisabledAndEnabled(() -> {
+      String hbaseServerTestResourcesEdits =
+        System.getProperty("test.build.classes") + "/../../../hbase-server/src/test/resources/"
+          + TestRecoveredEdits.RECOVEREDEDITS_PATH.getName();
+      assertTrue(new File(hbaseServerTestResourcesEdits).exists());
+      FileSystem dfs = TEST_UTIL.getDFSCluster().getFileSystem();
+      // Target dir.
+      Path targetDir = new Path("edits").makeQualified(dfs.getUri(), dfs.getHomeDirectory());
+      assertTrue(dfs.mkdirs(targetDir));
+      dfs.copyFromLocalFile(new Path(hbaseServerTestResourcesEdits), targetDir);
+      assertEquals(0,
+        ToolRunner.run(new WALPlayer(this.conf), new String[] { targetDir.toString() }));
+      // I don't know how many edits are in this file for this table... so just check more than 1.
+      assertTrue(TEST_UTIL.countRows(tn) > 0);
+      dfs.delete(targetDir, true);
+    });
+  }
+
+  /**
+   * Tests that when you write multiple cells with the same timestamp they are properly sorted by
+   * their sequenceId in WALPlayer/CellSortReducer so that the correct one wins when querying from
+   * the resulting bulkloaded HFiles. See HBASE-27649
+   */
+  @Test
+  public void testWALPlayerBulkLoadWithOverriddenTimestamps() throws Exception {
+    final TableName tableName = TableName.valueOf(name.getMethodName() + "1");
+    final byte[] family = Bytes.toBytes("family");
+    final byte[] column1 = Bytes.toBytes("c1");
+    final byte[] column2 = Bytes.toBytes("c2");
+    final byte[] row = Bytes.toBytes("row");
+    final Table table = TEST_UTIL.createTable(tableName, family);
+
+    long now = EnvironmentEdgeManager.currentTime();
+    // put a row into the first table
+    Put p = new Put(row);
+    p.addColumn(family, column1, now, column1);
+    p.addColumn(family, column2, now, column2);
+
+    table.put(p);
+
+    byte[] lastVal = null;
+
+    for (int i = 0; i < 50; i++) {
+      lastVal = Bytes.toBytes(ThreadLocalRandom.current().nextLong());
+      p = new Put(row);
+      p.addColumn(family, column1, now, lastVal);
+
+      table.put(p);
+
+      // wal rolling is necessary to trigger the bug. otherwise no sorting
+      // needs to occur in the reducer because it's all sorted and coming from a single file.
+      if (i % 10 == 0) {
+        WAL log = cluster.getRegionServer(0).getWAL(null);
+        log.rollWriter();
+      }
+    }
+
+    WAL log = cluster.getRegionServer(0).getWAL(null);
+    log.rollWriter();
+    String walInputDir = new Path(cluster.getMaster().getMasterFileSystem().getWALRootDir(),
+      HConstants.HREGION_LOGDIR_NAME).toString();
+
+    Configuration configuration = new Configuration(TEST_UTIL.getConfiguration());
+    String outPath = "/tmp/" + name.getMethodName();
+    configuration.set(WALPlayer.BULK_OUTPUT_CONF_KEY, outPath);
+    configuration.setBoolean(WALPlayer.MULTI_TABLES_SUPPORT, true);
+
+    WALPlayer player = new WALPlayer(configuration);
+    final byte[] finalLastVal = lastVal;
+
+    runWithDiskBasedSortingDisabledAndEnabled(() -> {
+      assertEquals(0, ToolRunner.run(configuration, player,
+        new String[] { walInputDir, tableName.getNameAsString() }));
+
+      Get g = new Get(row);
+      Result result = table.get(g);
+      byte[] value = CellUtil.cloneValue(result.getColumnLatestCell(family, column1));
+      assertThat(Bytes.toStringBinary(value), equalTo(Bytes.toStringBinary(finalLastVal)));
+
+      TEST_UTIL.truncateTable(tableName);
+      g = new Get(row);
+      result = table.get(g);
+      assertThat(result.listCells(), nullValue());
+
+      BulkLoadHFiles.create(configuration).bulkLoad(tableName,
+        new Path(outPath, tableName.getNamespaceAsString() + "/" + tableName.getNameAsString()));
+
+      g = new Get(row);
+      result = table.get(g);
+      value = CellUtil.cloneValue(result.getColumnLatestCell(family, column1));
+
+      assertThat(result.listCells(), notNullValue());
+      assertThat(Bytes.toStringBinary(value), equalTo(Bytes.toStringBinary(finalLastVal)));
+
+      // cleanup
+      Path out = new Path(outPath);
+      FileSystem fs = out.getFileSystem(configuration);
+      assertTrue(fs.delete(out, true));
+    });
   }
 
   /**
@@ -157,25 +252,26 @@ public class TestWALPlayer {
     // replay the WAL, map table 1 to table 2
     WAL log = cluster.getRegionServer(0).getWAL(null);
     log.rollWriter();
-    String walInputDir = new Path(cluster.getMaster().getMasterFileSystem()
-        .getWALRootDir(), HConstants.HREGION_LOGDIR_NAME).toString();
+    String walInputDir = new Path(cluster.getMaster().getMasterFileSystem().getWALRootDir(),
+      HConstants.HREGION_LOGDIR_NAME).toString();
 
-    Configuration configuration= TEST_UTIL.getConfiguration();
+    Configuration configuration = TEST_UTIL.getConfiguration();
     WALPlayer player = new WALPlayer(configuration);
-    String optionName="_test_.name";
-    configuration.set(optionName, "1000");
-    player.setupTime(configuration, optionName);
-    assertEquals(1000,configuration.getLong(optionName,0));
-    assertEquals(0, ToolRunner.run(configuration, player,
-        new String[] {walInputDir, tableName1.getNameAsString(),
-        tableName2.getNameAsString() }));
 
+    runWithDiskBasedSortingDisabledAndEnabled(() -> {
+      String optionName = "_test_.name";
+      configuration.set(optionName, "1000");
+      player.setupTime(configuration, optionName);
+      assertEquals(1000, configuration.getLong(optionName, 0));
+      assertEquals(0, ToolRunner.run(configuration, player,
+        new String[] { walInputDir, tableName1.getNameAsString(), tableName2.getNameAsString() }));
 
-    // verify the WAL was player into table 2
-    Get g = new Get(ROW);
-    Result r = t2.get(g);
-    assertEquals(1, r.size());
-    assertTrue(CellUtil.matchingQualifier(r.rawCells()[0], COLUMN2));
+      // verify the WAL was player into table 2
+      Get g = new Get(ROW);
+      Result r = t2.get(g);
+      assertEquals(1, r.size());
+      assertTrue(CellUtil.matchingQualifier(r.rawCells()[0], COLUMN2));
+    });
   }
 
   /**
@@ -198,7 +294,7 @@ public class TestWALPlayer {
     WALKey key = mock(WALKey.class);
     when(key.getTableName()).thenReturn(TableName.valueOf("table"));
     @SuppressWarnings("unchecked")
-    Mapper<WALKey, WALEdit, ImmutableBytesWritable, Cell>.Context context = mock(Context.class);
+    Mapper<WALKey, WALEdit, WritableComparable<?>, Cell>.Context context = mock(Context.class);
     when(context.getConfiguration()).thenReturn(configuration);
 
     WALEdit value = mock(WALEdit.class);
@@ -233,7 +329,7 @@ public class TestWALPlayer {
 
     PrintStream oldPrintStream = System.err;
     SecurityManager SECURITY_MANAGER = System.getSecurityManager();
-    LauncherSecurityManager newSecurityManager= new LauncherSecurityManager();
+    LauncherSecurityManager newSecurityManager = new LauncherSecurityManager();
     System.setSecurityManager(newSecurityManager);
     ByteArrayOutputStream data = new ByteArrayOutputStream();
     String[] args = {};
@@ -246,8 +342,8 @@ public class TestWALPlayer {
       } catch (SecurityException e) {
         assertEquals(-1, newSecurityManager.getExitCode());
         assertTrue(data.toString().contains("ERROR: Wrong number of arguments:"));
-        assertTrue(data.toString().contains("Usage: WALPlayer [options] <WAL inputdir>" +
-            " [<tables> <tableMappings>]"));
+        assertTrue(data.toString()
+          .contains("Usage: WALPlayer [options] <WAL inputdir>" + " [<tables> <tableMappings>]"));
         assertTrue(data.toString().contains("-Dwal.bulk.output=/path/for/output"));
       }
 
@@ -255,7 +351,29 @@ public class TestWALPlayer {
       System.setErr(oldPrintStream);
       System.setSecurityManager(SECURITY_MANAGER);
     }
+  }
 
+  private static void runWithDiskBasedSortingDisabledAndEnabled(TestMethod method)
+    throws Exception {
+    TEST_UTIL.getConfiguration().setBoolean(HFileOutputFormat2.DISK_BASED_SORTING_ENABLED_KEY,
+      false);
+    try {
+      method.run();
+    } finally {
+      TEST_UTIL.getConfiguration().unset(HFileOutputFormat2.DISK_BASED_SORTING_ENABLED_KEY);
+    }
+
+    TEST_UTIL.getConfiguration().setBoolean(HFileOutputFormat2.DISK_BASED_SORTING_ENABLED_KEY,
+      true);
+    try {
+      method.run();
+    } finally {
+      TEST_UTIL.getConfiguration().unset(HFileOutputFormat2.DISK_BASED_SORTING_ENABLED_KEY);
+    }
+  }
+
+  private interface TestMethod {
+    void run() throws Exception;
   }
 
 }

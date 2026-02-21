@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -50,8 +50,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.Coprocessor;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
@@ -87,6 +87,7 @@ import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALEditInternalHelper;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.junit.AfterClass;
@@ -120,6 +121,7 @@ public abstract class AbstractTestFSWAL {
     final Path hbaseWALDir = TEST_UTIL.createWALRootDir();
     DIR = new Path(hbaseWALDir, currentTest.getMethodName());
     assertNotEquals(hbaseDir, hbaseWALDir);
+    FS.mkdirs(DIR);
   }
 
   @BeforeClass
@@ -149,12 +151,12 @@ public abstract class AbstractTestFSWAL {
   }
 
   protected abstract AbstractFSWAL<?> newWAL(FileSystem fs, Path rootDir, String WALDir,
-      String archiveDir, Configuration conf, List<WALActionsListener> listeners,
-      boolean failIfWALExists, String prefix, String suffix) throws IOException;
+    String archiveDir, Configuration conf, List<WALActionsListener> listeners,
+    boolean failIfWALExists, String prefix, String suffix) throws IOException;
 
   protected abstract AbstractFSWAL<?> newSlowWAL(FileSystem fs, Path rootDir, String WALDir,
-      String archiveDir, Configuration conf, List<WALActionsListener> listeners,
-      boolean failIfWALExists, String prefix, String suffix, Runnable action) throws IOException;
+    String archiveDir, Configuration conf, List<WALActionsListener> listeners,
+    boolean failIfWALExists, String prefix, String suffix, Runnable action) throws IOException;
 
   /**
    * A loaded WAL coprocessor won't break existing WAL test cases.
@@ -165,7 +167,7 @@ public abstract class AbstractTestFSWAL {
     AbstractFSWAL<?> wal = null;
     try {
       wal = newWAL(FS, CommonFSUtils.getWALRootDir(CONF), DIR.toString(),
-          HConstants.HREGION_OLDLOGDIR_NAME, CONF, null, true, null, null);
+        HConstants.HREGION_OLDLOGDIR_NAME, CONF, null, true, null, null);
       WALCoprocessorHost host = wal.getCoprocessorHost();
       Coprocessor c = host.findCoprocessor(SampleRegionWALCoprocessor.class);
       assertNotNull(c);
@@ -177,16 +179,16 @@ public abstract class AbstractTestFSWAL {
   }
 
   protected void addEdits(WAL log, RegionInfo hri, TableDescriptor htd, int times,
-      MultiVersionConcurrencyControl mvcc, NavigableMap<byte[], Integer> scopes, String cf)
-      throws IOException {
+    MultiVersionConcurrencyControl mvcc, NavigableMap<byte[], Integer> scopes, String cf)
+    throws IOException {
     final byte[] row = Bytes.toBytes(cf);
     for (int i = 0; i < times; i++) {
       long timestamp = EnvironmentEdgeManager.currentTime();
       WALEdit cols = new WALEdit();
-      cols.add(new KeyValue(row, row, row, timestamp, row));
-      WALKeyImpl key = new WALKeyImpl(hri.getEncodedNameAsBytes(), htd.getTableName(),
-          SequenceId.NO_SEQUENCE_ID, timestamp, WALKey.EMPTY_UUIDS, HConstants.NO_NONCE,
-          HConstants.NO_NONCE, mvcc, scopes);
+      WALEditInternalHelper.addExtendedCell(cols, new KeyValue(row, row, row, timestamp, row));
+      WALKeyImpl key =
+        new WALKeyImpl(hri.getEncodedNameAsBytes(), htd.getTableName(), SequenceId.NO_SEQUENCE_ID,
+          timestamp, WALKey.EMPTY_UUIDS, HConstants.NO_NONCE, HConstants.NO_NONCE, mvcc, scopes);
       log.appendData(hri, key, cols);
     }
     log.sync();
@@ -203,7 +205,6 @@ public abstract class AbstractTestFSWAL {
   /**
    * tests the log comparator. Ensure that we are not mixing meta logs with non-meta logs (throws
    * exception if we do). Comparison is based on the timestamp present in the wal name.
-   * @throws Exception
    */
   @Test
   public void testWALComparator() throws Exception {
@@ -211,7 +212,7 @@ public abstract class AbstractTestFSWAL {
     AbstractFSWAL<?> walMeta = null;
     try {
       wal1 = newWAL(FS, CommonFSUtils.getWALRootDir(CONF), DIR.toString(),
-          HConstants.HREGION_OLDLOGDIR_NAME, CONF, null, true, null, null);
+        HConstants.HREGION_OLDLOGDIR_NAME, CONF, null, true, null, null);
       LOG.debug("Log obtained is: " + wal1);
       Comparator<Path> comp = wal1.LOG_NAME_COMPARATOR;
       Path p1 = wal1.computeFilename(11);
@@ -221,8 +222,8 @@ public abstract class AbstractTestFSWAL {
       // comparing with different filenum.
       assertTrue(comp.compare(p1, p2) < 0);
       walMeta = newWAL(FS, CommonFSUtils.getWALRootDir(CONF), DIR.toString(),
-          HConstants.HREGION_OLDLOGDIR_NAME, CONF, null, true, null,
-          AbstractFSWALProvider.META_WAL_PROVIDER_ID);
+        HConstants.HREGION_OLDLOGDIR_NAME, CONF, null, true, null,
+        AbstractFSWALProvider.META_WAL_PROVIDER_ID);
       Comparator<Path> compMeta = walMeta.LOG_NAME_COMPARATOR;
 
       Path p1WithMeta = walMeta.computeFilename(11);
@@ -254,22 +255,14 @@ public abstract class AbstractTestFSWAL {
     }
   }
 
-  /**
-   * On rolling a wal after reaching the threshold, {@link WAL#rollWriter()} returns the list of
-   * regions which should be flushed in order to archive the oldest wal file.
-   * <p>
-   * This method tests this behavior by inserting edits and rolling the wal enough times to reach
-   * the max number of logs threshold. It checks whether we get the "right regions and stores" for
-   * flush on rolling the wal.
-   * @throws Exception
-   */
-  @Test
-  public void testFindMemStoresEligibleForFlush() throws Exception {
-    LOG.debug("testFindMemStoresEligibleForFlush");
-    Configuration conf1 = HBaseConfiguration.create(CONF);
-    conf1.setInt("hbase.regionserver.maxlogs", 1);
-    AbstractFSWAL<?> wal = newWAL(FS, CommonFSUtils.getWALRootDir(conf1), DIR.toString(),
-      HConstants.HREGION_OLDLOGDIR_NAME, conf1, null, true, null, null);
+  // now we will close asynchronously and will not archive a wal file unless it is fully closed, so
+  // sometimes we need to wait a bit before asserting, especially when you want to test the removal
+  // of numRolledLogFiles
+  private void waitNumRolledLogFiles(AbstractFSWAL<?> wal, int expected) {
+    TEST_UTIL.waitFor(5000, () -> wal.getNumRolledLogFiles() == expected);
+  }
+
+  private void testFindMemStoresEligibleForFlush(AbstractFSWAL<?> wal) throws IOException {
     String cf1 = "cf1";
     String cf2 = "cf2";
     String cf3 = "cf3";
@@ -280,11 +273,11 @@ public abstract class AbstractTestFSWAL {
     RegionInfo hri1 = RegionInfoBuilder.newBuilder(t1.getTableName()).build();
     RegionInfo hri2 = RegionInfoBuilder.newBuilder(t2.getTableName()).build();
 
-    List<ColumnFamilyDescriptor> cfs = new ArrayList();
+    List<ColumnFamilyDescriptor> cfs = new ArrayList<>();
     cfs.add(ColumnFamilyDescriptorBuilder.of(cf1));
     cfs.add(ColumnFamilyDescriptorBuilder.of(cf2));
-    TableDescriptor t3 = TableDescriptorBuilder.newBuilder(TableName.valueOf("t3"))
-      .setColumnFamilies(cfs).build();
+    TableDescriptor t3 =
+      TableDescriptorBuilder.newBuilder(TableName.valueOf("t3")).setColumnFamilies(cfs).build();
     RegionInfo hri3 = RegionInfoBuilder.newBuilder(t3.getTableName()).build();
 
     // add edits and roll the wal
@@ -301,103 +294,116 @@ public abstract class AbstractTestFSWAL {
     for (byte[] fam : t3.getColumnFamilyNames()) {
       scopes3.put(fam, 0);
     }
-    try {
-      addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
-      wal.rollWriter();
-      // add some more edits and roll the wal. This would reach the log number threshold
-      addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
-      wal.rollWriter();
-      // with above rollWriter call, the max logs limit is reached.
-      assertTrue(wal.getNumRolledLogFiles() == 2);
+    addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
+    wal.rollWriter();
+    // add some more edits and roll the wal. This would reach the log number threshold
+    addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
+    wal.rollWriter();
+    // with above rollWriter call, the max logs limit is reached.
+    waitNumRolledLogFiles(wal, 2);
 
-      // get the regions to flush; since there is only one region in the oldest wal, it should
-      // return only one region.
-      Map<byte[], List<byte[]>> regionsToFlush = wal.findRegionsToForceFlush();
-      assertEquals(1, regionsToFlush.size());
-      assertEquals(hri1.getEncodedNameAsBytes(), (byte[])regionsToFlush.keySet().toArray()[0]);
-      // insert edits in second region
-      addEdits(wal, hri2, t2, 2, mvcc, scopes2, cf1);
-      // get the regions to flush, it should still read region1.
-      regionsToFlush = wal.findRegionsToForceFlush();
-      assertEquals(1, regionsToFlush.size());
-      assertEquals(hri1.getEncodedNameAsBytes(), (byte[])regionsToFlush.keySet().toArray()[0]);
-      // flush region 1, and roll the wal file. Only last wal which has entries for region1 should
-      // remain.
-      flushRegion(wal, hri1.getEncodedNameAsBytes(), t1.getColumnFamilyNames());
-      wal.rollWriter();
-      // only one wal should remain now (that is for the second region).
-      assertEquals(1, wal.getNumRolledLogFiles());
-      // flush the second region
-      flushRegion(wal, hri2.getEncodedNameAsBytes(), t2.getColumnFamilyNames());
-      wal.rollWriter(true);
-      // no wal should remain now.
-      assertEquals(0, wal.getNumRolledLogFiles());
-      // add edits both to region 1 and region 2, and roll.
-      addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
-      addEdits(wal, hri2, t2, 2, mvcc, scopes2, cf1);
-      wal.rollWriter();
-      // add edits and roll the writer, to reach the max logs limit.
-      assertEquals(1, wal.getNumRolledLogFiles());
-      addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
-      wal.rollWriter();
-      // it should return two regions to flush, as the oldest wal file has entries
-      // for both regions.
-      regionsToFlush = wal.findRegionsToForceFlush();
-      assertEquals(2, regionsToFlush.size());
-      // flush both regions
-      flushRegion(wal, hri1.getEncodedNameAsBytes(), t1.getColumnFamilyNames());
-      flushRegion(wal, hri2.getEncodedNameAsBytes(), t2.getColumnFamilyNames());
-      wal.rollWriter(true);
-      assertEquals(0, wal.getNumRolledLogFiles());
-      // Add an edit to region1, and roll the wal.
-      addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
-      // tests partial flush: roll on a partial flush, and ensure that wal is not archived.
-      wal.startCacheFlush(hri1.getEncodedNameAsBytes(), t1.getColumnFamilyNames());
-      wal.rollWriter();
-      wal.completeCacheFlush(hri1.getEncodedNameAsBytes(), HConstants.NO_SEQNUM);
-      assertEquals(1, wal.getNumRolledLogFiles());
+    // get the regions to flush; since there is only one region in the oldest wal, it should
+    // return only one region.
+    Map<byte[], List<byte[]>> regionsToFlush = wal.findRegionsToForceFlush();
+    assertEquals(1, regionsToFlush.size());
+    assertEquals(hri1.getEncodedNameAsBytes(), (byte[]) regionsToFlush.keySet().toArray()[0]);
+    // insert edits in second region
+    addEdits(wal, hri2, t2, 2, mvcc, scopes2, cf1);
+    // get the regions to flush, it should still read region1.
+    regionsToFlush = wal.findRegionsToForceFlush();
+    assertEquals(1, regionsToFlush.size());
+    assertEquals(hri1.getEncodedNameAsBytes(), (byte[]) regionsToFlush.keySet().toArray()[0]);
+    // flush region 1, and roll the wal file. Only last wal which has entries for region1 should
+    // remain.
+    flushRegion(wal, hri1.getEncodedNameAsBytes(), t1.getColumnFamilyNames());
+    wal.rollWriter();
+    // only one wal should remain now (that is for the second region).
+    waitNumRolledLogFiles(wal, 1);
+    // flush the second region
+    flushRegion(wal, hri2.getEncodedNameAsBytes(), t2.getColumnFamilyNames());
+    wal.rollWriter(true);
+    // no wal should remain now.
+    waitNumRolledLogFiles(wal, 0);
+    // add edits both to region 1 and region 2, and roll.
+    addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
+    addEdits(wal, hri2, t2, 2, mvcc, scopes2, cf1);
+    wal.rollWriter();
+    // add edits and roll the writer, to reach the max logs limit.
+    waitNumRolledLogFiles(wal, 1);
+    addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
+    wal.rollWriter();
+    // it should return two regions to flush, as the oldest wal file has entries
+    // for both regions.
+    regionsToFlush = wal.findRegionsToForceFlush();
+    assertEquals(2, regionsToFlush.size());
+    // flush both regions
+    flushRegion(wal, hri1.getEncodedNameAsBytes(), t1.getColumnFamilyNames());
+    flushRegion(wal, hri2.getEncodedNameAsBytes(), t2.getColumnFamilyNames());
+    wal.rollWriter(true);
+    waitNumRolledLogFiles(wal, 0);
+    // Add an edit to region1, and roll the wal.
+    addEdits(wal, hri1, t1, 2, mvcc, scopes1, cf1);
+    // tests partial flush: roll on a partial flush, and ensure that wal is not archived.
+    wal.startCacheFlush(hri1.getEncodedNameAsBytes(), t1.getColumnFamilyNames());
+    wal.rollWriter();
+    wal.completeCacheFlush(hri1.getEncodedNameAsBytes(), HConstants.NO_SEQNUM);
+    waitNumRolledLogFiles(wal, 1);
 
-      // clear test data
-      flushRegion(wal, hri1.getEncodedNameAsBytes(), t1.getColumnFamilyNames());
-      wal.rollWriter(true);
-      // add edits for three familes
-      addEdits(wal, hri3, t3, 2, mvcc, scopes3, cf1);
-      addEdits(wal, hri3, t3, 2, mvcc, scopes3, cf2);
-      addEdits(wal, hri3, t3, 2, mvcc, scopes3, cf3);
-      wal.rollWriter();
-      addEdits(wal, hri3, t3, 2, mvcc, scopes3, cf1);
-      wal.rollWriter();
-      assertEquals(2, wal.getNumRolledLogFiles());
-      // flush one family before archive oldest wal
-      Set<byte[]> flushedFamilyNames = new HashSet<>();
-      flushedFamilyNames.add(Bytes.toBytes(cf1));
-      flushRegion(wal, hri3.getEncodedNameAsBytes(), flushedFamilyNames);
-      regionsToFlush = wal.findRegionsToForceFlush();
-      // then only two family need to be flushed when archive oldest wal
-      assertEquals(1, regionsToFlush.size());
-      assertEquals(hri3.getEncodedNameAsBytes(), (byte[])regionsToFlush.keySet().toArray()[0]);
-      assertEquals(2, regionsToFlush.get(hri3.getEncodedNameAsBytes()).size());
-    } finally {
-      if (wal != null) {
-        wal.close();
-      }
+    // clear test data
+    flushRegion(wal, hri1.getEncodedNameAsBytes(), t1.getColumnFamilyNames());
+    wal.rollWriter(true);
+    // add edits for three familes
+    addEdits(wal, hri3, t3, 2, mvcc, scopes3, cf1);
+    addEdits(wal, hri3, t3, 2, mvcc, scopes3, cf2);
+    addEdits(wal, hri3, t3, 2, mvcc, scopes3, cf3);
+    wal.rollWriter();
+    addEdits(wal, hri3, t3, 2, mvcc, scopes3, cf1);
+    wal.rollWriter();
+    waitNumRolledLogFiles(wal, 2);
+    // flush one family before archive oldest wal
+    Set<byte[]> flushedFamilyNames = new HashSet<>();
+    flushedFamilyNames.add(Bytes.toBytes(cf1));
+    flushRegion(wal, hri3.getEncodedNameAsBytes(), flushedFamilyNames);
+    regionsToFlush = wal.findRegionsToForceFlush();
+    // then only two family need to be flushed when archive oldest wal
+    assertEquals(1, regionsToFlush.size());
+    assertEquals(hri3.getEncodedNameAsBytes(), (byte[]) regionsToFlush.keySet().toArray()[0]);
+    assertEquals(2, regionsToFlush.get(hri3.getEncodedNameAsBytes()).size());
+  }
+
+  /**
+   * On rolling a wal after reaching the threshold, {@link WAL#rollWriter()} returns the list of
+   * regions which should be flushed in order to archive the oldest wal file.
+   * <p>
+   * This method tests this behavior by inserting edits and rolling the wal enough times to reach
+   * the max number of logs threshold. It checks whether we get the "right regions and stores" for
+   * flush on rolling the wal.
+   */
+  @Test
+  public void testFindMemStoresEligibleForFlush() throws Exception {
+    LOG.debug("testFindMemStoresEligibleForFlush");
+    Configuration conf1 = HBaseConfiguration.create(CONF);
+    conf1.setInt("hbase.regionserver.maxlogs", 1);
+    try (AbstractFSWAL<?> wal = newWAL(FS, CommonFSUtils.getWALRootDir(conf1), DIR.toString(),
+      HConstants.HREGION_OLDLOGDIR_NAME, conf1, null, true, null, null)) {
+      testFindMemStoresEligibleForFlush(wal);
     }
+
   }
 
   @Test(expected = IOException.class)
-  public void testFailedToCreateWALIfParentRenamed() throws IOException,
-      CommonFSUtils.StreamLacksCapabilityException {
-    final String name = "testFailedToCreateWALIfParentRenamed";
-    AbstractFSWAL<?> wal = newWAL(FS, CommonFSUtils.getWALRootDir(CONF), name,
-      HConstants.HREGION_OLDLOGDIR_NAME, CONF, null, true, null, null);
+  public void testFailedToCreateWALIfParentRenamed()
+    throws IOException, CommonFSUtils.StreamLacksCapabilityException {
+    AbstractFSWAL<?> wal = newWAL(FS, CommonFSUtils.getWALRootDir(CONF),
+      currentTest.getMethodName(), HConstants.HREGION_OLDLOGDIR_NAME, CONF, null, true, null, null);
     long filenum = EnvironmentEdgeManager.currentTime();
     Path path = wal.computeFilename(filenum);
-    wal.createWriterInstance(path);
+    wal.createWriterInstance(FS, path);
     Path parent = path.getParent();
     path = wal.computeFilename(filenum + 1);
     Path newPath = new Path(parent.getParent(), parent.getName() + "-splitting");
     FS.rename(parent, newPath);
-    wal.createWriterInstance(path);
+    wal.createWriterInstance(FS, path);
     fail("It should fail to create the new WAL");
   }
 
@@ -406,7 +412,6 @@ public abstract class AbstractTestFSWAL {
    * slowing appends in the background ring buffer thread while in foreground we call flush. The
    * addition of the sync over HRegion in flush should fix an issue where flush was returning before
    * all of its appends had made it out to the WAL (HBASE-11109).
-   * @throws IOException
    * @see <a href="https://issues.apache.org/jira/browse/HBASE-11109">HBASE-11109</a>
    */
   @Test
@@ -428,24 +433,23 @@ public abstract class AbstractTestFSWAL {
     }
     // subclass and doctor a method.
     AbstractFSWAL<?> wal = newSlowWAL(FS, CommonFSUtils.getWALRootDir(CONF), DIR.toString(),
-        testName, CONF, null, true, null, null, new Runnable() {
+      testName, CONF, null, true, null, null, new Runnable() {
 
-          @Override
-          public void run() {
-            if (goslow.get()) {
-              Threads.sleep(100);
-              LOG.debug("Sleeping before appending 100ms");
-            }
+        @Override
+        public void run() {
+          if (goslow.get()) {
+            Threads.sleep(100);
+            LOG.debug("Sleeping before appending 100ms");
           }
-        });
+        }
+      });
     HRegion region = HRegion.openHRegion(TEST_UTIL.getConfiguration(),
       TEST_UTIL.getTestFileSystem(), TEST_UTIL.getDefaultRootDirPath(), hri, htd, wal);
     EnvironmentEdge ee = EnvironmentEdgeManager.getDelegate();
     try {
       List<Put> puts = null;
       for (byte[] fam : htd.getColumnFamilyNames()) {
-        puts =
-            TestWALReplay.addRegionEdits(rowName, fam, countPerFamily, ee, region, "x");
+        puts = TestWALReplay.addRegionEdits(rowName, fam, countPerFamily, ee, region, "x");
       }
 
       // Now assert edits made it in.
@@ -456,9 +460,9 @@ public abstract class AbstractTestFSWAL {
       // Construct a WALEdit and add it a few times to the WAL.
       WALEdit edits = new WALEdit();
       for (Put p : puts) {
-        CellScanner cs = p.cellScanner();
+        ExtendedCellScanner cs = p.cellScanner();
         while (cs.advance()) {
-          edits.add(cs.current());
+          WALEditInternalHelper.addExtendedCell(edits, cs.current());
         }
       }
       // Add any old cluster id.
@@ -489,7 +493,7 @@ public abstract class AbstractTestFSWAL {
   public void testSyncNoAppend() throws IOException {
     String testName = currentTest.getMethodName();
     AbstractFSWAL<?> wal = newWAL(FS, CommonFSUtils.getWALRootDir(CONF), DIR.toString(), testName,
-        CONF, null, true, null, null);
+      CONF, null, true, null, null);
     try {
       wal.sync();
     } finally {
@@ -514,10 +518,10 @@ public abstract class AbstractTestFSWAL {
     long timestamp = EnvironmentEdgeManager.currentTime();
     byte[] row = Bytes.toBytes("row");
     WALEdit cols = new WALEdit();
-    cols.add(new KeyValue(row, row, row, timestamp, row));
+    WALEditInternalHelper.addExtendedCell(cols, new KeyValue(row, row, row, timestamp, row));
     WALKeyImpl key =
-        new WALKeyImpl(ri.getEncodedNameAsBytes(), td.getTableName(), SequenceId.NO_SEQUENCE_ID,
-          timestamp, WALKey.EMPTY_UUIDS, HConstants.NO_NONCE, HConstants.NO_NONCE, mvcc, scopes);
+      new WALKeyImpl(ri.getEncodedNameAsBytes(), td.getTableName(), SequenceId.NO_SEQUENCE_ID,
+        timestamp, WALKey.EMPTY_UUIDS, HConstants.NO_NONCE, HConstants.NO_NONCE, mvcc, scopes);
     try {
       wal.append(ri, key, cols, true);
       fail("Should fail since the wal has already been closed");
@@ -540,9 +544,10 @@ public abstract class AbstractTestFSWAL {
 
   private AbstractFSWAL<?> createHoldingWAL(String testName, AtomicBoolean startHoldingForAppend,
     CountDownLatch holdAppend) throws IOException {
+    FS.mkdirs(new Path(CommonFSUtils.getRootDir(CONF), testName));
     AbstractFSWAL<?> wal = newWAL(FS, CommonFSUtils.getRootDir(CONF), testName,
       HConstants.HREGION_OLDLOGDIR_NAME, CONF, null, true, null, null);
-    wal.init();
+    // newWAL has already called wal.init()
     wal.registerWALActionsListener(new WALActionsListener() {
       @Override
       public void visitLogEntryBeforeWrite(RegionInfo info, WALKey logKey, WALEdit logEdit) {
@@ -561,8 +566,8 @@ public abstract class AbstractTestFSWAL {
   private HRegion createHoldingHRegion(Configuration conf, TableDescriptor htd, WAL wal)
     throws IOException {
     RegionInfo hri = RegionInfoBuilder.newBuilder(htd.getTableName()).build();
-    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0,
-      0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
+    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null,
+      MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
     TEST_UTIL.createLocalHRegion(hri, CONF, htd, wal).close();
     RegionServerServices rsServices = mock(RegionServerServices.class);
     when(rsServices.getServerName()).thenReturn(ServerName.valueOf("localhost:12345", 123456));
@@ -621,7 +626,7 @@ public abstract class AbstractTestFSWAL {
       }, startHoldingForAppend, closeFinished, holdAppend);
 
       // now check the region's unflushed seqIds.
-      long seqId = wal.getEarliestMemStoreSeqNum(region.getRegionInfo().getEncodedNameAsBytes());
+      long seqId = getEarliestMemStoreSeqNum(wal, region.getRegionInfo().getEncodedNameAsBytes());
       assertEquals("Found seqId for the region which is already closed", HConstants.NO_SEQNUM,
         seqId);
     } finally {
@@ -629,6 +634,16 @@ public abstract class AbstractTestFSWAL {
       region.close();
       wal.close();
     }
+  }
+
+  public static long getEarliestMemStoreSeqNum(WAL wal, byte[] encodedRegionName) {
+    if (wal != null) {
+      if (wal instanceof AbstractFSWAL) {
+        return ((AbstractFSWAL<?>) wal).getSequenceIdAccounting()
+          .getLowestSequenceId(encodedRegionName);
+      }
+    }
+    return HConstants.NO_SEQNUM;
   }
 
   private static final Set<byte[]> STORES_TO_FLUSH =
@@ -679,8 +694,8 @@ public abstract class AbstractTestFSWAL {
       long maxFlushedSeqId2 = region.getMaxFlushedSeqId();
       // make sure that the maxFlushedSequenceId does not go backwards
       assertTrue(
-        "maxFlushedSeqId1(" + maxFlushedSeqId1 +
-          ") is not greater than or equal to maxFlushedSeqId2(" + maxFlushedSeqId2 + ")",
+        "maxFlushedSeqId1(" + maxFlushedSeqId1
+          + ") is not greater than or equal to maxFlushedSeqId2(" + maxFlushedSeqId2 + ")",
         maxFlushedSeqId1 <= maxFlushedSeqId2);
     } finally {
       exec.shutdownNow();

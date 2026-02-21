@@ -18,23 +18,31 @@
 package org.apache.hadoop.hbase.regionserver;
 
 import java.io.IOException;
-
-import org.apache.hadoop.hbase.Cell;
-import org.apache.yetus.audience.InterfaceAudience;
+import java.util.List;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.util.BloomFilterWriter;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * A sink of cells that allows appending cells to the Writers that implement it.
- * {@link org.apache.hadoop.hbase.io.hfile.HFile.Writer},
- * {@link StoreFileWriter}, {@link AbstractMultiFileWriter},
- * {@link BloomFilterWriter} are some implementors of this.
+ * {@link org.apache.hadoop.hbase.io.hfile.HFile.Writer}, {@link StoreFileWriter},
+ * {@link AbstractMultiFileWriter}, {@link BloomFilterWriter} are some implementors of this.
  */
 @InterfaceAudience.Private
 public interface CellSink {
   /**
    * Append the given cell
    * @param cell the cell to be added
-   * @throws IOException
    */
-  void append(Cell cell) throws IOException;
+  void append(ExtendedCell cell) throws IOException;
+
+  /**
+   * Append the given (possibly partial) list of cells of a row
+   * @param cellList the cell list to be added
+   */
+  default void appendAll(List<ExtendedCell> cellList) throws IOException {
+    for (ExtendedCell cell : cellList) {
+      append(cell);
+    }
+  }
 }

@@ -21,19 +21,19 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.ScheduledChore;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.Stoppable;
+import org.apache.hadoop.hbase.regionserver.HRegionServer;
+import org.apache.hadoop.hbase.regionserver.RegionServerCoprocessorHost;
 import org.apache.hadoop.hbase.regionserver.ReplicationSinkService;
 import org.apache.hadoop.hbase.replication.regionserver.ReplicationLoad;
 import org.apache.hadoop.hbase.replication.regionserver.ReplicationSink;
 import org.apache.hadoop.hbase.wal.WALFactory;
-import org.apache.hadoop.hbase.wal.WALProvider;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,7 +56,7 @@ public class ReplicationSinkServiceImpl implements ReplicationSinkService {
   private int statsPeriodInSecond;
 
   @Override
-  public void replicateLogEntries(List<AdminProtos.WALEntry> entries, CellScanner cells,
+  public void replicateLogEntries(List<AdminProtos.WALEntry> entries, ExtendedCellScanner cells,
     String replicationClusterId, String sourceBaseNamespaceDirPath,
     String sourceHFileArchiveDirPath) throws IOException {
     this.replicationSink.replicateEntries(entries, cells, replicationClusterId,
@@ -68,17 +68,19 @@ public class ReplicationSinkServiceImpl implements ReplicationSinkService {
     WALFactory walFactory) throws IOException {
     this.server = server;
     this.conf = server.getConfiguration();
-    this.statsPeriodInSecond =
-      this.conf.getInt("replication.stats.thread.period.seconds", 5 * 60);
+    this.statsPeriodInSecond = this.conf.getInt("replication.stats.thread.period.seconds", 5 * 60);
     this.replicationLoad = new ReplicationLoad();
   }
 
   @Override
   public void startReplicationService() throws IOException {
-    this.replicationSink = new ReplicationSink(this.conf);
-    this.server.getChoreService().scheduleChore(
-        new ReplicationStatisticsChore("ReplicationSinkStatistics", server,
-            (int) TimeUnit.SECONDS.toMillis(statsPeriodInSecond)));
+    RegionServerCoprocessorHost rsServerHost = null;
+    if (server instanceof HRegionServer) {
+      rsServerHost = ((HRegionServer) server).getRegionServerCoprocessorHost();
+    }
+    this.replicationSink = new ReplicationSink(this.conf, rsServerHost);
+    this.server.getChoreService().scheduleChore(new ReplicationStatisticsChore(
+      "ReplicationSinkStatistics", server, (int) TimeUnit.SECONDS.toMillis(statsPeriodInSecond)));
   }
 
   @Override

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -36,17 +36,18 @@ import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 
 /**
- * A silly test that does nothing but make sure an rpcscheduler factory makes what it says
- * it is going to make.
+ * A silly test that does nothing but make sure an rpcscheduler factory makes what it says it is
+ * going to make.
  */
 @Category(SmallTests.class)
 public class TestRpcSchedulerFactory {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestRpcSchedulerFactory.class);
+    HBaseClassTestRule.forClass(TestRpcSchedulerFactory.class);
 
-  @Rule public TestName testName = new TestName();
+  @Rule
+  public TestName testName = new TestName();
   private Configuration conf;
 
   @Before
@@ -61,6 +62,18 @@ public class TestRpcSchedulerFactory {
     this.conf.setDouble(RWQueueRpcExecutor.CALL_QUEUE_READ_SHARE_CONF_KEY, 0.5);
     this.conf.setDouble(RpcExecutor.CALL_QUEUE_HANDLER_FACTOR_CONF_KEY, 0.5);
     this.conf.setDouble(RWQueueRpcExecutor.CALL_QUEUE_SCAN_SHARE_CONF_KEY, 0.5);
+    RpcSchedulerFactory factory = new SimpleRpcSchedulerFactory();
+    RpcScheduler rpcScheduler = factory.create(this.conf, null, null);
+    assertTrue(rpcScheduler.getClass().equals(SimpleRpcScheduler.class));
+  }
+
+  @Test
+  public void testRWQWithoutReadShare() {
+    // Set some configs just to see how it changes the scheduler. Can't assert the settings had
+    // an effect. Just eyeball the log.
+    this.conf.setDouble(RWQueueRpcExecutor.CALL_QUEUE_READ_SHARE_CONF_KEY, 0);
+    this.conf.setDouble(RpcExecutor.CALL_QUEUE_HANDLER_FACTOR_CONF_KEY, 0.5);
+    this.conf.setDouble(RWQueueRpcExecutor.CALL_QUEUE_SCAN_SHARE_CONF_KEY, 0);
     RpcSchedulerFactory factory = new SimpleRpcSchedulerFactory();
     RpcScheduler rpcScheduler = factory.create(this.conf, null, null);
     assertTrue(rpcScheduler.getClass().equals(SimpleRpcScheduler.class));

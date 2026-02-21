@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -32,15 +32,14 @@ import org.junit.experimental.categories.Category;
 @Category({ MiscTests.class, SmallTests.class })
 public class TestUnion2 {
   @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestUnion2.class);
+  public static final HBaseClassTestRule CLASS_RULE = HBaseClassTestRule.forClass(TestUnion2.class);
 
   /**
    * An example <code>Union</code>
    */
   private static class SampleUnion1 extends Union2<Integer, String> {
     private static final byte IS_INTEGER = 0x00;
-    private static final byte IS_STRING  = 0x01;
+    private static final byte IS_STRING = 0x01;
 
     public SampleUnion1() {
       super(new RawInteger(), new RawStringTerminated(Order.DESCENDING, "."));
@@ -74,13 +73,12 @@ public class TestUnion2 {
     public int encodedLength(Object val) {
       Integer i = null;
       String s = null;
-      try {
+      if (val instanceof Integer) {
         i = (Integer) val;
-      } catch (ClassCastException ignored) {}
-      try {
+      }
+      if (val instanceof String) {
         s = (String) val;
-      } catch (ClassCastException ignored) {}
-
+      }
       if (null != i) {
         return 1 + typeA.encodedLength(i);
       }
@@ -88,7 +86,6 @@ public class TestUnion2 {
       if (null != s) {
         return 1 + typeB.encodedLength(s);
       }
-
       throw new IllegalArgumentException("val is not a valid member of this union.");
     }
 
@@ -96,13 +93,12 @@ public class TestUnion2 {
     public int encode(PositionedByteRange dst, Object val) {
       Integer i = null;
       String s = null;
-      try {
+      if (val instanceof Integer) {
         i = (Integer) val;
-      } catch (ClassCastException ignored) {}
-      try {
+      }
+      if (val instanceof String) {
         s = (String) val;
-      } catch (ClassCastException ignored) {}
-
+      }
       if (null != i) {
         dst.put(IS_INTEGER);
         return 1 + typeA.encode(dst, i);

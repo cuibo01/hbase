@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -69,7 +69,13 @@ public abstract class WALDurabilityTestBase<T extends WAL> {
     TEST_UTIL.cleanupTestDir();
   }
 
-  protected abstract T getWAL(FileSystem fs, Path root, String logDir, Configuration conf)
+  protected final T getWAL(FileSystem fs, Path root, String logDir, Configuration conf)
+    throws IOException {
+    fs.mkdirs(new Path(root, logDir));
+    return getWAL0(fs, root, logDir, conf);
+  }
+
+  protected abstract T getWAL0(FileSystem fs, Path root, String logDir, Configuration conf)
     throws IOException;
 
   protected abstract void resetSyncFlag(T wal);
@@ -157,9 +163,9 @@ public abstract class WALDurabilityTestBase<T extends WAL> {
    *         when done.
    */
   public static HRegion initHRegion(TableName tableName, byte[] startKey, byte[] stopKey,
-      Configuration conf, WAL wal) throws IOException {
-    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0,
-      0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
+    Configuration conf, WAL wal) throws IOException {
+    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null,
+      MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
     return TEST_UTIL.createLocalHRegion(tableName, startKey, stopKey, conf, false,
       Durability.USE_DEFAULT, wal, COLUMN_FAMILY_BYTES);
   }

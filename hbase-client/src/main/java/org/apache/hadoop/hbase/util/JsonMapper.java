@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -39,5 +39,9 @@ public final class JsonMapper {
 
   public static String writeObjectAsString(Object object) throws IOException {
     return GSON.toJson(object);
+  }
+
+  public static <T> T fromJson(String json, Class<T> clazz) {
+    return GSON.fromJson(json, clazz);
   }
 }

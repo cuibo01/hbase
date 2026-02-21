@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,7 +22,7 @@ import static org.junit.Assert.assertSame;
 
 import java.io.IOException;
 import java.util.Arrays;
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
@@ -39,7 +39,7 @@ public class TestBatchScanResultCache {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestBatchScanResultCache.class);
+    HBaseClassTestRule.forClass(TestBatchScanResultCache.class);
 
   private static byte[] CF = Bytes.toBytes("cf");
 
@@ -56,12 +56,12 @@ public class TestBatchScanResultCache {
     resultCache = null;
   }
 
-  static Cell createCell(byte[] cf, int key, int cq) {
+  static ExtendedCell createCell(byte[] cf, int key, int cq) {
     return new KeyValue(Bytes.toBytes(key), cf, Bytes.toBytes("cq" + cq), Bytes.toBytes(key));
   }
 
-  static Cell[] createCells(byte[] cf, int key, int numCqs) {
-    Cell[] cells = new Cell[numCqs];
+  static ExtendedCell[] createCells(byte[] cf, int key, int numCqs) {
+    ExtendedCell[] cells = new ExtendedCell[numCqs];
     for (int i = 0; i < numCqs; i++) {
       cells[i] = createCell(cf, key, i);
     }
@@ -83,15 +83,14 @@ public class TestBatchScanResultCache {
     assertSame(ScanResultCache.EMPTY_RESULT_ARRAY,
       resultCache.addAndGet(ScanResultCache.EMPTY_RESULT_ARRAY, true));
 
-    Cell[] cells1 = createCells(CF, 1, 10);
-    Cell[] cells2 = createCells(CF, 2, 10);
-    Cell[] cells3 = createCells(CF, 3, 10);
+    ExtendedCell[] cells1 = createCells(CF, 1, 10);
+    ExtendedCell[] cells2 = createCells(CF, 2, 10);
+    ExtendedCell[] cells3 = createCells(CF, 3, 10);
     assertEquals(0, resultCache.addAndGet(
       new Result[] { Result.create(Arrays.copyOf(cells1, 3), null, false, true) }, false).length);
-    Result[] results = resultCache.addAndGet(
-      new Result[] { Result.create(Arrays.copyOfRange(cells1, 3, 7), null, false, true),
-          Result.create(Arrays.copyOfRange(cells1, 7, 10), null, false, true) },
-      false);
+    Result[] results = resultCache
+      .addAndGet(new Result[] { Result.create(Arrays.copyOfRange(cells1, 3, 7), null, false, true),
+        Result.create(Arrays.copyOfRange(cells1, 7, 10), null, false, true) }, false);
     assertEquals(2, results.length);
     assertResultEquals(results[0], 1, 0, 4);
     assertResultEquals(results[1], 1, 4, 8);
@@ -99,14 +98,13 @@ public class TestBatchScanResultCache {
     assertEquals(1, results.length);
     assertResultEquals(results[0], 1, 8, 10);
 
-    results = resultCache.addAndGet(
-      new Result[] { Result.create(Arrays.copyOfRange(cells2, 0, 4), null, false, true),
-          Result.create(Arrays.copyOfRange(cells2, 4, 8), null, false, true),
-          Result.create(Arrays.copyOfRange(cells2, 8, 10), null, false, true),
-          Result.create(Arrays.copyOfRange(cells3, 0, 4), null, false, true),
-          Result.create(Arrays.copyOfRange(cells3, 4, 8), null, false, true),
-          Result.create(Arrays.copyOfRange(cells3, 8, 10), null, false, false) },
-      false);
+    results = resultCache
+      .addAndGet(new Result[] { Result.create(Arrays.copyOfRange(cells2, 0, 4), null, false, true),
+        Result.create(Arrays.copyOfRange(cells2, 4, 8), null, false, true),
+        Result.create(Arrays.copyOfRange(cells2, 8, 10), null, false, true),
+        Result.create(Arrays.copyOfRange(cells3, 0, 4), null, false, true),
+        Result.create(Arrays.copyOfRange(cells3, 4, 8), null, false, true),
+        Result.create(Arrays.copyOfRange(cells3, 8, 10), null, false, false) }, false);
     assertEquals(6, results.length);
     assertResultEquals(results[0], 2, 0, 4);
     assertResultEquals(results[1], 2, 4, 8);

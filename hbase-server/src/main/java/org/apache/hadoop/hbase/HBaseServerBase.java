@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,10 +17,15 @@
  */
 package org.apache.hadoop.hbase;
 
+import static org.apache.hadoop.hbase.ChoreService.CHORE_SERVICE_INITIAL_POOL_SIZE;
+import static org.apache.hadoop.hbase.ChoreService.DEFAULT_CHORE_SERVICE_INITIAL_POOL_SIZE;
 import static org.apache.hadoop.hbase.HConstants.DEFAULT_HBASE_SPLIT_COORDINATED_BY_ZK;
 import static org.apache.hadoop.hbase.HConstants.HBASE_SPLIT_WAL_COORDINATED_BY_ZK;
 
 import com.google.errorprone.annotations.RestrictedApi;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Scope;
 import java.io.IOException;
 import java.lang.management.MemoryType;
 import java.net.BindException;
@@ -41,21 +46,31 @@ import org.apache.hadoop.hbase.client.ConnectionRegistryEndpoint;
 import org.apache.hadoop.hbase.conf.ConfigurationManager;
 import org.apache.hadoop.hbase.conf.ConfigurationObserver;
 import org.apache.hadoop.hbase.coordination.ZkCoordinatedStateManager;
+import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
 import org.apache.hadoop.hbase.executor.ExecutorService;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.http.InfoServer;
 import org.apache.hadoop.hbase.io.util.MemorySizeUtil;
 import org.apache.hadoop.hbase.ipc.RpcServerInterface;
+import org.apache.hadoop.hbase.keymeta.KeyManagementService;
+import org.apache.hadoop.hbase.keymeta.KeymetaAdmin;
+import org.apache.hadoop.hbase.keymeta.ManagedKeyDataCache;
+import org.apache.hadoop.hbase.keymeta.SystemKeyCache;
 import org.apache.hadoop.hbase.master.HMaster;
+import org.apache.hadoop.hbase.master.MasterCoprocessorHost;
 import org.apache.hadoop.hbase.namequeues.NamedQueueRecorder;
 import org.apache.hadoop.hbase.regionserver.ChunkCreator;
 import org.apache.hadoop.hbase.regionserver.HeapMemoryManager;
 import org.apache.hadoop.hbase.regionserver.MemStoreLAB;
+import org.apache.hadoop.hbase.regionserver.RegionServerCoprocessorHost;
+import org.apache.hadoop.hbase.regionserver.ShutdownHook;
 import org.apache.hadoop.hbase.security.Superusers;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.security.access.AccessChecker;
 import org.apache.hadoop.hbase.security.access.ZKPermissionWatcher;
+import org.apache.hadoop.hbase.trace.TraceUtil;
+import org.apache.hadoop.hbase.unsafe.HBasePlatformDependent;
 import org.apache.hadoop.hbase.util.Addressing;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -69,14 +84,13 @@ import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import sun.misc.Signal;
 
 /**
  * Base class for hbase services, such as master or region server.
  */
 @InterfaceAudience.Private
 public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends Thread
-  implements Server, ConfigurationObserver, ConnectionRegistryEndpoint {
+  implements Server, ConfigurationObserver, ConnectionRegistryEndpoint, KeyManagementService {
 
   private static final Logger LOG = LoggerFactory.getLogger(HBaseServerBase.class);
 
@@ -90,6 +104,9 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
   // shutdown. Also set by call to stop when debugging or running unit tests
   // of HRegionServer in isolation.
   protected volatile boolean stopped = false;
+
+  // Only for testing
+  private boolean isShutdownHookInstalled = false;
 
   /**
    * This servers startcode.
@@ -174,14 +191,14 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
 
   protected final NettyEventLoopGroupConfig eventLoopGroupConfig;
 
-  /**
-   * If running on Windows, do windows-specific setup.
-   */
-  private static void setupWindows(final Configuration conf, ConfigurationManager cm) {
+  private void setupSignalHandlers() {
     if (!SystemUtils.IS_OS_WINDOWS) {
-      Signal.handle(new Signal("HUP"), signal -> {
-        conf.reloadConfiguration();
-        cm.notifyAllObservers(conf);
+      HBasePlatformDependent.handle("HUP", (number, name) -> {
+        try {
+          updateConfiguration();
+        } catch (IOException e) {
+          LOG.error("Problem while reloading configuration", e);
+        }
       });
     }
   }
@@ -223,62 +240,82 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
     // init the filesystem
     this.dataFs = new HFileSystem(this.conf, useHBaseChecksum);
     this.dataRootDir = CommonFSUtils.getRootDir(this.conf);
+    int tableDescriptorParallelLoadThreads =
+      conf.getInt("hbase.tabledescriptor.parallel.load.threads", 0);
     this.tableDescriptors = new FSTableDescriptors(this.dataFs, this.dataRootDir,
-      !canUpdateTableDescriptor(), cacheTableDescriptor());
+      !canUpdateTableDescriptor(), cacheTableDescriptor(), tableDescriptorParallelLoadThreads);
   }
 
-  public HBaseServerBase(Configuration conf, String name)
-    throws ZooKeeperConnectionException, IOException {
+  public HBaseServerBase(Configuration conf, String name) throws IOException {
     super(name); // thread name
-    this.conf = conf;
-    this.eventLoopGroupConfig =
-      NettyEventLoopGroupConfig.setup(conf, getClass().getSimpleName() + "-EventLoopGroup");
-    this.startcode = EnvironmentEdgeManager.currentTime();
-    this.userProvider = UserProvider.instantiate(conf);
-    this.msgInterval = conf.getInt("hbase.regionserver.msginterval", 3 * 1000);
-    this.sleeper = new Sleeper(this.msgInterval, this);
-    this.namedQueueRecorder = createNamedQueueRecord();
-    this.rpcServices = createRpcServices();
-    useThisHostnameInstead = getUseThisHostnameInstead(conf);
-    InetSocketAddress addr = rpcServices.getSocketAddress();
-    String hostName = StringUtils.isBlank(useThisHostnameInstead) ? addr.getHostName() :
-      this.useThisHostnameInstead;
-    serverName = ServerName.valueOf(hostName, addr.getPort(), this.startcode);
-    // login the zookeeper client principal (if using security)
-    ZKAuthentication.loginClient(this.conf, HConstants.ZK_CLIENT_KEYTAB_FILE,
-      HConstants.ZK_CLIENT_KERBEROS_PRINCIPAL, hostName);
-    // login the server principal (if using secure Hadoop)
-    login(userProvider, hostName);
-    // init superusers and add the server principal (if using security)
-    // or process owner as default super user.
-    Superusers.initialize(conf);
-    zooKeeper =
-      new ZKWatcher(conf, getProcessName() + ":" + addr.getPort(), this, canCreateBaseZNode());
+    final Span span = TraceUtil.createSpan("HBaseServerBase.cxtor");
+    try (Scope ignored = span.makeCurrent()) {
+      this.conf = conf;
+      this.eventLoopGroupConfig =
+        NettyEventLoopGroupConfig.setup(conf, getClass().getSimpleName() + "-EventLoopGroup");
+      this.startcode = EnvironmentEdgeManager.currentTime();
+      this.userProvider = UserProvider.instantiate(conf);
+      this.msgInterval = conf.getInt("hbase.regionserver.msginterval", 3 * 1000);
+      this.sleeper = new Sleeper(this.msgInterval, this);
+      this.namedQueueRecorder = createNamedQueueRecord();
+      this.rpcServices = createRpcServices();
+      useThisHostnameInstead = getUseThisHostnameInstead(conf);
+      InetSocketAddress addr = rpcServices.getSocketAddress();
 
-    this.configurationManager = new ConfigurationManager();
-    setupWindows(conf, configurationManager);
+      // if use-ip is enabled, we will use ip to expose Master/RS service for client,
+      // see HBASE-27304 for details.
+      boolean useIp = conf.getBoolean(HConstants.HBASE_SERVER_USEIP_ENABLED_KEY,
+        HConstants.HBASE_SERVER_USEIP_ENABLED_DEFAULT);
+      String isaHostName =
+        useIp ? addr.getAddress().getHostAddress() : addr.getAddress().getHostName();
+      String hostName =
+        StringUtils.isBlank(useThisHostnameInstead) ? isaHostName : useThisHostnameInstead;
+      serverName = ServerName.valueOf(hostName, addr.getPort(), this.startcode);
+      // login the zookeeper client principal (if using security)
+      ZKAuthentication.loginClient(this.conf, HConstants.ZK_CLIENT_KEYTAB_FILE,
+        HConstants.ZK_CLIENT_KERBEROS_PRINCIPAL, hostName);
+      // login the server principal (if using secure Hadoop)
+      login(userProvider, hostName);
+      // init superusers and add the server principal (if using security)
+      // or process owner as default super user.
+      Superusers.initialize(conf);
+      zooKeeper =
+        new ZKWatcher(conf, getProcessName() + ":" + addr.getPort(), this, canCreateBaseZNode());
 
-    initializeFileSystem();
+      this.configurationManager = new ConfigurationManager();
+      setupSignalHandlers();
 
-    this.choreService = new ChoreService(getName(), true);
-    this.executorService = new ExecutorService(getName());
+      initializeFileSystem();
 
-    this.metaRegionLocationCache = new MetaRegionLocationCache(zooKeeper);
+      int choreServiceInitialSize =
+        conf.getInt(CHORE_SERVICE_INITIAL_POOL_SIZE, DEFAULT_CHORE_SERVICE_INITIAL_POOL_SIZE);
+      this.choreService = new ChoreService(getName(), choreServiceInitialSize, true);
+      this.executorService = new ExecutorService(getName());
 
-    if (clusterMode()) {
-      if (conf.getBoolean(HBASE_SPLIT_WAL_COORDINATED_BY_ZK,
-        DEFAULT_HBASE_SPLIT_COORDINATED_BY_ZK)) {
-        csm = new ZkCoordinatedStateManager(this);
+      this.metaRegionLocationCache = new MetaRegionLocationCache(zooKeeper);
+
+      if (clusterMode()) {
+        if (
+          conf.getBoolean(HBASE_SPLIT_WAL_COORDINATED_BY_ZK, DEFAULT_HBASE_SPLIT_COORDINATED_BY_ZK)
+        ) {
+          csm = new ZkCoordinatedStateManager(this);
+        } else {
+          csm = null;
+        }
+        clusterStatusTracker = new ClusterStatusTracker(zooKeeper, this);
+        clusterStatusTracker.start();
       } else {
         csm = null;
+        clusterStatusTracker = null;
       }
-      clusterStatusTracker = new ClusterStatusTracker(zooKeeper, this);
-      clusterStatusTracker.start();
-    } else {
-      csm = null;
-      clusterStatusTracker = null;
+      putUpWebUI();
+      span.setStatus(StatusCode.OK);
+    } catch (Throwable t) {
+      TraceUtil.setError(span, t);
+      throw t;
+    } finally {
+      span.end();
     }
-    putUpWebUI();
   }
 
   /**
@@ -289,9 +326,11 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
       this.conf.getInt(HConstants.REGIONSERVER_INFO_PORT, HConstants.DEFAULT_REGIONSERVER_INFOPORT);
     String addr = this.conf.get("hbase.regionserver.info.bindAddress", "0.0.0.0");
 
+    boolean isMaster = false;
     if (this instanceof HMaster) {
       port = conf.getInt(HConstants.MASTER_INFO_PORT, HConstants.DEFAULT_MASTER_INFOPORT);
       addr = this.conf.get("hbase.master.info.bindAddress", "0.0.0.0");
+      isMaster = true;
     }
     // -1 is for disabling info server
     if (port < 0) {
@@ -299,9 +338,9 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
     }
 
     if (!Addressing.isLocalAddress(InetAddress.getByName(addr))) {
-      String msg = "Failed to start http info server. Address " + addr +
-        " does not belong to this host. Correct configuration parameter: " +
-        "hbase.regionserver.info.bindAddress";
+      String msg = "Failed to start http info server. Address " + addr
+        + " does not belong to this host. Correct configuration parameter: "
+        + (isMaster ? "hbase.master.info.bindAddress" : "hbase.regionserver.info.bindAddress");
       LOG.error(msg);
       throw new IOException(msg);
     }
@@ -368,6 +407,21 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
     return zooKeeper;
   }
 
+  @Override
+  public KeymetaAdmin getKeymetaAdmin() {
+    return null;
+  }
+
+  @Override
+  public ManagedKeyDataCache getManagedKeyDataCache() {
+    return null;
+  }
+
+  @Override
+  public SystemKeyCache getSystemKeyCache() {
+    return null;
+  }
+
   protected final void shutdownChore(ScheduledChore chore) {
     if (chore != null) {
       chore.shutdown();
@@ -383,8 +437,9 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
       long globalMemStoreSize = pair.getFirst();
       boolean offheap = pair.getSecond() == MemoryType.NON_HEAP;
       // When off heap memstore in use, take full area for chunk pool.
-      float poolSizePercentage = offheap ? 1.0F :
-        conf.getFloat(MemStoreLAB.CHUNK_POOL_MAXSIZE_KEY, MemStoreLAB.POOL_MAX_SIZE_DEFAULT);
+      float poolSizePercentage = offheap
+        ? 1.0F
+        : conf.getFloat(MemStoreLAB.CHUNK_POOL_MAXSIZE_KEY, MemStoreLAB.POOL_MAX_SIZE_DEFAULT);
       float initialCountPercentage = conf.getFloat(MemStoreLAB.CHUNK_POOL_INITIALSIZE_KEY,
         MemStoreLAB.POOL_INITIAL_SIZE_DEFAULT);
       int chunkSize = conf.getInt(MemStoreLAB.CHUNK_SIZE_KEY, MemStoreLAB.CHUNK_SIZE_DEFAULT);
@@ -447,6 +502,32 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
     }
   }
 
+  protected final void closeTableDescriptors() {
+    if (this.tableDescriptors != null) {
+      LOG.info("Close table descriptors");
+      try {
+        this.tableDescriptors.close();
+      } catch (IOException e) {
+        LOG.debug("Failed to close table descriptors gracefully", e);
+      }
+    }
+  }
+
+  /**
+   * In order to register ShutdownHook, this method is called when HMaster and HRegionServer are
+   * started. For details, please refer to HBASE-26951
+   */
+  protected final void installShutdownHook() {
+    ShutdownHook.install(conf, dataFs, this, Thread.currentThread());
+    isShutdownHookInstalled = true;
+  }
+
+  @RestrictedApi(explanation = "Should only be called in tests", link = "",
+      allowedOnPath = ".*/src/test/.*")
+  public boolean isShutdownHookInstalled() {
+    return isShutdownHookInstalled;
+  }
+
   @Override
   public ServerName getServerName() {
     return serverName;
@@ -457,9 +538,7 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
     return choreService;
   }
 
-  /**
-   * @return Return table descriptors implementation.
-   */
+  /** Returns Return table descriptors implementation. */
   public TableDescriptors getTableDescriptors() {
     return this.tableDescriptors;
   }
@@ -487,9 +566,7 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
     return ConnectionFactory.createConnection(conf, null, user);
   }
 
-  /**
-   * @return Return the rootDir.
-   */
+  /** Returns Return the rootDir. */
   public Path getDataRootDir() {
     return dataRootDir;
   }
@@ -499,30 +576,22 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
     return dataFs;
   }
 
-  /**
-   * @return Return the walRootDir.
-   */
+  /** Returns Return the walRootDir. */
   public Path getWALRootDir() {
     return walRootDir;
   }
 
-  /**
-   * @return Return the walFs.
-   */
+  /** Returns Return the walFs. */
   public FileSystem getWALFileSystem() {
     return walFs;
   }
 
-  /**
-   * @return True if the cluster is up.
-   */
+  /** Returns True if the cluster is up. */
   public boolean isClusterUp() {
     return !clusterMode() || this.clusterStatusTracker.isClusterUp();
   }
 
-  /**
-   * @return time stamp in millis of when this server was started
-   */
+  /** Returns time stamp in millis of when this server was started */
   public long getStartcode() {
     return this.startcode;
   }
@@ -537,7 +606,6 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
 
   /**
    * get NamedQueue Provider to add different logs to ringbuffer
-   * @return NamedQueueRecorder
    */
   public NamedQueueRecorder getNamedQueueRecorder() {
     return this.namedQueueRecorder;
@@ -556,25 +624,58 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
   }
 
   @RestrictedApi(explanation = "Should only be called in tests", link = "",
-    allowedOnPath = ".*/src/test/.*")
+      allowedOnPath = ".*/src/test/.*")
   public MetaRegionLocationCache getMetaRegionLocationCache() {
     return this.metaRegionLocationCache;
+  }
+
+  @RestrictedApi(explanation = "Should only be called in tests", link = "",
+      allowedOnPath = ".*/src/test/.*")
+  public ConfigurationManager getConfigurationManager() {
+    return configurationManager;
   }
 
   /**
    * Reload the configuration from disk.
    */
-  public void updateConfiguration() {
+  public void updateConfiguration() throws IOException {
     LOG.info("Reloading the configuration from disk.");
     // Reload the configuration from disk.
+    preUpdateConfiguration();
     conf.reloadConfiguration();
     configurationManager.notifyAllObservers(conf);
+    postUpdateConfiguration();
+  }
+
+  @Override
+  public KeyManagementService getKeyManagementService() {
+    return this;
+  }
+
+  private void preUpdateConfiguration() throws IOException {
+    CoprocessorHost<?, ?> coprocessorHost = getCoprocessorHost();
+    if (coprocessorHost instanceof RegionServerCoprocessorHost) {
+      ((RegionServerCoprocessorHost) coprocessorHost).preUpdateConfiguration(conf);
+    } else if (coprocessorHost instanceof MasterCoprocessorHost) {
+      ((MasterCoprocessorHost) coprocessorHost).preUpdateConfiguration(conf);
+    }
+  }
+
+  private void postUpdateConfiguration() throws IOException {
+    CoprocessorHost<?, ?> coprocessorHost = getCoprocessorHost();
+    if (coprocessorHost instanceof RegionServerCoprocessorHost) {
+      ((RegionServerCoprocessorHost) coprocessorHost).postUpdateConfiguration(conf);
+    } else if (coprocessorHost instanceof MasterCoprocessorHost) {
+      ((MasterCoprocessorHost) coprocessorHost).postUpdateConfiguration(conf);
+    }
   }
 
   @Override
   public String toString() {
     return getServerName().toString();
   }
+
+  protected abstract CoprocessorHost<?, ?> getCoprocessorHost();
 
   protected abstract boolean canCreateBaseZNode();
 

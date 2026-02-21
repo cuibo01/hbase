@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,8 +17,8 @@
  */
 package org.apache.hadoop.hbase.replication.regionserver;
 
-import java.io.IOException;
-import java.util.concurrent.atomic.AtomicLong;
+import static org.junit.Assert.assertTrue;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
@@ -31,7 +31,6 @@ import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
@@ -41,12 +40,10 @@ import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.ReplicationTests;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.zookeeper.MiniZooKeeperCluster;
 import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 import org.junit.AfterClass;
-import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Rule;
@@ -56,12 +53,14 @@ import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
+
 @Category({ ReplicationTests.class, LargeTests.class })
 public class TestGlobalReplicationThrottler {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestGlobalReplicationThrottler.class);
+    HBaseClassTestRule.forClass(TestGlobalReplicationThrottler.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestGlobalReplicationThrottler.class);
   private static final int REPLICATION_SOURCE_QUOTA = 200;
@@ -92,20 +91,20 @@ public class TestGlobalReplicationThrottler {
     utility1 = new HBaseTestingUtil(conf1);
     utility1.startMiniZKCluster();
     MiniZooKeeperCluster miniZK = utility1.getZkCluster();
-    new ZKWatcher(conf1, "cluster1", null, true);
+    new ZKWatcher(conf1, "cluster1", null, true).close();
 
     conf2 = new Configuration(conf1);
     conf2.set(HConstants.ZOOKEEPER_ZNODE_PARENT, "/2");
 
     utility2 = new HBaseTestingUtil(conf2);
     utility2.setZkCluster(miniZK);
-    new ZKWatcher(conf2, "cluster2", null, true);
-
-    ReplicationPeerConfig rpc = ReplicationPeerConfig.newBuilder()
-      .setClusterKey(utility2.getClusterKey()).build();
+    new ZKWatcher(conf2, "cluster2", null, true).close();
 
     utility1.startMiniCluster();
     utility2.startMiniCluster();
+
+    ReplicationPeerConfig rpc =
+      ReplicationPeerConfig.newBuilder().setClusterKey(utility2.getRpcConnnectionURI()).build();
 
     try (Connection connection = ConnectionFactory.createConnection(utility1.getConfiguration());
       Admin admin1 = connection.getAdmin()) {
@@ -122,11 +121,11 @@ public class TestGlobalReplicationThrottler {
     utility1.shutdownMiniCluster();
   }
 
+  private volatile boolean testQuotaPass = false;
+  private volatile boolean testQuotaNonZero = false;
 
-  volatile private boolean testQuotaPass = false;
-  volatile private boolean testQuotaNonZero = false;
   @Test
-  public void testQuota() throws IOException {
+  public void testQuota() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     TableDescriptor tableDescriptor =
       TableDescriptorBuilder.newBuilder(tableName).setColumnFamily(ColumnFamilyDescriptorBuilder
@@ -134,19 +133,19 @@ public class TestGlobalReplicationThrottler {
     utility1.getAdmin().createTable(tableDescriptor);
     utility2.getAdmin().createTable(tableDescriptor);
 
-    Thread watcher = new Thread(()->{
-      Replication replication = (Replication)utility1.getMiniHBaseCluster()
-          .getRegionServer(0).getReplicationSourceService();
-      AtomicLong bufferUsed = replication.getReplicationManager().getTotalBufferUsed();
+    Thread watcher = new Thread(() -> {
+      Replication replication = (Replication) utility1.getMiniHBaseCluster().getRegionServer(0)
+        .getReplicationSourceService();
       testQuotaPass = true;
       while (!Thread.interrupted()) {
-        long size = bufferUsed.get();
+        long size = replication.getReplicationManager().getTotalBufferUsed();
         if (size > 0) {
           testQuotaNonZero = true;
         }
-        //the reason here doing "numOfPeer + 1" is because by using method addEntryToBatch(), even the
-        // batch size (after added last entry) exceeds quota, it still keeps the last one in the batch
-        // so total used buffer size can be one "replication.total.buffer.quota" larger than expected
+        // the reason here doing "numOfPeer + 1" is because by using method addEntryToBatch(), even
+        // the batch size (after added last entry) exceeds quota, it still keeps the last one in the
+        // batch so total used buffer size can be one "replication.total.buffer.quota" larger than
+        // expected
         if (size > REPLICATION_SOURCE_QUOTA * (numOfPeer + 1)) {
           // We read logs first then check throttler, so if the buffer quota limiter doesn't
           // take effect, it will push many logs and exceed the quota.
@@ -157,36 +156,24 @@ public class TestGlobalReplicationThrottler {
     });
     watcher.start();
 
-    try(Table t1 = utility1.getConnection().getTable(tableName);
-        Table t2 = utility2.getConnection().getTable(tableName)) {
+    try (Table t1 = utility1.getConnection().getTable(tableName)) {
       for (int i = 0; i < 50; i++) {
         Put put = new Put(ROWS[i]);
         put.addColumn(famName, VALUE, VALUE);
         t1.put(put);
       }
-      long start = EnvironmentEdgeManager.currentTime();
-      while (EnvironmentEdgeManager.currentTime() - start < 180000) {
-        Scan scan = new Scan();
-        scan.setCaching(50);
-        int count = 0;
-        try (ResultScanner results = t2.getScanner(scan)) {
-          for (Result result : results) {
-            count++;
-          }
-        }
-        if (count < 50) {
-          LOG.info("Waiting all logs pushed to slave. Expected 50 , actual " + count);
-          Threads.sleep(200);
-          continue;
-        }
-        break;
-      }
     }
+    utility2.waitFor(180000, () -> {
+      try (Table t2 = utility2.getConnection().getTable(tableName);
+        ResultScanner results = t2.getScanner(new Scan().setCaching(50))) {
+        int count = Iterables.size(results);
+        return count >= 50;
+      }
+    });
 
     watcher.interrupt();
-    Assert.assertTrue(testQuotaPass);
-    Assert.assertTrue(testQuotaNonZero);
+    assertTrue(testQuotaPass);
+    assertTrue(testQuotaNonZero);
   }
-
 
 }

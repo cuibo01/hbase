@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,20 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver.querymatcher;
 
 import java.io.IOException;
 import java.util.SortedSet;
 import java.util.TreeSet;
-
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * This class is responsible for the tracking and enforcement of Deletes during the course of a Scan
@@ -50,7 +48,7 @@ public class ScanDeleteTracker implements DeleteTracker {
   protected boolean hasFamilyStamp = false;
   protected long familyStamp = 0L;
   protected SortedSet<Long> familyVersionStamps = new TreeSet<Long>();
-  protected Cell deleteCell = null;
+  protected ExtendedCell deleteCell = null;
   protected byte[] deleteBuffer = null;
   protected int deleteOffset = 0;
   protected int deleteLength = 0;
@@ -69,7 +67,7 @@ public class ScanDeleteTracker implements DeleteTracker {
    * @param cell - the delete cell
    */
   @Override
-  public void add(Cell cell) {
+  public void add(ExtendedCell cell) {
     long timestamp = cell.getTimestamp();
     byte type = cell.getTypeByte();
     if (!hasFamilyStamp || timestamp > familyStamp) {
@@ -99,10 +97,9 @@ public class ScanDeleteTracker implements DeleteTracker {
   /**
    * Check if the specified Cell buffer has been deleted by a previously seen delete.
    * @param cell - current cell to check if deleted by a previously seen delete
-   * @return deleteResult
    */
   @Override
-  public DeleteResult isDeleted(Cell cell) {
+  public DeleteResult isDeleted(ExtendedCell cell) {
     long timestamp = cell.getTimestamp();
     if (hasFamilyStamp && timestamp <= familyStamp) {
       return DeleteResult.FAMILY_DELETED;
@@ -133,12 +130,12 @@ public class ScanDeleteTracker implements DeleteTracker {
         deleteCell = null;
       } else {
         throw new IllegalStateException("isDelete failed: deleteBuffer="
-            + Bytes.toStringBinary(deleteCell.getQualifierArray(),
-                    deleteCell.getQualifierOffset(), deleteCell.getQualifierLength())
-            + ", qualifier="
-            + Bytes.toStringBinary(cell.getQualifierArray(), cell.getQualifierOffset(),
-              cell.getQualifierLength())
-            + ", timestamp=" + timestamp + ", comparison result: " + ret);
+          + Bytes.toStringBinary(deleteCell.getQualifierArray(), deleteCell.getQualifierOffset(),
+            deleteCell.getQualifierLength())
+          + ", qualifier="
+          + Bytes.toStringBinary(cell.getQualifierArray(), cell.getQualifierOffset(),
+            cell.getQualifierLength())
+          + ", timestamp=" + timestamp + ", comparison result: " + ret);
       }
     }
 

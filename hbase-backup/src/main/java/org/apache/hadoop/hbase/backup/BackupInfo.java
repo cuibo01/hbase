@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.backup;
 
 import java.io.IOException;
@@ -28,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.function.Predicate;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.backup.util.BackupUtils;
@@ -35,9 +35,9 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.BackupProtos;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.BackupProtos.BackupInfo.Builder;
 
 /**
  * An object to encapsulate the information for each backup session
@@ -45,21 +45,33 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.BackupProtos.BackupInfo
 @InterfaceAudience.Private
 public class BackupInfo implements Comparable<BackupInfo> {
   private static final Logger LOG = LoggerFactory.getLogger(BackupInfo.class);
+  private static final int MAX_FAILED_MESSAGE_LENGTH = 1024;
 
-  public interface Filter {
-    /**
-     * Filter interface
-     * @param info backup info
-     * @return true if info passes filter, false otherwise
-     */
-    boolean apply(BackupInfo info);
+  public interface Filter extends Predicate<BackupInfo> {
+    /** Returns true if the BackupInfo passes the filter, false otherwise */
+    @Override
+    boolean test(BackupInfo backupInfo);
+  }
+
+  public static Filter withRoot(String backupRoot) {
+    return info -> info.getBackupRootDir().equals(backupRoot);
+  }
+
+  public static Filter withType(BackupType type) {
+    return info -> info.getType() == type;
+  }
+
+  public static Filter withState(BackupState state) {
+    return info -> info.getState() == state;
   }
 
   /**
    * Backup session states
    */
   public enum BackupState {
-    RUNNING, COMPLETE, FAILED, ANY
+    RUNNING,
+    COMPLETE,
+    FAILED
   }
 
   /**
@@ -67,7 +79,12 @@ public class BackupInfo implements Comparable<BackupInfo> {
    * BackupState.RUNNING
    */
   public enum BackupPhase {
-    REQUEST, SNAPSHOT, PREPARE_INCREMENTAL, SNAPSHOTCOPY, INCREMENTAL_COPY, STORE_MANIFEST
+    REQUEST,
+    SNAPSHOT,
+    PREPARE_INCREMENTAL,
+    SNAPSHOTCOPY,
+    INCREMENTAL_COPY,
+    STORE_MANIFEST
   }
 
   /**
@@ -137,8 +154,8 @@ public class BackupInfo implements Comparable<BackupInfo> {
   private Map<TableName, Map<String, Long>> tableSetTimestampMap;
 
   /**
-   * Previous Region server log timestamps for table set after distributed log roll key -
-   * table name, value - map of RegionServer hostname -> last log rolled timestamp
+   * Previous Region server log timestamps for table set after distributed log roll key - table
+   * name, value - map of RegionServer hostname -> last log rolled timestamp
    */
   private Map<TableName, Map<String, Long>> incrTimestampMap;
 
@@ -156,6 +173,11 @@ public class BackupInfo implements Comparable<BackupInfo> {
    * Bandwidth per worker in MB per sec. -1 - unlimited
    */
   private long bandwidth = -1;
+
+  /**
+   * Do not verify checksum between source snapshot and exported snapshot
+   */
+  private boolean noChecksumVerify;
 
   public BackupInfo() {
     backupTableInfoMap = new HashMap<>();
@@ -190,6 +212,14 @@ public class BackupInfo implements Comparable<BackupInfo> {
     this.bandwidth = bandwidth;
   }
 
+  public void setNoChecksumVerify(boolean noChecksumVerify) {
+    this.noChecksumVerify = noChecksumVerify;
+  }
+
+  public boolean getNoChecksumVerify() {
+    return noChecksumVerify;
+  }
+
   public void setBackupTableInfoMap(Map<TableName, BackupTableInfo> backupTableInfoMap) {
     this.backupTableInfoMap = backupTableInfoMap;
   }
@@ -198,8 +228,7 @@ public class BackupInfo implements Comparable<BackupInfo> {
     return tableSetTimestampMap;
   }
 
-  public void setTableSetTimestampMap(Map<TableName,
-          Map<String, Long>> tableSetTimestampMap) {
+  public void setTableSetTimestampMap(Map<TableName, Map<String, Long>> tableSetTimestampMap) {
     this.tableSetTimestampMap = tableSetTimestampMap;
   }
 
@@ -247,6 +276,9 @@ public class BackupInfo implements Comparable<BackupInfo> {
   }
 
   public void setFailedMsg(String failedMsg) {
+    if (failedMsg != null && failedMsg.length() > MAX_FAILED_MESSAGE_LENGTH) {
+      failedMsg = failedMsg.substring(0, MAX_FAILED_MESSAGE_LENGTH);
+    }
     this.failedMsg = failedMsg;
   }
 
@@ -357,8 +389,7 @@ public class BackupInfo implements Comparable<BackupInfo> {
    * Set the new region server log timestamps after distributed log roll
    * @param prevTableSetTimestampMap table timestamp map
    */
-  public void setIncrTimestampMap(Map<TableName,
-          Map<String, Long>> prevTableSetTimestampMap) {
+  public void setIncrTimestampMap(Map<TableName, Map<String, Long>> prevTableSetTimestampMap) {
     this.incrTimestampMap = prevTableSetTimestampMap;
   }
 
@@ -445,13 +476,13 @@ public class BackupInfo implements Comparable<BackupInfo> {
     return toProtosBackupInfo().toByteArray();
   }
 
-  private void setBackupTableInfoMap(Builder builder) {
+  private void setBackupTableInfoMap(BackupProtos.BackupInfo.Builder builder) {
     for (Entry<TableName, BackupTableInfo> entry : backupTableInfoMap.entrySet()) {
       builder.addBackupTableInfo(entry.getValue().toProto());
     }
   }
 
-  private void setTableSetTimestampMap(Builder builder) {
+  private void setTableSetTimestampMap(BackupProtos.BackupInfo.Builder builder) {
     if (this.getTableSetTimestampMap() != null) {
       for (Entry<TableName, Map<String, Long>> entry : this.getTableSetTimestampMap().entrySet()) {
         builder.putTableSetTimestamp(entry.getKey().getNameAsString(),
@@ -482,8 +513,8 @@ public class BackupInfo implements Comparable<BackupInfo> {
       context.setState(BackupInfo.BackupState.valueOf(proto.getBackupState().name()));
     }
 
-    context.setHLogTargetDir(BackupUtils.getLogBackupDir(proto.getBackupRootDir(),
-      proto.getBackupId()));
+    context
+      .setHLogTargetDir(BackupUtils.getLogBackupDir(proto.getBackupRootDir(), proto.getBackupId()));
 
     if (proto.hasBackupPhase()) {
       context.setPhase(BackupPhase.valueOf(proto.getBackupPhase().name()));
@@ -507,12 +538,12 @@ public class BackupInfo implements Comparable<BackupInfo> {
     return map;
   }
 
-  private static Map<TableName, Map<String, Long>> getTableSetTimestampMap(
-    Map<String, BackupProtos.BackupInfo.RSTimestampMap> map) {
+  private static Map<TableName, Map<String, Long>>
+    getTableSetTimestampMap(Map<String, BackupProtos.BackupInfo.RSTimestampMap> map) {
     Map<TableName, Map<String, Long>> tableSetTimestampMap = new HashMap<>();
     for (Entry<String, BackupProtos.BackupInfo.RSTimestampMap> entry : map.entrySet()) {
-      tableSetTimestampMap
-        .put(TableName.valueOf(entry.getKey()), entry.getValue().getRsTimestampMap());
+      tableSetTimestampMap.put(TableName.valueOf(entry.getKey()),
+        entry.getValue().getRsTimestampMap());
     }
 
     return tableSetTimestampMap;
@@ -525,10 +556,9 @@ public class BackupInfo implements Comparable<BackupInfo> {
     sb.append("Type=" + getType()).append(",");
     sb.append("Tables=" + getTableListAsString()).append(",");
     sb.append("State=" + getState()).append(",");
-    Date date = null;
     Calendar cal = Calendar.getInstance();
     cal.setTimeInMillis(getStartTs());
-    date = cal.getTime();
+    Date date = cal.getTime();
     sb.append("Start time=" + date).append(",");
     if (state == BackupState.FAILED) {
       sb.append("Failed message=" + getFailedMsg()).append(",");
@@ -549,12 +579,12 @@ public class BackupInfo implements Comparable<BackupInfo> {
   public String getStatusAndProgressAsString() {
     StringBuilder sb = new StringBuilder();
     sb.append("id: ").append(getBackupId()).append(" state: ").append(getState())
-        .append(" progress: ").append(getProgress());
+      .append(" progress: ").append(getProgress());
     return sb.toString();
   }
 
   public String getTableListAsString() {
-    StringBuffer sb = new StringBuffer();
+    StringBuilder sb = new StringBuilder();
     sb.append("{");
     sb.append(StringUtils.join(backupTableInfoMap.keySet(), ","));
     sb.append("}");
@@ -567,7 +597,7 @@ public class BackupInfo implements Comparable<BackupInfo> {
   @Override
   public int compareTo(BackupInfo o) {
     Long thisTS =
-        Long.valueOf(this.getBackupId().substring(this.getBackupId().lastIndexOf("_") + 1));
+      Long.valueOf(this.getBackupId().substring(this.getBackupId().lastIndexOf("_") + 1));
     Long otherTS = Long.valueOf(o.getBackupId().substring(o.getBackupId().lastIndexOf("_") + 1));
     return thisTS.compareTo(otherTS);
   }

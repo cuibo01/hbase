@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -24,12 +24,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.stream.StreamSupport;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.errorhandling.ForeignException;
 import org.apache.hadoop.hbase.errorhandling.ForeignExceptionDispatcher;
 import org.apache.hadoop.hbase.master.MasterCoprocessorHost;
@@ -40,9 +42,12 @@ import org.apache.hadoop.hbase.procedure.Procedure;
 import org.apache.hadoop.hbase.procedure.ProcedureCoordinator;
 import org.apache.hadoop.hbase.procedure.ProcedureCoordinatorRpcs;
 import org.apache.hadoop.hbase.procedure.ZKProcedureCoordinator;
+import org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.security.access.AccessChecker;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.hbase.util.Strings;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
@@ -58,13 +63,16 @@ public class MasterFlushTableProcedureManager extends MasterProcedureManager {
 
   public static final String FLUSH_TABLE_PROCEDURE_SIGNATURE = "flush-table-proc";
 
+  public static final String FLUSH_PROCEDURE_ENABLED = "hbase.flush.procedure.enabled";
+
+  public static final boolean FLUSH_PROCEDURE_ENABLED_DEFAULT = true;
+
   private static final String FLUSH_TIMEOUT_MILLIS_KEY = "hbase.flush.master.timeoutMillis";
   private static final int FLUSH_TIMEOUT_MILLIS_DEFAULT = 60000;
   private static final String FLUSH_WAKE_MILLIS_KEY = "hbase.flush.master.wakeMillis";
   private static final int FLUSH_WAKE_MILLIS_DEFAULT = 500;
 
-  private static final String FLUSH_PROC_POOL_THREADS_KEY =
-      "hbase.flush.procedure.master.threads";
+  private static final String FLUSH_PROC_POOL_THREADS_KEY = "hbase.flush.procedure.master.threads";
   private static final int FLUSH_PROC_POOL_THREADS_DEFAULT = 1;
 
   private static final Logger LOG = LoggerFactory.getLogger(MasterFlushTableProcedureManager.class);
@@ -74,7 +82,8 @@ public class MasterFlushTableProcedureManager extends MasterProcedureManager {
   private Map<TableName, Procedure> procMap = new HashMap<>();
   private boolean stopped;
 
-  public MasterFlushTableProcedureManager() {}
+  public MasterFlushTableProcedureManager() {
+  }
 
   @Override
   public void stop(String why) {
@@ -89,7 +98,7 @@ public class MasterFlushTableProcedureManager extends MasterProcedureManager {
 
   @Override
   public void initialize(MasterServices master, MetricsMaster metricsMaster)
-      throws KeeperException, IOException, UnsupportedOperationException {
+    throws KeeperException, IOException, UnsupportedOperationException {
     this.master = master;
 
     // get the configuration for the coordinator
@@ -101,8 +110,8 @@ public class MasterFlushTableProcedureManager extends MasterProcedureManager {
     // setup the procedure coordinator
     String name = master.getServerName().toString();
     ThreadPoolExecutor tpool = ProcedureCoordinator.defaultPool(name, threads);
-    ProcedureCoordinatorRpcs comms = new ZKProcedureCoordinator(
-        master.getZooKeeper(), getProcedureSignature(), name);
+    ProcedureCoordinatorRpcs comms =
+      new ZKProcedureCoordinator(master.getZooKeeper(), getProcedureSignature(), name);
 
     this.coordinator = new ProcedureCoordinator(comms, tpool, timeoutMillis, wakeFrequency);
   }
@@ -142,23 +151,37 @@ public class MasterFlushTableProcedureManager extends MasterProcedureManager {
 
     ForeignExceptionDispatcher monitor = new ForeignExceptionDispatcher(desc.getInstance());
 
-    HBaseProtos.NameStringPair family = null;
+    HBaseProtos.NameStringPair families = null;
     for (HBaseProtos.NameStringPair nsp : desc.getConfigurationList()) {
       if (HConstants.FAMILY_KEY_STR.equals(nsp.getName())) {
-        family = nsp;
+        families = nsp;
       }
     }
-    byte[] procArgs = family != null ? family.toByteArray() : new byte[0];
+
+    byte[] procArgs;
+    if (families != null) {
+      TableDescriptor tableDescriptor = master.getTableDescriptors().get(tableName);
+      List<String> noSuchFamilies =
+        StreamSupport.stream(Strings.SPLITTER.split(families.getValue()).spliterator(), false)
+          .filter(cf -> !tableDescriptor.hasColumnFamily(Bytes.toBytes(cf))).toList();
+      if (!noSuchFamilies.isEmpty()) {
+        throw new NoSuchColumnFamilyException("Column families " + noSuchFamilies
+          + " don't exist in table " + tableName.getNameAsString());
+      }
+      procArgs = families.toByteArray();
+    } else {
+      procArgs = new byte[0];
+    }
 
     // Kick of the global procedure from the master coordinator to the region servers.
     // We rely on the existing Distributed Procedure framework to prevent any concurrent
     // procedure with the same name.
-    Procedure proc = coordinator.startProcedure(monitor, desc.getInstance(),
-      procArgs, Lists.newArrayList(regionServers));
+    Procedure proc = coordinator.startProcedure(monitor, desc.getInstance(), procArgs,
+      Lists.newArrayList(regionServers));
     monitor.rethrowException();
     if (proc == null) {
       String msg = "Failed to submit distributed procedure " + desc.getSignature() + " for '"
-          + desc.getInstance() + "'. " + "Another flush procedure is running?";
+        + desc.getInstance() + "'. " + "Another flush procedure is running?";
       LOG.error(msg);
       throw new IOException(msg);
     }
@@ -166,20 +189,20 @@ public class MasterFlushTableProcedureManager extends MasterProcedureManager {
     procMap.put(tableName, proc);
 
     try {
-      // wait for the procedure to complete.  A timer thread is kicked off that should cancel this
+      // wait for the procedure to complete. A timer thread is kicked off that should cancel this
       // if it takes too long.
       proc.waitForCompleted();
       LOG.info("Done waiting - exec procedure " + desc.getSignature() + " for '"
-          + desc.getInstance() + "'");
+        + desc.getInstance() + "'");
       LOG.info("Master flush table procedure is successful!");
     } catch (InterruptedException e) {
       ForeignException ee =
-          new ForeignException("Interrupted while waiting for flush table procdure to finish", e);
+        new ForeignException("Interrupted while waiting for flush table procdure to finish", e);
       monitor.receive(ee);
       Thread.currentThread().interrupt();
     } catch (ForeignException e) {
       ForeignException ee =
-          new ForeignException("Exception while waiting for flush table procdure to finish", e);
+        new ForeignException("Exception while waiting for flush table procdure to finish", e);
       monitor.receive(ee);
     }
     monitor.rethrowException();
@@ -187,7 +210,7 @@ public class MasterFlushTableProcedureManager extends MasterProcedureManager {
 
   @Override
   public void checkPermissions(ProcedureDescription desc, AccessChecker accessChecker, User user)
-      throws IOException {
+    throws IOException {
     // Done by AccessController as part of preTableFlush coprocessor hook (legacy code path).
     // In future, when we AC is removed for good, that check should be moved here.
   }

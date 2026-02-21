@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hbase.master.assignment;
 
+import static org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility.assertProcFailed;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -33,16 +34,21 @@ import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.SnapshotDescription;
+import org.apache.hadoop.hbase.client.SnapshotType;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureConstants;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureTestingUtility;
+import org.apache.hadoop.hbase.master.procedure.ModifyTableProcedure;
+import org.apache.hadoop.hbase.master.procedure.TestSnapshotProcedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureExecutor;
 import org.apache.hadoop.hbase.procedure2.ProcedureMetrics;
 import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility;
 import org.apache.hadoop.hbase.regionserver.HRegion;
+import org.apache.hadoop.hbase.snapshot.SnapshotDescriptionUtils;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -59,12 +65,15 @@ import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Category({MasterTests.class, LargeTests.class})
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos;
+
+@Category({ MasterTests.class, LargeTests.class })
 public class TestMergeTableRegionsProcedure {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMergeTableRegionsProcedure.class);
+    HBaseClassTestRule.forClass(TestMergeTableRegionsProcedure.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestMergeTableRegionsProcedure.class);
   @Rule
@@ -92,6 +101,8 @@ public class TestMergeTableRegionsProcedure {
     conf.setInt("hbase.master.maximum.ping.server.attempts", 3);
     conf.setInt("hbase.master.ping.server.retry.sleep.interval", 1);
     conf.setInt(MasterProcedureConstants.MASTER_PROCEDURE_THREADS, 1);
+    conf.set("hbase.coprocessor.region.classes",
+      RegionServerHostingReplicaSlowOpenCoprocessor.class.getName());
   }
 
   @BeforeClass
@@ -125,7 +136,7 @@ public class TestMergeTableRegionsProcedure {
   @After
   public void tearDown() throws Exception {
     resetProcExecutorTestingKillFlag();
-    for (TableDescriptor htd: admin.listTableDescriptors()) {
+    for (TableDescriptor htd : admin.listTableDescriptors()) {
       LOG.info("Tear down, remove table=" + htd.getTableName());
       UTIL.deleteTable(htd.getTableName());
     }
@@ -137,20 +148,19 @@ public class TestMergeTableRegionsProcedure {
     assertTrue("expected executor to be running", procExec.isRunning());
   }
 
-  private int loadARowPerRegion(final Table t, List<RegionInfo> ris)
-      throws IOException {
+  private int loadARowPerRegion(final Table t, List<RegionInfo> ris) throws IOException {
     List<Put> puts = new ArrayList<>();
-    for (RegionInfo ri: ris) {
-      Put put = new Put(ri.getStartKey() == null || ri.getStartKey().length == 0?
-          new byte [] {'a'}: ri.getStartKey());
+    for (RegionInfo ri : ris) {
+      Put put = new Put(ri.getStartKey() == null || ri.getStartKey().length == 0
+        ? new byte[] { 'a' }
+        : ri.getStartKey());
       put.addColumn(HConstants.CATALOG_FAMILY, HConstants.CATALOG_FAMILY,
-          HConstants.CATALOG_FAMILY);
+        HConstants.CATALOG_FAMILY);
       puts.add(put);
     }
     t.put(puts);
     return puts.size();
   }
-
 
   /**
    * This tests two region merges
@@ -158,8 +168,8 @@ public class TestMergeTableRegionsProcedure {
   @Test
   public void testMergeTwoRegions() throws Exception {
     final TableName tableName = TableName.valueOf(this.name.getMethodName());
-    UTIL.createTable(tableName, new byte[][]{HConstants.CATALOG_FAMILY},
-        new byte[][]{new byte[]{'b'}, new byte[]{'c'}, new byte[]{'d'}, new byte[]{'e'}});
+    UTIL.createTable(tableName, new byte[][] { HConstants.CATALOG_FAMILY }, new byte[][] {
+      new byte[] { 'b' }, new byte[] { 'c' }, new byte[] { 'd' }, new byte[] { 'e' } });
     testMerge(tableName, 2);
   }
 
@@ -167,7 +177,7 @@ public class TestMergeTableRegionsProcedure {
     List<RegionInfo> ris = MetaTableAccessor.getTableRegions(UTIL.getConnection(), tableName);
     int originalRegionCount = ris.size();
     assertTrue(originalRegionCount > mergeCount);
-    RegionInfo[] regionsToMerge = ris.subList(0, mergeCount).toArray(new RegionInfo [] {});
+    RegionInfo[] regionsToMerge = ris.subList(0, mergeCount).toArray(new RegionInfo[] {});
     int countOfRowsLoaded = 0;
     try (Table table = UTIL.getConnection().getTable(tableName)) {
       countOfRowsLoaded = loadARowPerRegion(table, ris);
@@ -178,20 +188,20 @@ public class TestMergeTableRegionsProcedure {
     collectAssignmentManagerMetrics();
     final ProcedureExecutor<MasterProcedureEnv> procExec = getMasterProcedureExecutor();
     MergeTableRegionsProcedure proc =
-        new MergeTableRegionsProcedure(procExec.getEnvironment(), regionsToMerge, true);
+      new MergeTableRegionsProcedure(procExec.getEnvironment(), regionsToMerge, true);
     long procId = procExec.submitProcedure(proc);
     ProcedureTestingUtility.waitProcedure(procExec, procId);
     ProcedureTestingUtility.assertProcNotFailed(procExec, procId);
     MetaTableAccessor.fullScanMetaAndPrint(UTIL.getConnection());
     assertEquals(originalRegionCount - mergeCount + 1,
-        MetaTableAccessor.getTableRegions(UTIL.getConnection(), tableName).size());
+      MetaTableAccessor.getTableRegions(UTIL.getConnection(), tableName).size());
 
     assertEquals(mergeSubmittedCount + 1, mergeProcMetrics.getSubmittedCounter().getCount());
     assertEquals(mergeFailedCount, mergeProcMetrics.getFailedCounter().getCount());
     assertEquals(assignSubmittedCount + 1, assignProcMetrics.getSubmittedCounter().getCount());
     assertEquals(assignFailedCount, assignProcMetrics.getFailedCounter().getCount());
     assertEquals(unassignSubmittedCount + mergeCount,
-        unassignProcMetrics.getSubmittedCounter().getCount());
+      unassignProcMetrics.getSubmittedCounter().getCount());
     assertEquals(unassignFailedCount, unassignProcMetrics.getFailedCounter().getCount());
 
     // Need to get the references cleaned out. Close of region will move them
@@ -248,10 +258,10 @@ public class TestMergeTableRegionsProcedure {
     // collect AM metrics before test
     collectAssignmentManagerMetrics();
 
-    long procId1 = procExec.submitProcedure(new MergeTableRegionsProcedure(
-      procExec.getEnvironment(), regionsToMerge1, true));
-    long procId2 = procExec.submitProcedure(new MergeTableRegionsProcedure(
-      procExec.getEnvironment(), regionsToMerge2, true));
+    long procId1 = procExec.submitProcedure(
+      new MergeTableRegionsProcedure(procExec.getEnvironment(), regionsToMerge1, true));
+    long procId2 = procExec.submitProcedure(
+      new MergeTableRegionsProcedure(procExec.getEnvironment(), regionsToMerge2, true));
     ProcedureTestingUtility.waitProcedure(procExec, procId1);
     ProcedureTestingUtility.waitProcedure(procExec, procId2);
     ProcedureTestingUtility.assertProcNotFailed(procExec, procId1);
@@ -348,6 +358,68 @@ public class TestMergeTableRegionsProcedure {
     assertRegionCount(tableName, initialRegionCount - 1);
   }
 
+  @Test
+  public void testMergingRegionWhileTakingSnapshot() throws Exception {
+    final TableName tableName = TableName.valueOf("testMergingRegionWhileTakingSnapshot");
+    final ProcedureExecutor<MasterProcedureEnv> procExec = getMasterProcedureExecutor();
+
+    List<RegionInfo> tableRegions = createTable(tableName);
+
+    ProcedureTestingUtility.waitNoProcedureRunning(procExec);
+
+    SnapshotDescription snapshot =
+      new SnapshotDescription("SnapshotProcedureTest", tableName, SnapshotType.FLUSH);
+    SnapshotProtos.SnapshotDescription snapshotProto =
+      ProtobufUtil.createHBaseProtosSnapshotDesc(snapshot);
+    snapshotProto = SnapshotDescriptionUtils.validate(snapshotProto,
+      UTIL.getHBaseCluster().getMaster().getConfiguration());
+    long snapshotProcId = procExec.submitProcedure(
+      new TestSnapshotProcedure.DelaySnapshotProcedure(procExec.getEnvironment(), snapshotProto));
+    UTIL.getHBaseCluster().getMaster().getSnapshotManager().registerSnapshotProcedure(snapshotProto,
+      snapshotProcId);
+
+    RegionInfo[] regionsToMerge = new RegionInfo[2];
+    regionsToMerge[0] = tableRegions.get(0);
+    regionsToMerge[1] = tableRegions.get(1);
+
+    long mergeProcId = procExec.submitProcedure(
+      new MergeTableRegionsProcedure(procExec.getEnvironment(), regionsToMerge, true));
+
+    ProcedureTestingUtility
+      .waitProcedure(UTIL.getHBaseCluster().getMaster().getMasterProcedureExecutor(), mergeProcId);
+    ProcedureTestingUtility.waitProcedure(
+      UTIL.getHBaseCluster().getMaster().getMasterProcedureExecutor(), snapshotProcId);
+
+    assertProcFailed(procExec, mergeProcId);
+    assertEquals(initialRegionCount, UTIL.getAdmin().getRegions(tableName).size());
+  }
+
+  @Test
+  public void testMergeDetectsModifyTableProcedure() throws Exception {
+    final TableName tableName = TableName.valueOf(name.getMethodName());
+    final ProcedureExecutor<MasterProcedureEnv> procExec = getMasterProcedureExecutor();
+
+    List<RegionInfo> regions = createTable(tableName);
+
+    RegionServerHostingReplicaSlowOpenCoprocessor.slowDownReplicaOpen = true;
+    TableDescriptor td = TableDescriptorBuilder.newBuilder(admin.getDescriptor(tableName))
+      .setRegionReplication(2).build();
+    long modifyProcId =
+      procExec.submitProcedure(new ModifyTableProcedure(procExec.getEnvironment(), td));
+
+    // Merge regions of the table, the MergeTableRegionsProcedure will fail because there is a
+    // ModifyTableProcedure in progress
+    MergeTableRegionsProcedure mergeProcedure = new MergeTableRegionsProcedure(
+      procExec.getEnvironment(), regions.toArray(new RegionInfo[0]), false);
+    long mergeProcId = procExec.submitProcedure(mergeProcedure);
+    ProcedureTestingUtility.waitProcedure(procExec, mergeProcId);
+    ProcedureTestingUtility.assertProcFailed(procExec, mergeProcId);
+
+    RegionServerHostingReplicaSlowOpenCoprocessor.slowDownReplicaOpen = false;
+    ProcedureTestingUtility.waitProcedure(procExec, modifyProcId);
+    ProcedureTestingUtility.assertProcNotFailed(procExec, modifyProcId);
+  }
+
   private List<RegionInfo> createTable(final TableName tableName) throws Exception {
     TableDescriptor desc = TableDescriptorBuilder.newBuilder(tableName)
       .setColumnFamily(ColumnFamilyDescriptorBuilder.of(FAMILY)).build();
@@ -360,7 +432,7 @@ public class TestMergeTableRegionsProcedure {
   }
 
   public List<RegionInfo> assertRegionCount(final TableName tableName, final int nregions)
-      throws Exception {
+    throws Exception {
     UTIL.waitUntilNoRegionsInTransition();
     List<RegionInfo> tableRegions = admin.getRegions(tableName);
     assertEquals(nregions, tableRegions.size());

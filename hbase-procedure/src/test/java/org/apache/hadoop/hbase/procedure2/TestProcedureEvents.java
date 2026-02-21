@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,23 +17,21 @@
  */
 package org.apache.hadoop.hbase.procedure2;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseCommonTestingUtil;
 import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility.NoopProcedure;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStore;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,12 +39,9 @@ import org.apache.hbase.thirdparty.com.google.protobuf.Int32Value;
 
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos.ProcedureState;
 
-@Category({MasterTests.class, MediumTests.class})
+@Tag(MasterTests.TAG)
+@Tag(MediumTests.TAG)
 public class TestProcedureEvents {
-
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestProcedureEvents.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestProcedureEvents.class);
 
@@ -58,7 +53,7 @@ public class TestProcedureEvents {
   private FileSystem fs;
   private Path logDir;
 
-  @Before
+  @BeforeEach
   public void setUp() throws IOException {
     htu = new HBaseCommonTestingUtil();
     Path testDir = htu.getDataTestDir();
@@ -72,7 +67,7 @@ public class TestProcedureEvents {
     ProcedureTestingUtility.initAndStartWorkers(procExecutor, 1, true);
   }
 
-  @After
+  @AfterEach
   public void tearDown() throws IOException {
     procExecutor.stop();
     procStore.stop(false);
@@ -81,11 +76,10 @@ public class TestProcedureEvents {
   }
 
   /**
-   * Tests being able to suspend a Procedure for N timeouts and then failing.s
-   * Resets the timeout after each elapses. See {@link TestTimeoutEventProcedure} for example
-   * of how to do this sort of trickery with the ProcedureExecutor; i.e. suspend for a while,
-   * check for a condition and if not set, suspend again, etc., ultimately failing or succeeding
-   * eventually.
+   * Tests being able to suspend a Procedure for N timeouts and then failing.s Resets the timeout
+   * after each elapses. See {@link TestTimeoutEventProcedure} for example of how to do this sort of
+   * trickery with the ProcedureExecutor; i.e. suspend for a while, check for a condition and if not
+   * set, suspend again, etc., ultimately failing or succeeding eventually.
    */
   @Test
   public void testTimeoutEventProcedure() throws Exception {
@@ -110,7 +104,7 @@ public class TestProcedureEvents {
   }
 
   private void testTimeoutEventProcedureDoubleExecution(final boolean killIfSuspended)
-      throws Exception {
+    throws Exception {
     TestTimeoutEventProcedure proc = new TestTimeoutEventProcedure(1000, 3);
     ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdate(procExecutor, true);
     ProcedureTestingUtility.setKillIfSuspended(procExecutor, killIfSuspended);
@@ -122,20 +116,19 @@ public class TestProcedureEvents {
   /**
    * This Event+Procedure exhibits following behavior:
    * <ul>
-   *   <li>On procedure execute()
-   *     <ul>
-   *       <li>If had enough timeouts, abort the procedure. Else....</li>
-   *       <li>Suspend the event and add self to its suspend queue</li>
-   *       <li>Go into waiting state</li>
-   *     </ul>
-   *   </li>
-   *   <li>
-   *     On waiting timeout
-   *     <ul>
-   *       <li>Wake the event (which adds this procedure back into scheduler queue), and set own's
-   *       state to RUNNABLE (so can be executed again).</li>
-   *     </ul>
-   *   </li>
+   * <li>On procedure execute()
+   * <ul>
+   * <li>If had enough timeouts, abort the procedure. Else....</li>
+   * <li>Suspend the event and add self to its suspend queue</li>
+   * <li>Go into waiting state</li>
+   * </ul>
+   * </li>
+   * <li>On waiting timeout
+   * <ul>
+   * <li>Wake the event (which adds this procedure back into scheduler queue), and set own's state
+   * to RUNNABLE (so can be executed again).</li>
+   * </ul>
+   * </li>
    * </ul>
    */
   public static class TestTimeoutEventProcedure extends NoopProcedure<TestProcEnv> {
@@ -144,7 +137,8 @@ public class TestProcedureEvents {
     private final AtomicInteger ntimeouts = new AtomicInteger(0);
     private int maxTimeouts = 1;
 
-    public TestTimeoutEventProcedure() {}
+    public TestTimeoutEventProcedure() {
+    }
 
     public TestTimeoutEventProcedure(final int timeoutMsec, final int maxTimeouts) {
       this.maxTimeouts = maxTimeouts;
@@ -175,7 +169,7 @@ public class TestProcedureEvents {
     @Override
     protected synchronized boolean setTimeoutFailure(final TestProcEnv env) {
       int n = ntimeouts.incrementAndGet();
-      LOG.info("HANDLE TIMEOUT " + this + " ntimeouts=" + n);
+      LOG.info("HANDLE TIMEOUT {} ntimeouts={}", this, n);
       setState(ProcedureState.RUNNABLE);
       event.wake((AbstractProcedureScheduler) env.getProcedureScheduler());
       return false;
@@ -190,8 +184,7 @@ public class TestProcedureEvents {
     }
 
     @Override
-    protected void serializeStateData(ProcedureStateSerializer serializer)
-        throws IOException {
+    protected void serializeStateData(ProcedureStateSerializer serializer) throws IOException {
       Int32Value.Builder ntimeoutsBuilder = Int32Value.newBuilder().setValue(ntimeouts.get());
       serializer.serialize(ntimeoutsBuilder.build());
 
@@ -200,8 +193,7 @@ public class TestProcedureEvents {
     }
 
     @Override
-    protected void deserializeStateData(ProcedureStateSerializer serializer)
-        throws IOException {
+    protected void deserializeStateData(ProcedureStateSerializer serializer) throws IOException {
       Int32Value ntimeoutsValue = serializer.deserialize(Int32Value.class);
       ntimeouts.set(ntimeoutsValue.getValue());
 

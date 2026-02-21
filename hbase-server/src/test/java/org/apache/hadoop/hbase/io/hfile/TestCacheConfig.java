@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -55,15 +55,15 @@ import org.slf4j.LoggerFactory;
  * Tests that {@link CacheConfig} does as expected.
  */
 // This test is marked as a large test though it runs in a short amount of time
-// (seconds).  It is large because it depends on being able to reset the global
-// blockcache instance which is in a global variable.  Experience has it that
+// (seconds). It is large because it depends on being able to reset the global
+// blockcache instance which is in a global variable. Experience has it that
 // tests clash on the global variable if this test is run as small sized test.
-@Category({IOTests.class, MediumTests.class})
+@Category({ IOTests.class, MediumTests.class })
 public class TestCacheConfig {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCacheConfig.class);
+    HBaseClassTestRule.forClass(TestCacheConfig.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestCacheConfig.class);
   private Configuration conf;
@@ -83,8 +83,7 @@ public class TestCacheConfig {
     }
 
     @Override
-    public Cacheable deserialize(ByteBuff b, ByteBuffAllocator alloc)
-        throws IOException {
+    public Cacheable deserialize(ByteBuff b, ByteBuffAllocator alloc) throws IOException {
       LOG.info("Deserialized " + b);
       return cacheable;
     }
@@ -160,14 +159,14 @@ public class TestCacheConfig {
   }
 
   /**
-   * @param bc The block cache instance.
-   * @param cc Cache config.
-   * @param doubling If true, addition of element ups counter by 2, not 1, because element added
-   * to onheap and offheap caches.
-   * @param sizing True if we should run sizing test (doesn't always apply).
+   * @param bc       The block cache instance.
+   * @param cc       Cache config.
+   * @param doubling If true, addition of element ups counter by 2, not 1, because element added to
+   *                 onheap and offheap caches.
+   * @param sizing   True if we should run sizing test (doesn't always apply).
    */
   void basicBlockCacheOps(final BlockCache bc, final CacheConfig cc, final boolean doubling,
-      final boolean sizing) {
+    final boolean sizing) {
     assertTrue(CacheConfig.DEFAULT_IN_MEMORY == cc.isInMemory());
     BlockCacheKey bck = new BlockCacheKey("f", 0);
     Cacheable c = new DataCacheEntry();
@@ -177,7 +176,7 @@ public class TestCacheConfig {
     assertEquals(doubling ? 2 : 1, bc.getBlockCount() - initialBlockCount);
     bc.evictBlock(bck);
     assertEquals(initialBlockCount, bc.getBlockCount());
-    // Do size accounting.  Do it after the above 'warm-up' because it looks like some
+    // Do size accounting. Do it after the above 'warm-up' because it looks like some
     // buffers do lazy allocation so sizes are off on first go around.
     if (sizing) {
       long originalSize = bc.getCurrentSize();
@@ -191,12 +190,14 @@ public class TestCacheConfig {
 
   @Test
   public void testDisableCacheDataBlock() throws IOException {
+    // First tests the default configs behaviour and block cache enabled
     Configuration conf = HBaseConfiguration.create();
     CacheConfig cacheConfig = new CacheConfig(conf);
     assertTrue(cacheConfig.shouldCacheBlockOnRead(BlockCategory.DATA));
     assertFalse(cacheConfig.shouldCacheCompressed(BlockCategory.DATA));
     assertFalse(cacheConfig.shouldCacheDataCompressed());
     assertFalse(cacheConfig.shouldCacheDataOnWrite());
+    assertFalse(cacheConfig.shouldCacheCompactedBlocksOnWrite());
     assertTrue(cacheConfig.shouldCacheDataOnRead());
     assertTrue(cacheConfig.shouldCacheBlockOnRead(BlockCategory.INDEX));
     assertTrue(cacheConfig.shouldCacheBlockOnRead(BlockCategory.META));
@@ -204,10 +205,12 @@ public class TestCacheConfig {
     assertFalse(cacheConfig.shouldCacheBloomsOnWrite());
     assertFalse(cacheConfig.shouldCacheIndexesOnWrite());
 
+    // Tests block cache enabled and related cache on write flags enabled
     conf.setBoolean(CacheConfig.CACHE_BLOCKS_ON_WRITE_KEY, true);
     conf.setBoolean(CacheConfig.CACHE_DATA_BLOCKS_COMPRESSED_KEY, true);
     conf.setBoolean(CacheConfig.CACHE_BLOOM_BLOCKS_ON_WRITE_KEY, true);
     conf.setBoolean(CacheConfig.CACHE_INDEX_BLOCKS_ON_WRITE_KEY, true);
+    conf.setBoolean(CacheConfig.CACHE_COMPACTED_BLOCKS_ON_WRITE_KEY, true);
 
     cacheConfig = new CacheConfig(conf);
     assertTrue(cacheConfig.shouldCacheBlockOnRead(BlockCategory.DATA));
@@ -220,9 +223,12 @@ public class TestCacheConfig {
     assertTrue(cacheConfig.shouldCacheBlockOnRead(BlockCategory.BLOOM));
     assertTrue(cacheConfig.shouldCacheBloomsOnWrite());
     assertTrue(cacheConfig.shouldCacheIndexesOnWrite());
+    assertTrue(cacheConfig.shouldCacheCompactedBlocksOnWrite());
 
+    // Tests block cache enabled but related cache on read/write properties disabled
     conf.setBoolean(CacheConfig.CACHE_DATA_ON_READ_KEY, false);
     conf.setBoolean(CacheConfig.CACHE_BLOCKS_ON_WRITE_KEY, false);
+    conf.setBoolean(CacheConfig.CACHE_COMPACTED_BLOCKS_ON_WRITE_KEY, false);
 
     cacheConfig = new CacheConfig(conf);
     assertFalse(cacheConfig.shouldCacheBlockOnRead(BlockCategory.DATA));
@@ -230,20 +236,23 @@ public class TestCacheConfig {
     assertFalse(cacheConfig.shouldCacheDataCompressed());
     assertFalse(cacheConfig.shouldCacheDataOnWrite());
     assertFalse(cacheConfig.shouldCacheDataOnRead());
+    assertFalse(cacheConfig.shouldCacheCompactedBlocksOnWrite());
     assertTrue(cacheConfig.shouldCacheBlockOnRead(BlockCategory.INDEX));
     assertFalse(cacheConfig.shouldCacheBlockOnRead(BlockCategory.META));
     assertTrue(cacheConfig.shouldCacheBlockOnRead(BlockCategory.BLOOM));
     assertTrue(cacheConfig.shouldCacheBloomsOnWrite());
     assertTrue(cacheConfig.shouldCacheIndexesOnWrite());
 
-    conf.setBoolean(CacheConfig.CACHE_DATA_ON_READ_KEY, true);
-    conf.setBoolean(CacheConfig.CACHE_BLOCKS_ON_WRITE_KEY, false);
+    // Finally tests block cache disabled in the column family but all cache on read/write
+    // properties enabled in the config.
+    conf.setBoolean(CacheConfig.CACHE_BLOCKS_ON_WRITE_KEY, true);
+    conf.setBoolean(CacheConfig.CACHE_DATA_BLOCKS_COMPRESSED_KEY, true);
+    conf.setBoolean(CacheConfig.CACHE_BLOOM_BLOCKS_ON_WRITE_KEY, true);
+    conf.setBoolean(CacheConfig.CACHE_INDEX_BLOCKS_ON_WRITE_KEY, true);
+    conf.setBoolean(CacheConfig.CACHE_COMPACTED_BLOCKS_ON_WRITE_KEY, true);
 
-    ColumnFamilyDescriptor columnFamilyDescriptor =
-      ColumnFamilyDescriptorBuilder
-        .newBuilder(Bytes.toBytes("testDisableCacheDataBlock"))
-        .setBlockCacheEnabled(false)
-        .build();
+    ColumnFamilyDescriptor columnFamilyDescriptor = ColumnFamilyDescriptorBuilder
+      .newBuilder(Bytes.toBytes("testDisableCacheDataBlock")).setBlockCacheEnabled(false).build();
 
     cacheConfig = new CacheConfig(conf, columnFamilyDescriptor, null, ByteBuffAllocator.HEAP);
     assertFalse(cacheConfig.shouldCacheBlockOnRead(BlockCategory.DATA));
@@ -254,8 +263,8 @@ public class TestCacheConfig {
     assertTrue(cacheConfig.shouldCacheBlockOnRead(BlockCategory.INDEX));
     assertFalse(cacheConfig.shouldCacheBlockOnRead(BlockCategory.META));
     assertTrue(cacheConfig.shouldCacheBlockOnRead(BlockCategory.BLOOM));
-    assertTrue(cacheConfig.shouldCacheBloomsOnWrite());
-    assertTrue(cacheConfig.shouldCacheIndexesOnWrite());
+    assertFalse(cacheConfig.shouldCacheBloomsOnWrite());
+    assertFalse(cacheConfig.shouldCacheIndexesOnWrite());
   }
 
   @Test
@@ -316,7 +325,7 @@ public class TestCacheConfig {
   @Test
   public void testBucketCacheConfigL1L2Setup() {
     this.conf.set(HConstants.BUCKET_CACHE_IOENGINE_KEY, "offheap");
-    // Make lru size is smaller than bcSize for sure.  Need this to be true so when eviction
+    // Make lru size is smaller than bcSize for sure. Need this to be true so when eviction
     // from L1 happens, it does not fail because L2 can't take the eviction because block too big.
     this.conf.setFloat(HConstants.HFILE_BLOCK_CACHE_SIZE_KEY, 0.001f);
     MemoryUsage mu = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
@@ -345,7 +354,7 @@ public class TestCacheConfig {
     assertEquals(initialL1BlockCount + 1, lbc.getBlockCount());
     assertEquals(initialL2BlockCount, bc.getBlockCount());
     // Force evictions by putting in a block too big.
-    final long justTooBigSize = ((LruBlockCache)lbc).acceptableSize() + 1;
+    final long justTooBigSize = ((LruBlockCache) lbc).acceptableSize() + 1;
     lbc.cacheBlock(new BlockCacheKey("bck2", 0), new DataCacheEntry() {
       @Override
       public long heapSize() {
@@ -354,11 +363,12 @@ public class TestCacheConfig {
 
       @Override
       public int getSerializedLength() {
-        return (int)heapSize();
+        return (int) heapSize();
       }
     });
     // The eviction thread in lrublockcache needs to run.
-    while (initialL1BlockCount != lbc.getBlockCount()) Threads.sleep(10);
+    while (initialL1BlockCount != lbc.getBlockCount())
+      Threads.sleep(10);
     assertEquals(initialL1BlockCount, lbc.getBlockCount());
   }
 
@@ -399,6 +409,14 @@ public class TestCacheConfig {
     long onHeapCacheSize = MemorySizeUtil.getOnHeapCacheSize(copyConf);
     assertEquals(null, copyConf.get(HConstants.HFILE_ONHEAP_BLOCK_CACHE_FIXED_SIZE_KEY));
     assertTrue(onHeapCacheSize > 0 && onHeapCacheSize != fixedSize);
+    // when HBASE_BLOCK_CACHE_MEMORY_SIZE is set in number
+    copyConf.setLong(HConstants.HFILE_BLOCK_CACHE_MEMORY_SIZE_KEY, 3 * 1024 * 1024);
+    onHeapCacheSize = MemorySizeUtil.getOnHeapCacheSize(copyConf);
+    assertEquals(3 * 1024 * 1024, onHeapCacheSize);
+    // when HBASE_BLOCK_CACHE_MEMORY_SIZE is set in human-readable format
+    copyConf.set(HConstants.HFILE_BLOCK_CACHE_MEMORY_SIZE_KEY, "2m");
+    onHeapCacheSize = MemorySizeUtil.getOnHeapCacheSize(copyConf);
+    assertEquals(2 * 1024 * 1024, onHeapCacheSize);
     // when HBASE_BLOCK_CACHE_FIXED_SIZE_KEY is set, it will be a fixed size
     copyConf.setLong(HConstants.HFILE_ONHEAP_BLOCK_CACHE_FIXED_SIZE_KEY, fixedSize);
     onHeapCacheSize = MemorySizeUtil.getOnHeapCacheSize(copyConf);

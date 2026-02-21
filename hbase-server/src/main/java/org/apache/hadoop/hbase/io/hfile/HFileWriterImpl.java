@@ -15,16 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.io.hfile;
+
+import static org.apache.hadoop.hbase.io.hfile.BlockCompressedSizePredicator.MAX_BLOCK_SIZE_UNCOMPRESSED;
+import static org.apache.hadoop.hbase.regionserver.CustomTieringMultiFileWriter.CUSTOM_TIERING_TIME_RANGE;
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.EARLIEST_PUT_TS;
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.TIMERANGE_KEY;
 
 import java.io.DataOutput;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.security.Key;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.function.Supplier;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
@@ -34,14 +41,18 @@ import org.apache.hadoop.hbase.ByteBufferExtendedCell;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.MetaCellComparator;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.crypto.Encryption;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
+import org.apache.hadoop.hbase.io.encoding.IndexBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.HFileBlock.BlockWritable;
+import org.apache.hadoop.hbase.regionserver.TimeRangeTracker;
 import org.apache.hadoop.hbase.security.EncryptionUtil;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.BloomFilterWriter;
@@ -64,15 +75,15 @@ public class HFileWriterImpl implements HFile.Writer {
 
   private static final long UNSET = -1;
 
-  /** if this feature is enabled, preCalculate encoded data size before real encoding happens*/
+  /** if this feature is enabled, preCalculate encoded data size before real encoding happens */
   public static final String UNIFIED_ENCODED_BLOCKSIZE_RATIO =
     "hbase.writer.unified.encoded.blocksize.ratio";
 
-  /** Block size limit after encoding, used to unify encoded block Cache entry size*/
+  /** Block size limit after encoding, used to unify encoded block Cache entry size */
   private final int encodedBlockSizeLimit;
 
-  /** The Cell previously appended. Becomes the last cell in the file.*/
-  protected Cell lastCell = null;
+  /** The Cell previously appended. Becomes the last cell in the file. */
+  protected ExtendedCell lastCell = null;
 
   /** FileSystem stream to write into. */
   protected FSDataOutputStream outputStream;
@@ -92,6 +103,11 @@ public class HFileWriterImpl implements HFile.Writer {
   /** Used for calculating the average value length. */
   protected long totalValueLength = 0;
 
+  /** Len of the biggest cell. */
+  protected long lenOfBiggestCell = 0;
+  /** Key of the biggest cell. */
+  protected byte[] keyOfBiggestCell;
+
   /** Total uncompressed bytes, maybe calculate a compression ratio later. */
   protected long totalUncompressedBytes = 0;
 
@@ -102,36 +118,44 @@ public class HFileWriterImpl implements HFile.Writer {
   protected List<Writable> metaData = new ArrayList<>();
 
   /**
-   * First cell in a block.
-   * This reference should be short-lived since we write hfiles in a burst.
+   * First cell in a block. This reference should be short-lived since we write hfiles in a burst.
    */
-  protected Cell firstCellInBlock = null;
-
+  protected ExtendedCell firstCellInBlock = null;
 
   /** May be null if we were passed a stream. */
   protected final Path path;
 
+  protected final Configuration conf;
+
   /** Cache configuration for caching data on write. */
   protected final CacheConfig cacheConf;
 
+  public void setTimeRangeTrackerForTiering(Supplier<TimeRangeTracker> timeRangeTrackerForTiering) {
+    this.timeRangeTrackerForTiering = timeRangeTrackerForTiering;
+  }
+
+  private Supplier<TimeRangeTracker> timeRangeTrackerForTiering;
+
   /**
-   * Name for this object used when logging or in toString. Is either
-   * the result of a toString on stream or else name of passed file Path.
+   * Name for this object used when logging or in toString. Is either the result of a toString on
+   * stream or else name of passed file Path.
    */
   protected final String name;
 
   /**
-   * The data block encoding which will be used.
-   * {@link NoOpDataBlockEncoder#INSTANCE} if there is no encoding.
+   * The data block encoding which will be used. {@link NoOpDataBlockEncoder#INSTANCE} if there is
+   * no encoding.
    */
   protected final HFileDataBlockEncoder blockEncoder;
+
+  protected final HFileIndexBlockEncoder indexBlockEncoder;
 
   protected final HFileContext hFileContext;
 
   private int maxTagsLength = 0;
 
   /** KeyValue version in FileInfo */
-  public static final byte [] KEY_VALUE_VERSION = Bytes.toBytes("KEY_VALUE_VERSION");
+  public static final byte[] KEY_VALUE_VERSION = Bytes.toBytes("KEY_VALUE_VERSION");
 
   /** Version for KeyValue which includes memstore timestamp */
   public static final int KEY_VALUE_VER_WITH_MEMSTORE = 1;
@@ -152,65 +176,74 @@ public class HFileWriterImpl implements HFile.Writer {
   protected long lastDataBlockOffset = UNSET;
 
   /**
-   * The last(stop) Cell of the previous data block.
-   * This reference should be short-lived since we write hfiles in a burst.
+   * The last(stop) Cell of the previous data block. This reference should be short-lived since we
+   * write hfiles in a burst.
    */
-  private Cell lastCellOfPreviousBlock = null;
+  private ExtendedCell lastCellOfPreviousBlock = null;
 
   /** Additional data items to be written to the "load-on-open" section. */
   private List<BlockWritable> additionalLoadOnOpenData = new ArrayList<>();
 
   protected long maxMemstoreTS = 0;
 
+  private final TimeRangeTracker timeRangeTracker;
+  private long earliestPutTs = HConstants.LATEST_TIMESTAMP;
+
   public HFileWriterImpl(final Configuration conf, CacheConfig cacheConf, Path path,
-      FSDataOutputStream outputStream, HFileContext fileContext) {
+    FSDataOutputStream outputStream, HFileContext fileContext) {
     this.outputStream = outputStream;
     this.path = path;
     this.name = path != null ? path.getName() : outputStream.toString();
     this.hFileContext = fileContext;
+    // TODO: Move this back to upper layer
+    this.timeRangeTracker = TimeRangeTracker.create(TimeRangeTracker.Type.NON_SYNC);
+    this.timeRangeTrackerForTiering = () -> this.timeRangeTracker;
     DataBlockEncoding encoding = hFileContext.getDataBlockEncoding();
     if (encoding != DataBlockEncoding.NONE) {
       this.blockEncoder = new HFileDataBlockEncoderImpl(encoding);
     } else {
       this.blockEncoder = NoOpDataBlockEncoder.INSTANCE;
     }
+    IndexBlockEncoding indexBlockEncoding = hFileContext.getIndexBlockEncoding();
+    if (indexBlockEncoding != IndexBlockEncoding.NONE) {
+      this.indexBlockEncoder = new HFileIndexBlockEncoderImpl(indexBlockEncoding);
+    } else {
+      this.indexBlockEncoder = NoOpIndexBlockEncoder.INSTANCE;
+    }
     closeOutputStream = path != null;
     this.cacheConf = cacheConf;
-    float encodeBlockSizeRatio = conf.getFloat(UNIFIED_ENCODED_BLOCKSIZE_RATIO, 1f);
-    this.encodedBlockSizeLimit = (int)(hFileContext.getBlocksize() * encodeBlockSizeRatio);
+    this.conf = conf;
+    float encodeBlockSizeRatio = conf.getFloat(UNIFIED_ENCODED_BLOCKSIZE_RATIO, 0f);
+    this.encodedBlockSizeLimit = (int) (hFileContext.getBlocksize() * encodeBlockSizeRatio);
+
     finishInit(conf);
     if (LOG.isTraceEnabled()) {
-      LOG.trace("Writer" + (path != null ? " for " + path : "") +
-        " initialized with cacheConf: " + cacheConf +
-        " fileContext: " + fileContext);
+      LOG.trace("Writer" + (path != null ? " for " + path : "") + " initialized with cacheConf: "
+        + cacheConf + " fileContext: " + fileContext);
     }
   }
 
   /**
    * Add to the file info. All added key/value pairs can be obtained using
    * {@link HFile.Reader#getHFileInfo()}.
-   *
    * @param k Key
    * @param v Value
    * @throws IOException in case the key or the value are invalid
    */
   @Override
-  public void appendFileInfo(final byte[] k, final byte[] v)
-      throws IOException {
+  public void appendFileInfo(final byte[] k, final byte[] v) throws IOException {
     fileInfo.append(k, v, true);
   }
 
   /**
-   * Sets the file info offset in the trailer, finishes up populating fields in
-   * the file info, and writes the file info into the given data output. The
-   * reason the data output is not always {@link #outputStream} is that we store
-   * file info as a block in version 2.
-   *
+   * Sets the file info offset in the trailer, finishes up populating fields in the file info, and
+   * writes the file info into the given data output. The reason the data output is not always
+   * {@link #outputStream} is that we store file info as a block in version 2.
    * @param trailer fixed file trailer
-   * @param out the data output to write the file info to
+   * @param out     the data output to write the file info to
    */
   protected final void writeFileInfo(FixedFileTrailer trailer, DataOutputStream out)
-      throws IOException {
+    throws IOException {
     trailer.setFileInfoOffset(outputStream.getPos());
     finishFileInfo();
     long startTime = EnvironmentEdgeManager.currentTime();
@@ -222,9 +255,9 @@ public class HFileWriterImpl implements HFile.Writer {
     return outputStream.getPos();
 
   }
+
   /**
    * Checks that the given Cell's key does not violate the key order.
-   *
    * @param cell Cell whose key to check.
    * @return true if the key is duplicate
    * @throws IOException if the key or the key order is wrong
@@ -254,23 +287,21 @@ public class HFileWriterImpl implements HFile.Writer {
     sb.append(cell);
     sb.append(", lastCell = ");
     sb.append(lastCell);
-    //file context includes HFile path and optionally table and CF of file being written
+    // file context includes HFile path and optionally table and CF of file being written
     sb.append("fileContext=");
     sb.append(hFileContext);
     return sb.toString();
   }
 
   /** Checks the given value for validity. */
-  protected void checkValue(final byte[] value, final int offset,
-      final int length) throws IOException {
+  protected void checkValue(final byte[] value, final int offset, final int length)
+    throws IOException {
     if (value == null) {
       throw new IOException("Value cannot be null");
     }
   }
 
-  /**
-   * @return Path or null if we were passed a stream rather than a Path.
-   */
+  /** Returns Path or null if we were passed a stream rather than a Path. */
   @Override
   public Path getPath() {
     return path;
@@ -278,8 +309,8 @@ public class HFileWriterImpl implements HFile.Writer {
 
   @Override
   public String toString() {
-    return "writer=" + (path != null ? path.toString() : null) + ", name="
-        + name + ", compression=" + hFileContext.getCompression().getName();
+    return "writer=" + (path != null ? path.toString() : null) + ", name=" + name + ", compression="
+      + hFileContext.getCompression().getName();
   }
 
   public static Compression.Algorithm compressionByName(String algoName) {
@@ -290,10 +321,9 @@ public class HFileWriterImpl implements HFile.Writer {
   }
 
   /** A helper method to create HFile output streams in constructors */
-  protected static FSDataOutputStream createOutputStream(Configuration conf,
-      FileSystem fs, Path path, InetSocketAddress[] favoredNodes) throws IOException {
-    FsPermission perms = CommonFSUtils.getFilePermissions(fs, conf,
-        HConstants.DATA_FILE_UMASK_KEY);
+  protected static FSDataOutputStream createOutputStream(Configuration conf, FileSystem fs,
+    Path path, InetSocketAddress[] favoredNodes) throws IOException {
+    FsPermission perms = CommonFSUtils.getFilePermissions(fs, conf, HConstants.DATA_FILE_UMASK_KEY);
     return FSUtils.create(conf, fs, path, perms, favoredNodes);
   }
 
@@ -302,17 +332,15 @@ public class HFileWriterImpl implements HFile.Writer {
     if (blockWriter != null) {
       throw new IllegalStateException("finishInit called twice");
     }
-    blockWriter = new HFileBlock.Writer(conf, blockEncoder, hFileContext,
-        cacheConf.getByteBuffAllocator());
+    blockWriter =
+      new HFileBlock.Writer(conf, blockEncoder, hFileContext, cacheConf.getByteBuffAllocator(),
+        conf.getInt(MAX_BLOCK_SIZE_UNCOMPRESSED, hFileContext.getBlocksize() * 10));
     // Data block index writer
     boolean cacheIndexesOnWrite = cacheConf.shouldCacheIndexesOnWrite();
     dataBlockIndexWriter = new HFileBlockIndex.BlockIndexWriter(blockWriter,
-        cacheIndexesOnWrite ? cacheConf : null,
-        cacheIndexesOnWrite ? name : null);
-    dataBlockIndexWriter.setMaxChunkSize(
-        HFileBlockIndex.getMaxChunkSize(conf));
-    dataBlockIndexWriter.setMinIndexNumEntries(
-        HFileBlockIndex.getMinIndexNumEntries(conf));
+      cacheIndexesOnWrite ? cacheConf : null, cacheIndexesOnWrite ? name : null, indexBlockEncoder);
+    dataBlockIndexWriter.setMaxChunkSize(HFileBlockIndex.getMaxChunkSize(conf));
+    dataBlockIndexWriter.setMinIndexNumEntries(HFileBlockIndex.getMinIndexNumEntries(conf));
     inlineBlockWriters.add(dataBlockIndexWriter);
 
     // Meta data block index writer
@@ -324,17 +352,24 @@ public class HFileWriterImpl implements HFile.Writer {
    * At a block boundary, write all the inline blocks and opens new block.
    */
   protected void checkBlockBoundary() throws IOException {
-    // For encoder like prefixTree, encoded size is not available, so we have to compare both
-    // encoded size and unencoded size to blocksize limit.
-    if (blockWriter.encodedBlockSizeWritten() >= encodedBlockSizeLimit
-        || blockWriter.blockSizeWritten() >= hFileContext.getBlocksize()) {
+    boolean shouldFinishBlock = false;
+    // This means hbase.writer.unified.encoded.blocksize.ratio was set to something different from 0
+    // and we should use the encoding ratio
+    if (encodedBlockSizeLimit > 0) {
+      shouldFinishBlock = blockWriter.encodedBlockSizeWritten() >= encodedBlockSizeLimit;
+    } else {
+      shouldFinishBlock = blockWriter.encodedBlockSizeWritten() >= hFileContext.getBlocksize()
+        || blockWriter.blockSizeWritten() >= hFileContext.getBlocksize();
+    }
+    shouldFinishBlock &= blockWriter.checkBoundariesWithPredicate();
+    if (shouldFinishBlock) {
       finishBlock();
       writeInlineBlocks(false);
       newBlock();
     }
   }
 
-  /** Clean up the data block that is currently being written.*/
+  /** Clean up the data block that is currently being written. */
   private void finishBlock() throws IOException {
     if (!blockWriter.isWriting() || blockWriter.blockSizeWritten() == 0) {
       return;
@@ -348,7 +383,7 @@ public class HFileWriterImpl implements HFile.Writer {
     lastDataBlockOffset = outputStream.getPos();
     blockWriter.writeHeaderAndData(outputStream);
     int onDiskSize = blockWriter.getOnDiskSizeWithHeader();
-    Cell indexEntry =
+    ExtendedCell indexEntry =
       getMidpoint(this.hFileContext.getCellComparator(), lastCellOfPreviousBlock, firstCellInBlock);
     dataBlockIndexWriter.addEntry(PrivateCellUtil.getCellKeySerializedAsKeyValueKey(indexEntry),
       lastDataBlockOffset, onDiskSize);
@@ -359,14 +394,14 @@ public class HFileWriterImpl implements HFile.Writer {
   }
 
   /**
-   * Try to return a Cell that falls between <code>left</code> and
-   * <code>right</code> but that is shorter; i.e. takes up less space. This
-   * trick is used building HFile block index. Its an optimization. It does not
-   * always work. In this case we'll just return the <code>right</code> cell.
+   * Try to return a Cell that falls between <code>left</code> and <code>right</code> but that is
+   * shorter; i.e. takes up less space. This trick is used building HFile block index. Its an
+   * optimization. It does not always work. In this case we'll just return the <code>right</code>
+   * cell.
    * @return A cell that sorts between <code>left</code> and <code>right</code>.
    */
-  public static Cell getMidpoint(final CellComparator comparator, final Cell left,
-      final Cell right) {
+  public static ExtendedCell getMidpoint(final CellComparator comparator, final ExtendedCell left,
+    final ExtendedCell right) {
     if (right == null) {
       throw new IllegalArgumentException("right cell can not be null");
     }
@@ -380,8 +415,8 @@ public class HFileWriterImpl implements HFile.Writer {
       return right;
     }
     byte[] midRow;
-    boolean bufferBacked = left instanceof ByteBufferExtendedCell
-        && right instanceof ByteBufferExtendedCell;
+    boolean bufferBacked =
+      left instanceof ByteBufferExtendedCell && right instanceof ByteBufferExtendedCell;
     if (bufferBacked) {
       midRow = getMinimumMidpointArray(((ByteBufferExtendedCell) left).getRowByteBuffer(),
         ((ByteBufferExtendedCell) left).getRowPosition(), left.getRowLength(),
@@ -394,7 +429,7 @@ public class HFileWriterImpl implements HFile.Writer {
     if (midRow != null) {
       return PrivateCellUtil.createFirstOnRow(midRow);
     }
-    //Rows are same. Compare on families.
+    // Rows are same. Compare on families.
     if (bufferBacked) {
       midRow = getMinimumMidpointArray(((ByteBufferExtendedCell) left).getFamilyByteBuffer(),
         ((ByteBufferExtendedCell) left).getFamilyPosition(), left.getFamilyLength(),
@@ -429,43 +464,42 @@ public class HFileWriterImpl implements HFile.Writer {
   /**
    * Try to get a byte array that falls between left and right as short as possible with
    * lexicographical order;
-   *
-   * @return Return a new array that is between left and right and minimally
-   *         sized else just return null if left == right.
+   * @return Return a new array that is between left and right and minimally sized else just return
+   *         null if left == right.
    */
   private static byte[] getMinimumMidpointArray(final byte[] leftArray, final int leftOffset,
-      final int leftLength, final byte[] rightArray, final int rightOffset, final int rightLength) {
+    final int leftLength, final byte[] rightArray, final int rightOffset, final int rightLength) {
     int minLength = leftLength < rightLength ? leftLength : rightLength;
     int diffIdx = 0;
     for (; diffIdx < minLength; diffIdx++) {
       byte leftByte = leftArray[leftOffset + diffIdx];
       byte rightByte = rightArray[rightOffset + diffIdx];
       if ((leftByte & 0xff) > (rightByte & 0xff)) {
-        throw new IllegalArgumentException("Left byte array sorts after right row; left=" + Bytes
-          .toStringBinary(leftArray, leftOffset, leftLength) + ", right=" + Bytes
-          .toStringBinary(rightArray, rightOffset, rightLength));
+        throw new IllegalArgumentException("Left byte array sorts after right row; left="
+          + Bytes.toStringBinary(leftArray, leftOffset, leftLength) + ", right="
+          + Bytes.toStringBinary(rightArray, rightOffset, rightLength));
       } else if (leftByte != rightByte) {
         break;
       }
     }
     if (diffIdx == minLength) {
       if (leftLength > rightLength) {
-        //right is prefix of left
-        throw new IllegalArgumentException("Left byte array sorts after right row; left=" + Bytes
-          .toStringBinary(leftArray, leftOffset, leftLength) + ", right=" + Bytes
-          .toStringBinary(rightArray, rightOffset, rightLength));
+        // right is prefix of left
+        throw new IllegalArgumentException("Left byte array sorts after right row; left="
+          + Bytes.toStringBinary(leftArray, leftOffset, leftLength) + ", right="
+          + Bytes.toStringBinary(rightArray, rightOffset, rightLength));
       } else if (leftLength < rightLength) {
-        //left is prefix of right.
+        // left is prefix of right.
         byte[] minimumMidpointArray = new byte[minLength + 1];
         System.arraycopy(rightArray, rightOffset, minimumMidpointArray, 0, minLength + 1);
         minimumMidpointArray[minLength] = 0x00;
         return minimumMidpointArray;
       } else {
-        //left == right
+        // left == right
         return null;
       }
     }
-    //Note that left[diffIdx] can never be equal to 0xff since left < right
+    // Note that left[diffIdx] can never be equal to 0xff since left < right
     byte[] minimumMidpointArray = new byte[diffIdx + 1];
     System.arraycopy(leftArray, leftOffset, minimumMidpointArray, 0, diffIdx + 1);
     minimumMidpointArray[diffIdx] = (byte) (minimumMidpointArray[diffIdx] + 1);
@@ -475,46 +509,43 @@ public class HFileWriterImpl implements HFile.Writer {
   /**
    * Try to create a new byte array that falls between left and right as short as possible with
    * lexicographical order.
-   *
-   * @return Return a new array that is between left and right and minimally
-   *         sized else just return null if left == right.
+   * @return Return a new array that is between left and right and minimally sized else just return
+   *         null if left == right.
    */
   private static byte[] getMinimumMidpointArray(ByteBuffer left, int leftOffset, int leftLength,
-      ByteBuffer right, int rightOffset, int rightLength) {
+    ByteBuffer right, int rightOffset, int rightLength) {
     int minLength = leftLength < rightLength ? leftLength : rightLength;
     int diffIdx = 0;
     for (; diffIdx < minLength; diffIdx++) {
       int leftByte = ByteBufferUtils.toByte(left, leftOffset + diffIdx);
       int rightByte = ByteBufferUtils.toByte(right, rightOffset + diffIdx);
       if ((leftByte & 0xff) > (rightByte & 0xff)) {
-        throw new IllegalArgumentException(
-          "Left byte array sorts after right row; left=" + ByteBufferUtils
-            .toStringBinary(left, leftOffset, leftLength) + ", right=" + ByteBufferUtils
-            .toStringBinary(right, rightOffset, rightLength));
+        throw new IllegalArgumentException("Left byte array sorts after right row; left="
+          + ByteBufferUtils.toStringBinary(left, leftOffset, leftLength) + ", right="
+          + ByteBufferUtils.toStringBinary(right, rightOffset, rightLength));
       } else if (leftByte != rightByte) {
         break;
       }
     }
     if (diffIdx == minLength) {
       if (leftLength > rightLength) {
-        //right is prefix of left
-        throw new IllegalArgumentException(
-          "Left byte array sorts after right row; left=" + ByteBufferUtils
-            .toStringBinary(left, leftOffset, leftLength) + ", right=" + ByteBufferUtils
-            .toStringBinary(right, rightOffset, rightLength));
+        // right is prefix of left
+        throw new IllegalArgumentException("Left byte array sorts after right row; left="
+          + ByteBufferUtils.toStringBinary(left, leftOffset, leftLength) + ", right="
+          + ByteBufferUtils.toStringBinary(right, rightOffset, rightLength));
       } else if (leftLength < rightLength) {
-        //left is prefix of right.
+        // left is prefix of right.
         byte[] minimumMidpointArray = new byte[minLength + 1];
-        ByteBufferUtils
-          .copyFromBufferToArray(minimumMidpointArray, right, rightOffset, 0, minLength + 1);
+        ByteBufferUtils.copyFromBufferToArray(minimumMidpointArray, right, rightOffset, 0,
+          minLength + 1);
         minimumMidpointArray[minLength] = 0x00;
         return minimumMidpointArray;
       } else {
-        //left == right
+        // left == right
         return null;
       }
     }
-    //Note that left[diffIdx] can never be equal to 0xff since left < right
+    // Note that left[diffIdx] can never be equal to 0xff since left < right
     byte[] minimumMidpointArray = new byte[diffIdx + 1];
     ByteBufferUtils.copyFromBufferToArray(minimumMidpointArray, left, leftOffset, 0, diffIdx + 1);
     minimumMidpointArray[diffIdx] = (byte) (minimumMidpointArray[diffIdx] + 1);
@@ -527,11 +558,10 @@ public class HFileWriterImpl implements HFile.Writer {
       while (ibw.shouldWriteBlock(closing)) {
         long offset = outputStream.getPos();
         boolean cacheThisBlock = ibw.getCacheOnWrite();
-        ibw.writeInlineBlock(blockWriter.startWriting(
-            ibw.getInlineBlockType()));
+        ibw.writeInlineBlock(blockWriter.startWriting(ibw.getInlineBlockType()));
         blockWriter.writeHeaderAndData(outputStream);
         ibw.blockWritten(offset, blockWriter.getOnDiskSizeWithHeader(),
-            blockWriter.getUncompressedSizeWithoutHeader());
+          blockWriter.getUncompressedSizeWithoutHeader());
         totalUncompressedBytes += blockWriter.getUncompressedSizeWithHeader();
 
         if (cacheThisBlock) {
@@ -543,20 +573,35 @@ public class HFileWriterImpl implements HFile.Writer {
 
   /**
    * Caches the last written HFile block.
-   * @param offset the offset of the block we want to cache. Used to determine
-   *          the cache key.
+   * @param offset the offset of the block we want to cache. Used to determine the cache key.
    */
   private void doCacheOnWrite(long offset) {
     cacheConf.getBlockCache().ifPresent(cache -> {
       HFileBlock cacheFormatBlock = blockWriter.getBlockForCaching(cacheConf);
+      BlockCacheKey key = buildCacheBlockKey(offset, cacheFormatBlock.getBlockType());
+      if (!shouldCacheBlock(cache, key)) {
+        return;
+      }
       try {
-        cache.cacheBlock(new BlockCacheKey(name, offset, true, cacheFormatBlock.getBlockType()),
-            cacheFormatBlock);
+        cache.cacheBlock(key, cacheFormatBlock, cacheConf.isInMemory(), true);
       } finally {
         // refCnt will auto increase when block add to Cache, see RAMCache#putIfAbsent
         cacheFormatBlock.release();
       }
     });
+  }
+
+  private BlockCacheKey buildCacheBlockKey(long offset, BlockType blockType) {
+    if (path != null) {
+      return new BlockCacheKey(path, offset, true, blockType);
+    }
+    return new BlockCacheKey(name, offset, true, blockType);
+  }
+
+  private boolean shouldCacheBlock(BlockCache cache, BlockCacheKey key) {
+    Optional<Boolean> result =
+      cache.shouldCacheBlock(key, timeRangeTrackerForTiering.get().getMax(), conf);
+    return result.orElse(true);
   }
 
   /**
@@ -572,15 +617,11 @@ public class HFileWriterImpl implements HFile.Writer {
   }
 
   /**
-   * Add a meta block to the end of the file. Call before close(). Metadata
-   * blocks are expensive. Fill one with a bunch of serialized data rather than
-   * do a metadata block per metadata instance. If metadata is small, consider
-   * adding to file info using {@link #appendFileInfo(byte[], byte[])}
-   *
-   * @param metaBlockName
-   *          name of the block
-   * @param content
-   *          will call readFields to get data later (DO NOT REUSE)
+   * Add a meta block to the end of the file. Call before close(). Metadata blocks are expensive.
+   * Fill one with a bunch of serialized data rather than do a metadata block per metadata instance.
+   * If metadata is small, consider adding to file info using
+   * {@link #appendFileInfo(byte[], byte[])} name of the block will call readFields to get data
+   * later (DO NOT REUSE)
    */
   @Override
   public void appendMetaBlock(String metaBlockName, Writable content) {
@@ -589,8 +630,7 @@ public class HFileWriterImpl implements HFile.Writer {
     for (i = 0; i < metaNames.size(); ++i) {
       // stop when the current key is greater than our own
       byte[] cur = metaNames.get(i);
-      if (Bytes.BYTES_RAWCOMPARATOR.compare(cur, 0, cur.length, key, 0,
-          key.length) > 0) {
+      if (Bytes.BYTES_RAWCOMPARATOR.compare(cur, 0, cur.length, key, 0, key.length) > 0) {
         break;
       }
     }
@@ -605,6 +645,8 @@ public class HFileWriterImpl implements HFile.Writer {
     }
     // Save data block encoder metadata in the file info.
     blockEncoder.saveMetadata(this);
+    // Save index block encoder metadata in the file info.
+    indexBlockEncoder.saveMetadata(this);
     // Write out the end of the data blocks, then write meta data blocks.
     // followed by fileinfo, data block index and meta block index.
 
@@ -627,7 +669,7 @@ public class HFileWriterImpl implements HFile.Writer {
 
         // Add the new meta block to the meta index.
         metaBlockIndexWriter.addEntry(metaNames.get(i), offset,
-            blockWriter.getOnDiskSizeWithHeader());
+          blockWriter.getOnDiskSizeWithHeader());
       }
     }
 
@@ -644,8 +686,8 @@ public class HFileWriterImpl implements HFile.Writer {
     trailer.setLoadOnOpenOffset(rootIndexOffset);
 
     // Meta block index.
-    metaBlockIndexWriter.writeSingleLevelIndex(blockWriter.startWriting(
-        BlockType.ROOT_INDEX), "meta");
+    metaBlockIndexWriter.writeSingleLevelIndex(blockWriter.startWriting(BlockType.ROOT_INDEX),
+      "meta");
     blockWriter.writeHeaderAndData(outputStream);
     totalUncompressedBytes += blockWriter.getUncompressedSizeWithHeader();
 
@@ -660,20 +702,18 @@ public class HFileWriterImpl implements HFile.Writer {
     totalUncompressedBytes += blockWriter.getUncompressedSizeWithHeader();
 
     // Load-on-open data supplied by higher levels, e.g. Bloom filters.
-    for (BlockWritable w : additionalLoadOnOpenData){
+    for (BlockWritable w : additionalLoadOnOpenData) {
       blockWriter.writeBlock(w, outputStream);
       totalUncompressedBytes += blockWriter.getUncompressedSizeWithHeader();
     }
 
     // Now finish off the trailer.
     trailer.setNumDataIndexLevels(dataBlockIndexWriter.getNumLevels());
-    trailer.setUncompressedDataIndexSize(
-        dataBlockIndexWriter.getTotalUncompressedSize());
+    trailer.setUncompressedDataIndexSize(dataBlockIndexWriter.getTotalUncompressedSize());
     trailer.setFirstDataBlockOffset(firstDataBlockOffset);
     trailer.setLastDataBlockOffset(lastDataBlockOffset);
     trailer.setComparatorClass(this.hFileContext.getCellComparator().getClass());
     trailer.setDataIndexCount(dataBlockIndexWriter.getNumRootEntries());
-
 
     finishClose(trailer);
 
@@ -695,16 +735,15 @@ public class HFileWriterImpl implements HFile.Writer {
     this.addBloomFilter(bfw, BlockType.DELETE_FAMILY_BLOOM_META);
   }
 
-  private void addBloomFilter(final BloomFilterWriter bfw,
-      final BlockType blockType) {
+  private void addBloomFilter(final BloomFilterWriter bfw, final BlockType blockType) {
     if (bfw.getKeyCount() <= 0) {
       return;
     }
 
-    if (blockType != BlockType.GENERAL_BLOOM_META &&
-        blockType != BlockType.DELETE_FAMILY_BLOOM_META) {
-      throw new RuntimeException("Block Type: " + blockType.toString() +
-          "is not supported");
+    if (
+      blockType != BlockType.GENERAL_BLOOM_META && blockType != BlockType.DELETE_FAMILY_BLOOM_META
+    ) {
+      throw new RuntimeException("Block Type: " + blockType.toString() + "is not supported");
     }
     additionalLoadOnOpenData.add(new BlockWritable() {
       @Override
@@ -729,14 +768,11 @@ public class HFileWriterImpl implements HFile.Writer {
   }
 
   /**
-   * Add key/value to file. Keys must be added in an order that agrees with the
-   * Comparator passed on construction.
-   *
-   * @param cell
-   *          Cell to add. Cannot be empty nor null.
+   * Add key/value to file. Keys must be added in an order that agrees with the Comparator passed on
+   * construction. Cell to add. Cannot be empty nor null.
    */
   @Override
-  public void append(final Cell cell) throws IOException {
+  public void append(final ExtendedCell cell) throws IOException {
     // checkKey uses comparator to check we are writing in order.
     boolean dupKey = checkKey(cell);
     if (!dupKey) {
@@ -751,7 +787,10 @@ public class HFileWriterImpl implements HFile.Writer {
 
     totalKeyLength += PrivateCellUtil.estimatedSerializedSizeOfKey(cell);
     totalValueLength += cell.getValueLength();
-
+    if (lenOfBiggestCell < PrivateCellUtil.estimatedSerializedSizeOf(cell)) {
+      lenOfBiggestCell = PrivateCellUtil.estimatedSerializedSizeOf(cell);
+      keyOfBiggestCell = PrivateCellUtil.getCellKeySerializedAsKeyValueKey(cell);
+    }
     // Are we the first key in this block?
     if (firstCellInBlock == null) {
       // If cell is big, block will be closed and this firstCellInBlock reference will only last
@@ -767,6 +806,8 @@ public class HFileWriterImpl implements HFile.Writer {
     if (tagsLength > this.maxTagsLength) {
       this.maxTagsLength = tagsLength;
     }
+
+    trackTimestamps(cell);
   }
 
   @Override
@@ -792,21 +833,29 @@ public class HFileWriterImpl implements HFile.Writer {
     if (lastCell != null) {
       // Make a copy. The copy is stuffed into our fileinfo map. Needs a clean
       // byte buffer. Won't take a tuple.
-      byte [] lastKey = PrivateCellUtil.getCellKeySerializedAsKeyValueKey(this.lastCell);
+      byte[] lastKey = PrivateCellUtil.getCellKeySerializedAsKeyValueKey(this.lastCell);
       fileInfo.append(HFileInfo.LASTKEY, lastKey, false);
     }
 
     // Average key length.
-    int avgKeyLen =
-        entryCount == 0 ? 0 : (int) (totalKeyLength / entryCount);
+    int avgKeyLen = entryCount == 0 ? 0 : (int) (totalKeyLength / entryCount);
     fileInfo.append(HFileInfo.AVG_KEY_LEN, Bytes.toBytes(avgKeyLen), false);
     fileInfo.append(HFileInfo.CREATE_TIME_TS, Bytes.toBytes(hFileContext.getFileCreateTime()),
       false);
 
     // Average value length.
-    int avgValueLen =
-        entryCount == 0 ? 0 : (int) (totalValueLength / entryCount);
+    int avgValueLen = entryCount == 0 ? 0 : (int) (totalValueLength / entryCount);
     fileInfo.append(HFileInfo.AVG_VALUE_LEN, Bytes.toBytes(avgValueLen), false);
+
+    // Biggest cell.
+    if (keyOfBiggestCell != null) {
+      fileInfo.append(HFileInfo.KEY_OF_BIGGEST_CELL, keyOfBiggestCell, false);
+      fileInfo.append(HFileInfo.LEN_OF_BIGGEST_CELL, Bytes.toBytes(lenOfBiggestCell), false);
+      LOG.debug("Len of the biggest cell in {} is {}, key is {}",
+        this.getPath() == null ? "" : this.getPath().toString(), lenOfBiggestCell,
+        CellUtil.toString(new KeyValue.KeyOnlyKeyValue(keyOfBiggestCell), false));
+    }
+
     if (hFileContext.isIncludesTags()) {
       // When tags are not being written in this file, MAX_TAGS_LEN is excluded
       // from the FileInfo
@@ -829,16 +878,27 @@ public class HFileWriterImpl implements HFile.Writer {
     // Write out encryption metadata before finalizing if we have a valid crypto context
     Encryption.Context cryptoContext = hFileContext.getEncryptionContext();
     if (cryptoContext != Encryption.Context.NONE) {
-      // Wrap the context's key and write it as the encryption metadata, the wrapper includes
-      // all information needed for decryption
-      trailer.setEncryptionKey(EncryptionUtil.wrapKey(cryptoContext.getConf(),
-        cryptoContext.getConf().get(HConstants.CRYPTO_MASTERKEY_NAME_CONF_KEY,
-          User.getCurrent().getShortName()),
-        cryptoContext.getKey()));
+      // key management is not yet implemented, so kekData is always null
+      // Use traditional encryption with master key
+      String wrapperSubject = cryptoContext.getConf().get(HConstants.CRYPTO_MASTERKEY_NAME_CONF_KEY,
+        User.getCurrent().getShortName());
+      Key encKey = cryptoContext.getKey();
+
+      // Wrap the context's key and write it as the encryption metadata
+      if (encKey != null) {
+        byte[] wrappedKey =
+          EncryptionUtil.wrapKey(cryptoContext.getConf(), wrapperSubject, encKey, null);
+        trailer.setEncryptionKey(wrappedKey);
+      }
+
+      // Key management fields - not yet implemented, set to defaults
+      trailer.setKeyNamespace(null);
+      trailer.setKEKMetadata(null);
+      trailer.setKEKChecksum(0);
     }
     // Now we can finish the close
     trailer.setMetaIndexCount(metaNames.size());
-    trailer.setTotalUncompressedBytes(totalUncompressedBytes+ trailer.getTrailerSize());
+    trailer.setTotalUncompressedBytes(totalUncompressedBytes + trailer.getTrailerSize());
     trailer.setEntryCount(entryCount);
     trailer.setCompressionCodec(hFileContext.getCompression());
 
@@ -850,5 +910,33 @@ public class HFileWriterImpl implements HFile.Writer {
       outputStream.close();
       outputStream = null;
     }
+  }
+
+  /**
+   * Add TimestampRange and earliest put timestamp to Metadata
+   */
+  public void appendTrackedTimestampsToMetadata() throws IOException {
+    // TODO: The StoreFileReader always converts the byte[] to TimeRange
+    // via TimeRangeTracker, so we should write the serialization data of TimeRange directly.
+    appendFileInfo(TIMERANGE_KEY, TimeRangeTracker.toByteArray(timeRangeTracker));
+    appendFileInfo(EARLIEST_PUT_TS, Bytes.toBytes(earliestPutTs));
+  }
+
+  public void appendCustomCellTimestampsToMetadata(TimeRangeTracker timeRangeTracker)
+    throws IOException {
+    // TODO: The StoreFileReader always converts the byte[] to TimeRange
+    // via TimeRangeTracker, so we should write the serialization data of TimeRange directly.
+    appendFileInfo(CUSTOM_TIERING_TIME_RANGE, TimeRangeTracker.toByteArray(timeRangeTracker));
+  }
+
+  /**
+   * Record the earliest Put timestamp. If the timeRangeTracker is not set, update TimeRangeTracker
+   * to include the timestamp of this key
+   */
+  private void trackTimestamps(final ExtendedCell cell) {
+    if (KeyValue.Type.Put == KeyValue.Type.codeToType(cell.getTypeByte())) {
+      earliestPutTs = Math.min(earliestPutTs, cell.getTimestamp());
+    }
+    timeRangeTracker.includeTimestamp(cell);
   }
 }

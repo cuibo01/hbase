@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,7 +27,6 @@ import java.io.UncheckedIOException;
 import java.net.SocketTimeoutException;
 import java.util.Arrays;
 import java.util.NavigableMap;
-import java.util.Random;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -36,6 +35,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CallQueueTooBigException;
@@ -67,7 +67,6 @@ import org.apache.hadoop.ipc.RemoteException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
-import org.junit.rules.ExpectedException;
 import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -96,8 +95,6 @@ public abstract class TestAssignmentManagerBase {
 
   @Rule
   public TestName name = new TestName();
-  @Rule
-  public final ExpectedException exception = ExpectedException.none();
 
   protected static final int PROC_NTHREADS = 64;
   protected static final int NREGIONS = 1 * 1000;
@@ -149,6 +146,7 @@ public abstract class TestAssignmentManagerBase {
     // make retry for TRSP more frequent
     conf.setLong(ProcedureUtil.PROCEDURE_RETRY_SLEEP_INTERVAL_MS, 10);
     conf.setLong(ProcedureUtil.PROCEDURE_RETRY_MAX_SLEEP_TIME_MS, 100);
+    conf.setInt("hbase.master.rs.remote.proc.fail.fast.limit", Integer.MAX_VALUE);
   }
 
   @Before
@@ -157,7 +155,7 @@ public abstract class TestAssignmentManagerBase {
     this.executor = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryBuilder()
       .setUncaughtExceptionHandler((t, e) -> LOG.warn("Uncaught: ", e)).build());
     setupConfiguration(util.getConfiguration());
-    master = new MockMasterServices(util.getConfiguration(), this.regionsToRegionServers);
+    master = new MockMasterServices(util.getConfiguration());
     rsDispatcher = new MockRSProcedureDispatcher(master);
     master.start(NSERVERS, rsDispatcher);
     newRsAdded = 0;
@@ -186,7 +184,7 @@ public abstract class TestAssignmentManagerBase {
   protected class NoopRsExecutor implements MockRSExecutor {
     @Override
     public ExecuteProceduresResponse sendRequest(ServerName server,
-        ExecuteProceduresRequest request) throws IOException {
+      ExecuteProceduresRequest request) throws IOException {
       if (request.getOpenRegionCount() > 0) {
         for (OpenRegionRequest req : request.getOpenRegionList()) {
           for (RegionOpenInfo openReq : req.getOpenInfoList()) {
@@ -203,12 +201,12 @@ public abstract class TestAssignmentManagerBase {
     }
 
     protected RegionOpeningState execOpenRegion(ServerName server, RegionOpenInfo regionInfo)
-        throws IOException {
+      throws IOException {
       return null;
     }
 
     protected CloseRegionResponse execCloseRegion(ServerName server, byte[] regionName)
-        throws IOException {
+      throws IOException {
       return null;
     }
   }
@@ -282,7 +280,7 @@ public abstract class TestAssignmentManagerBase {
     TransitRegionStateProcedure proc;
     regionNode.lock();
     try {
-      assertFalse(regionNode.isInTransition());
+      assertFalse(regionNode.isTransitionScheduled());
       proc = TransitRegionStateProcedure
         .unassign(master.getMasterProcedureExecutor().getEnvironment(), hri);
       regionNode.setProcedure(proc);
@@ -293,8 +291,8 @@ public abstract class TestAssignmentManagerBase {
   }
 
   protected void sendTransitionReport(final ServerName serverName,
-      final org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.RegionInfo regionInfo,
-      final TransitionCode state, long seqId) throws IOException {
+    final org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.RegionInfo regionInfo,
+    final TransitionCode state, long seqId) throws IOException {
     ReportRegionStateTransitionRequest.Builder req =
       ReportRegionStateTransitionRequest.newBuilder();
     req.setServer(ProtobufUtil.toServerName(serverName));
@@ -329,7 +327,7 @@ public abstract class TestAssignmentManagerBase {
   protected class GoodRsExecutor extends NoopRsExecutor {
     @Override
     protected RegionOpeningState execOpenRegion(ServerName server, RegionOpenInfo openReq)
-        throws IOException {
+      throws IOException {
       RegionInfo hri = ProtobufUtil.toRegionInfo(openReq.getRegion());
       long previousOpenSeqNum =
         am.getRegionStates().getOrCreateRegionStateNode(hri).getOpenSeqNum();
@@ -351,7 +349,7 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     protected CloseRegionResponse execCloseRegion(ServerName server, byte[] regionName)
-        throws IOException {
+      throws IOException {
       RegionInfo hri = am.getRegionInfo(regionName);
       sendTransitionReport(server, ProtobufUtil.toRegionInfo(hri), TransitionCode.CLOSED, -1);
       return CloseRegionResponse.newBuilder().setClosed(true).build();
@@ -361,7 +359,7 @@ public abstract class TestAssignmentManagerBase {
   protected static class ServerNotYetRunningRsExecutor implements MockRSExecutor {
     @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
-        throws IOException {
+      throws IOException {
       throw new ServerNotRunningYetException("wait on server startup");
     }
   }
@@ -375,7 +373,7 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
-        throws IOException {
+      throws IOException {
       throw exception;
     }
   }
@@ -392,7 +390,7 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
-        throws IOException {
+      throws IOException {
       // SocketTimeoutException should be a temporary problem
       // unless the server will be declared dead.
       retries++;
@@ -431,7 +429,7 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
-        throws IOException {
+      throws IOException {
       if (!invoked) {
         lastServer = server;
         invoked = true;
@@ -460,7 +458,7 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
-        throws IOException {
+      throws IOException {
       retries++;
       if (retries == 1) {
         lastServer = server;
@@ -485,7 +483,7 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     protected RegionOpeningState execOpenRegion(final ServerName server, RegionOpenInfo openReq)
-        throws IOException {
+      throws IOException {
       if (this.invocations++ > 0) {
         // Return w/o problem the second time through here.
         return super.execOpenRegion(server, openReq);
@@ -516,7 +514,7 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     protected RegionOpeningState execOpenRegion(final ServerName server, RegionOpenInfo openReq)
-        throws IOException {
+      throws IOException {
       if (this.invocations++ > 0) {
         // Return w/o problem the second time through here.
         return super.execOpenRegion(server, openReq);
@@ -541,7 +539,7 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     protected CloseRegionResponse execCloseRegion(ServerName server, byte[] regionName)
-        throws IOException {
+      throws IOException {
       switch (this.invocations++) {
         case 0:
           throw new NotServingRegionException("Fake");
@@ -582,12 +580,10 @@ public abstract class TestAssignmentManagerBase {
   }
 
   protected class RandRsExecutor extends NoopRsExecutor {
-    private final Random rand = new Random();
-
     @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
-        throws IOException {
-      switch (rand.nextInt(5)) {
+      throws IOException {
+      switch (ThreadLocalRandom.current().nextInt(5)) {
         case 0:
           throw new ServerNotRunningYetException("wait on server startup");
         case 1:
@@ -602,11 +598,11 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     protected RegionOpeningState execOpenRegion(final ServerName server, RegionOpenInfo openReq)
-        throws IOException {
+      throws IOException {
       RegionInfo hri = ProtobufUtil.toRegionInfo(openReq.getRegion());
       long previousOpenSeqNum =
         am.getRegionStates().getOrCreateRegionStateNode(hri).getOpenSeqNum();
-      switch (rand.nextInt(3)) {
+      switch (ThreadLocalRandom.current().nextInt(3)) {
         case 0:
           LOG.info("Return OPENED response");
           sendTransitionReport(server, openReq.getRegion(), TransitionCode.OPENED,
@@ -621,8 +617,8 @@ public abstract class TestAssignmentManagerBase {
       }
       // The procedure on master will just hang forever because nothing comes back
       // from the RS in this case.
-      LOG.info("Return null as response; means proc stuck so we send in a crash report after" +
-        " a few seconds...");
+      LOG.info("Return null as response; means proc stuck so we send in a crash report after"
+        + " a few seconds...");
       executor.schedule(new Runnable() {
         @Override
         public void run() {
@@ -635,9 +631,9 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     protected CloseRegionResponse execCloseRegion(ServerName server, byte[] regionName)
-        throws IOException {
+      throws IOException {
       CloseRegionResponse.Builder resp = CloseRegionResponse.newBuilder();
-      boolean closed = rand.nextBoolean();
+      boolean closed = ThreadLocalRandom.current().nextBoolean();
       if (closed) {
         RegionInfo hri = am.getRegionInfo(regionName);
         sendTransitionReport(server, ProtobufUtil.toRegionInfo(hri), TransitionCode.CLOSED, -1);
@@ -649,7 +645,7 @@ public abstract class TestAssignmentManagerBase {
 
   protected interface MockRSExecutor {
     ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
-        throws IOException;
+      throws IOException;
   }
 
   protected class MockRSProcedureDispatcher extends RSProcedureDispatcher {
@@ -665,19 +661,19 @@ public abstract class TestAssignmentManagerBase {
 
     @Override
     protected void remoteDispatch(ServerName serverName,
-        @SuppressWarnings("rawtypes") Set<RemoteProcedure> remoteProcedures) {
+      @SuppressWarnings("rawtypes") Set<RemoteProcedure> remoteProcedures) {
       submitTask(new MockRemoteCall(serverName, remoteProcedures));
     }
 
     private class MockRemoteCall extends ExecuteProceduresRemoteCall {
       public MockRemoteCall(final ServerName serverName,
-          @SuppressWarnings("rawtypes") final Set<RemoteProcedure> operations) {
+        @SuppressWarnings("rawtypes") final Set<RemoteProcedure> operations) {
         super(serverName, operations);
       }
 
       @Override
       protected ExecuteProceduresResponse sendRequest(final ServerName serverName,
-          final ExecuteProceduresRequest request) throws IOException {
+        final ExecuteProceduresRequest request) throws IOException {
         return mockRsExec.sendRequest(serverName, request);
       }
     }

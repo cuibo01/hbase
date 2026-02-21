@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,7 +27,7 @@ import org.apache.hadoop.hbase.backup.util.BackupUtils;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Table;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
+import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.ClassRule;
 import org.junit.Test;
@@ -37,19 +37,18 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
-@Category(MediumTests.class)
+@Category(LargeTests.class)
 public class TestBackupDeleteRestore extends TestBackupBase {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestBackupDeleteRestore.class);
+    HBaseClassTestRule.forClass(TestBackupDeleteRestore.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestBackupDeleteRestore.class);
 
   /**
    * Verify that load data- backup - delete some data - restore works as expected - deleted data get
    * restored.
-   *
    * @throws Exception if doing the backup or an operation on the tables fails
    */
   @Test
@@ -72,8 +71,8 @@ public class TestBackupDeleteRestore extends TestBackupBase {
     TableName[] tableset = new TableName[] { table1 };
     TableName[] tablemap = null;// new TableName[] { table1_restore };
     BackupAdmin client = getBackupAdmin();
-    client.restore(BackupUtils.createRestoreRequest(BACKUP_ROOT_DIR, backupId, false,
-      tableset, tablemap, true));
+    client.restore(
+      BackupUtils.createRestoreRequest(BACKUP_ROOT_DIR, backupId, false, tableset, tablemap, true));
 
     int numRowsAfterRestore = TEST_UTIL.countRows(table1);
     assertEquals(numRows, numRowsAfterRestore);

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,6 +26,7 @@ import java.util.SortedSet;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparatorImpl;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
@@ -43,10 +44,9 @@ public class TestCellSkipListSet {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCellSkipListSet.class);
+    HBaseClassTestRule.forClass(TestCellSkipListSet.class);
 
-  private final CellSet csls =
-    new CellSet(CellComparatorImpl.COMPARATOR);
+  private final CellSet<ExtendedCell> csls = new CellSet<>(CellComparatorImpl.COMPARATOR);
 
   @Rule
   public TestName name = new TestName();
@@ -81,16 +81,16 @@ public class TestCellSkipListSet {
 
   @Test
   public void testIterator() throws Exception {
-    byte [] bytes = Bytes.toBytes(name.getMethodName());
-    byte [] value1 = Bytes.toBytes("1");
-    byte [] value2 = Bytes.toBytes("2");
+    byte[] bytes = Bytes.toBytes(name.getMethodName());
+    byte[] value1 = Bytes.toBytes("1");
+    byte[] value2 = Bytes.toBytes("2");
     final int total = 3;
     for (int i = 0; i < total; i++) {
       this.csls.add(new KeyValue(bytes, bytes, Bytes.toBytes("" + i), value1));
     }
     // Assert that we added 'total' values and that they are in order
     int count = 0;
-    for (Cell kv: this.csls) {
+    for (Cell kv : this.csls) {
       assertEquals("" + count,
         Bytes.toString(kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength()));
       assertTrue(Bytes.equals(kv.getValueArray(), kv.getValueOffset(), kv.getValueLength(), value1,
@@ -117,16 +117,16 @@ public class TestCellSkipListSet {
 
   @Test
   public void testDescendingIterator() throws Exception {
-    byte [] bytes = Bytes.toBytes(name.getMethodName());
-    byte [] value1 = Bytes.toBytes("1");
-    byte [] value2 = Bytes.toBytes("2");
+    byte[] bytes = Bytes.toBytes(name.getMethodName());
+    byte[] value1 = Bytes.toBytes("1");
+    byte[] value2 = Bytes.toBytes("2");
     final int total = 3;
     for (int i = 0; i < total; i++) {
       this.csls.add(new KeyValue(bytes, bytes, Bytes.toBytes("" + i), value1));
     }
     // Assert that we added 'total' values and that they are in order
     int count = 0;
-    for (Iterator<Cell> i = this.csls.descendingIterator(); i.hasNext();) {
+    for (Iterator<ExtendedCell> i = this.csls.descendingIterator(); i.hasNext();) {
       Cell kv = i.next();
       assertEquals("" + (total - (count + 1)),
         Bytes.toString(kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength()));
@@ -142,7 +142,7 @@ public class TestCellSkipListSet {
     // Assert that we added 'total' values and that they are in order and that
     // we are getting back value2
     count = 0;
-    for (Iterator<Cell> i = this.csls.descendingIterator(); i.hasNext();) {
+    for (Iterator<ExtendedCell> i = this.csls.descendingIterator(); i.hasNext();) {
       Cell kv = i.next();
       assertEquals("" + (total - (count + 1)),
         Bytes.toString(kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength()));
@@ -155,9 +155,9 @@ public class TestCellSkipListSet {
 
   @Test
   public void testHeadTail() throws Exception {
-    byte [] bytes = Bytes.toBytes(name.getMethodName());
-    byte [] value1 = Bytes.toBytes("1");
-    byte [] value2 = Bytes.toBytes("2");
+    byte[] bytes = Bytes.toBytes(name.getMethodName());
+    byte[] value1 = Bytes.toBytes("1");
+    byte[] value2 = Bytes.toBytes("2");
     final int total = 3;
     KeyValue splitter = null;
     for (int i = 0; i < total; i++) {
@@ -165,9 +165,9 @@ public class TestCellSkipListSet {
       if (i == 1) splitter = kv;
       this.csls.add(kv);
     }
-    SortedSet<Cell> tail = this.csls.tailSet(splitter);
+    SortedSet<ExtendedCell> tail = this.csls.tailSet(splitter);
     assertEquals(2, tail.size());
-    SortedSet<Cell> head = this.csls.headSet(splitter);
+    SortedSet<ExtendedCell> head = this.csls.headSet(splitter);
     assertEquals(1, head.size());
     // Now ensure that we get back right answer even when we do tail or head.
     // Now overwrite with a new value.

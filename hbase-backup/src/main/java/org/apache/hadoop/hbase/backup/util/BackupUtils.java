@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.backup.util;
 
 import java.io.FileNotFoundException;
@@ -25,12 +24,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.Predicate;
+import java.util.stream.Stream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
@@ -50,10 +49,13 @@ import org.apache.hadoop.hbase.backup.HBackupFileSystem;
 import org.apache.hadoop.hbase.backup.RestoreRequest;
 import org.apache.hadoop.hbase.backup.impl.BackupManifest;
 import org.apache.hadoop.hbase.backup.impl.BackupManifest.BackupImage;
+import org.apache.hadoop.hbase.backup.impl.BackupSystemTable;
+import org.apache.hadoop.hbase.backup.master.LogRollMasterProcedureManager;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.master.region.MasterRegionFactory;
 import org.apache.hadoop.hbase.tool.BulkLoadHFiles;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -64,12 +66,17 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.google.common.base.Splitter;
+import org.apache.hbase.thirdparty.com.google.common.collect.ImmutableMap;
+import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
+import org.apache.hbase.thirdparty.com.google.common.collect.Iterators;
+
 /**
  * A collection for methods used by multiple classes to backup HBase tables.
  */
 @InterfaceAudience.Private
 public final class BackupUtils {
-  protected static final Logger LOG = LoggerFactory.getLogger(BackupUtils.class);
+  private static final Logger LOG = LoggerFactory.getLogger(BackupUtils.class);
   public static final String LOGNAME_SEPARATOR = ".";
   public static final int MILLISEC_IN_HOUR = 3600000;
 
@@ -83,8 +90,8 @@ public final class BackupUtils {
    * @param rsLogTimestampMap timestamp map
    * @return the min timestamp of each RS
    */
-  public static Map<String, Long> getRSLogTimestampMins(
-      Map<TableName, Map<String, Long>> rsLogTimestampMap) {
+  public static Map<String, Long>
+    getRSLogTimestampMins(Map<TableName, Map<String, Long>> rsLogTimestampMap) {
     if (rsLogTimestampMap == null || rsLogTimestampMap.isEmpty()) {
       return null;
     }
@@ -114,13 +121,13 @@ public final class BackupUtils {
   /**
    * copy out Table RegionInfo into incremental backup image need to consider move this logic into
    * HBackupFileSystem
-   * @param conn connection
+   * @param conn       connection
    * @param backupInfo backup info
-   * @param conf configuration
+   * @param conf       configuration
    * @throws IOException exception
    */
   public static void copyTableRegionInfo(Connection conn, BackupInfo backupInfo, Configuration conf)
-          throws IOException {
+    throws IOException {
     Path rootDir = CommonFSUtils.getRootDir(conf);
     FileSystem fs = rootDir.getFileSystem(conf);
 
@@ -137,11 +144,12 @@ public final class BackupUtils {
         // write a copy of descriptor to the target directory
         Path target = new Path(backupInfo.getTableBackupDir(table));
         FileSystem targetFs = target.getFileSystem(conf);
-        FSTableDescriptors descriptors =
-          new FSTableDescriptors(targetFs, CommonFSUtils.getRootDir(conf));
-        descriptors.createTableDescriptorForTableDirectory(target, orig, false);
-        LOG.debug("Attempting to copy table info for:" + table + " target: " + target +
-          " descriptor: " + orig);
+        try (FSTableDescriptors descriptors =
+          new FSTableDescriptors(targetFs, CommonFSUtils.getRootDir(conf))) {
+          descriptors.createTableDescriptorForTableDirectory(target, orig, false);
+        }
+        LOG.debug("Attempting to copy table info for:" + table + " target: " + target
+          + " descriptor: " + orig);
         LOG.debug("Finished copying tableinfo.");
         List<RegionInfo> regions = MetaTableAccessor.getTableRegions(conn, table);
         // For each region, write the region info to disk
@@ -161,7 +169,7 @@ public final class BackupUtils {
    * Write the .regioninfo file on-disk.
    */
   public static void writeRegioninfoOnFilesystem(final Configuration conf, final FileSystem fs,
-      final Path regionInfoDir, RegionInfo regionInfo) throws IOException {
+    final Path regionInfoDir, RegionInfo regionInfo) throws IOException {
     final byte[] content = RegionInfo.toDelimitedByteArray(regionInfo);
     Path regionInfoFile = new Path(regionInfoDir, "." + HConstants.REGIONINFO_QUALIFIER_STR);
     // First check to get the permissions
@@ -219,7 +227,7 @@ public final class BackupUtils {
 
   /**
    * Get the total length of files under the given directory recursively.
-   * @param fs The hadoop file system
+   * @param fs  The hadoop file system
    * @param dir The target directory
    * @return the total length of files
    * @throws IOException exception
@@ -241,13 +249,13 @@ public final class BackupUtils {
 
   /**
    * Get list of all old WAL files (WALs and archive)
-   * @param c configuration
+   * @param c                configuration
    * @param hostTimestampMap {host,timestamp} map
    * @return list of WAL files
    * @throws IOException exception
    */
   public static List<String> getWALFilesOlderThan(final Configuration c,
-      final HashMap<String, Long> hostTimestampMap) throws IOException {
+    final HashMap<String, Long> hostTimestampMap) throws IOException {
     Path walRootDir = CommonFSUtils.getWALRootDir(c);
     Path logDir = new Path(walRootDir, HConstants.HREGION_LOGDIR_NAME);
     Path oldLogDir = new Path(walRootDir, HConstants.HREGION_OLDLOGDIR_NAME);
@@ -280,19 +288,14 @@ public final class BackupUtils {
     if (tables == null) {
       return null;
     }
-    String[] tableArray = tables.split(BackupRestoreConstants.TABLENAME_DELIMITER_IN_COMMAND);
-
-    TableName[] ret = new TableName[tableArray.length];
-    for (int i = 0; i < tableArray.length; i++) {
-      ret[i] = TableName.valueOf(tableArray[i]);
-    }
-    return ret;
+    return Splitter.on(BackupRestoreConstants.TABLENAME_DELIMITER_IN_COMMAND).splitToStream(tables)
+      .map(TableName::valueOf).toArray(TableName[]::new);
   }
 
   /**
    * Check whether the backup path exist
    * @param backupStr backup
-   * @param conf configuration
+   * @param conf      configuration
    * @return Yes if path exists
    * @throws IOException exception
    */
@@ -313,7 +316,7 @@ public final class BackupUtils {
   /**
    * Check target path first, confirm it doesn't exist before backup
    * @param backupRootPath backup destination path
-   * @param conf configuration
+   * @param conf           configuration
    * @throws IOException exception
    */
   public static void checkTargetDir(String backupRootPath, Configuration conf) throws IOException {
@@ -325,8 +328,7 @@ public final class BackupUtils {
       String newMsg = null;
       if (expMsg.contains("No FileSystem for scheme")) {
         newMsg =
-            "Unsupported filesystem scheme found in the backup target url. Error Message: "
-                + expMsg;
+          "Unsupported filesystem scheme found in the backup target url. Error Message: " + expMsg;
         LOG.error(newMsg);
         throw new IOException(newMsg);
       } else {
@@ -363,11 +365,16 @@ public final class BackupUtils {
    * @return host name
    */
   public static String parseHostFromOldLog(Path p) {
+    // Skip master wals
+    if (p.getName().endsWith(MasterRegionFactory.ARCHIVED_WAL_SUFFIX)) {
+      return null;
+    }
     try {
-      String n = p.getName();
-      int idx = n.lastIndexOf(LOGNAME_SEPARATOR);
-      String s = URLDecoder.decode(n.substring(0, idx), "UTF8");
-      return ServerName.valueOf(s).getAddress().toString();
+      String urlDecodedName = URLDecoder.decode(p.getName(), "UTF8");
+      Iterable<String> nameSplitsOnComma = Splitter.on(",").split(urlDecodedName);
+      String host = Iterables.get(nameSplitsOnComma, 0);
+      String port = Iterables.get(nameSplitsOnComma, 1);
+      return host + ":" + port;
     } catch (Exception e) {
       LOG.warn("Skip log file (can't parse): {}", p);
       return null;
@@ -390,7 +397,7 @@ public final class BackupUtils {
   }
 
   public static List<String> getFiles(FileSystem fs, Path rootDir, List<String> files,
-      PathFilter filter) throws IOException {
+    PathFilter filter) throws IOException {
     RemoteIterator<LocatedFileStatus> it = fs.listFiles(rootDir, true);
 
     while (it.hasNext()) {
@@ -414,7 +421,7 @@ public final class BackupUtils {
   /**
    * Clean up directories which are generated when DistCp copying hlogs
    * @param backupInfo backup info
-   * @param conf configuration
+   * @param conf       configuration
    * @throws IOException exception
    */
   private static void cleanupHLogDir(BackupInfo backupInfo, Configuration conf) throws IOException {
@@ -449,9 +456,8 @@ public final class BackupUtils {
       FileSystem outputFs = FileSystem.get(new Path(backupInfo.getBackupRootDir()).toUri(), conf);
 
       for (TableName table : backupInfo.getTables()) {
-        Path targetDirPath =
-            new Path(getTableBackupDir(backupInfo.getBackupRootDir(), backupInfo.getBackupId(),
-              table));
+        Path targetDirPath = new Path(
+          getTableBackupDir(backupInfo.getBackupRootDir(), backupInfo.getBackupId(), table));
         if (outputFs.delete(targetDirPath, true)) {
           LOG.info("Cleaning up backup data at " + targetDirPath.toString() + " done.");
         } else {
@@ -468,7 +474,7 @@ public final class BackupUtils {
       outputFs.delete(new Path(targetDir, backupInfo.getBackupId()), true);
     } catch (IOException e1) {
       LOG.error("Cleaning up backup data of " + backupInfo.getBackupId() + " at "
-          + backupInfo.getBackupRootDir() + " failed due to " + e1.getMessage() + ".");
+        + backupInfo.getBackupRootDir() + " failed due to " + e1.getMessage() + ".");
     }
   }
 
@@ -477,46 +483,28 @@ public final class BackupUtils {
    * which is also where the backup manifest file is. return value look like:
    * "hdfs://backup.hbase.org:9000/user/biadmin/backup1/backup_1396650096738/default/t1_dn/"
    * @param backupRootDir backup root directory
-   * @param backupId backup id
-   * @param tableName table name
+   * @param backupId      backup id
+   * @param tableName     table name
    * @return backupPath String for the particular table
    */
   public static String getTableBackupDir(String backupRootDir, String backupId,
-          TableName tableName) {
+    TableName tableName) {
     return backupRootDir + Path.SEPARATOR + backupId + Path.SEPARATOR
-        + tableName.getNamespaceAsString() + Path.SEPARATOR + tableName.getQualifierAsString()
-        + Path.SEPARATOR;
-  }
-
-  /**
-   * Sort history list by start time in descending order.
-   * @param historyList history list
-   * @return sorted list of BackupCompleteData
-   */
-  public static ArrayList<BackupInfo> sortHistoryListDesc(ArrayList<BackupInfo> historyList) {
-    ArrayList<BackupInfo> list = new ArrayList<>();
-    TreeMap<String, BackupInfo> map = new TreeMap<>();
-    for (BackupInfo h : historyList) {
-      map.put(Long.toString(h.getStartTs()), h);
-    }
-    Iterator<String> i = map.descendingKeySet().iterator();
-    while (i.hasNext()) {
-      list.add(map.get(i.next()));
-    }
-    return list;
+      + tableName.getNamespaceAsString() + Path.SEPARATOR + tableName.getQualifierAsString()
+      + Path.SEPARATOR;
   }
 
   /**
    * Calls fs.listStatus() and treats FileNotFoundException as non-fatal This accommodates
    * differences between hadoop versions, where hadoop 1 does not throw a FileNotFoundException, and
    * return an empty FileStatus[] while Hadoop 2 will throw FileNotFoundException.
-   * @param fs file system
-   * @param dir directory
+   * @param fs     file system
+   * @param dir    directory
    * @param filter path filter
    * @return null if dir is empty or doesn't exist, otherwise FileStatus array
    */
   public static FileStatus[] listStatus(final FileSystem fs, final Path dir,
-          final PathFilter filter) throws IOException {
+    final PathFilter filter) throws IOException {
     FileStatus[] status = null;
     try {
       status = filter == null ? fs.listStatus(dir) : fs.listStatus(dir, filter);
@@ -535,8 +523,8 @@ public final class BackupUtils {
   }
 
   /**
-   * Return the 'path' component of a Path. In Hadoop, Path is a URI. This method returns the
-   * 'path' component of a Path's URI: e.g. If a Path is
+   * Return the 'path' component of a Path. In Hadoop, Path is a URI. This method returns the 'path'
+   * component of a Path's URI: e.g. If a Path is
    * <code>hdfs://example.org:9000/hbase_trunk/TestTable/compaction.dir</code>, this method returns
    * <code>/hbase_trunk/TestTable/compaction.dir</code>. This method is useful if you want to print
    * out a Path without qualifying Filesystem instance.
@@ -551,20 +539,29 @@ public final class BackupUtils {
    * Given the backup root dir and the backup id, return the log file location for an incremental
    * backup.
    * @param backupRootDir backup root directory
-   * @param backupId backup id
+   * @param backupId      backup id
    * @return logBackupDir: ".../user/biadmin/backup1/WALs/backup_1396650096738"
    */
   public static String getLogBackupDir(String backupRootDir, String backupId) {
     return backupRootDir + Path.SEPARATOR + backupId + Path.SEPARATOR
-        + HConstants.HREGION_LOGDIR_NAME;
+      + HConstants.HREGION_LOGDIR_NAME;
   }
 
+  /**
+   * Loads all backup history as stored in files on the given backup root path.
+   * @return all backup history, from newest (most recent) to oldest (least recent)
+   */
   private static List<BackupInfo> getHistory(Configuration conf, Path backupRootPath)
-      throws IOException {
+    throws IOException {
     // Get all (n) history from backup root destination
 
     FileSystem fs = FileSystem.get(backupRootPath.toUri(), conf);
-    RemoteIterator<LocatedFileStatus> it = fs.listLocatedStatus(backupRootPath);
+    RemoteIterator<LocatedFileStatus> it;
+    try {
+      it = fs.listLocatedStatus(backupRootPath);
+    } catch (FileNotFoundException e) {
+      return Collections.emptyList();
+    }
 
     List<BackupInfo> infos = new ArrayList<>();
     while (it.hasNext()) {
@@ -583,51 +580,27 @@ public final class BackupUtils {
       }
     }
     // Sort
-    Collections.sort(infos, new Comparator<BackupInfo>() {
-      @Override
-      public int compare(BackupInfo o1, BackupInfo o2) {
-        long ts1 = getTimestamp(o1.getBackupId());
-        long ts2 = getTimestamp(o2.getBackupId());
-
-        if (ts1 == ts2) {
-          return 0;
-        }
-
-        return ts1 < ts2 ? 1 : -1;
-      }
-
-      private long getTimestamp(String backupId) {
-        String[] split = backupId.split("_");
-        return Long.parseLong(split[1]);
-      }
-    });
+    infos.sort(Comparator.<BackupInfo> naturalOrder().reversed());
     return infos;
   }
 
+  /**
+   * Loads all backup history as stored in files on the given backup root path, and returns the
+   * first n entries matching all given filters.
+   * @return (subset of) backup history, from newest (most recent) to oldest (least recent)
+   */
   public static List<BackupInfo> getHistory(Configuration conf, int n, Path backupRootPath,
-      BackupInfo.Filter... filters) throws IOException {
+    BackupInfo.Filter... filters) throws IOException {
     List<BackupInfo> infos = getHistory(conf, backupRootPath);
-    List<BackupInfo> ret = new ArrayList<>();
-    for (BackupInfo info : infos) {
-      if (ret.size() == n) {
-        break;
-      }
-      boolean passed = true;
-      for (int i = 0; i < filters.length; i++) {
-        if (!filters[i].apply(info)) {
-          passed = false;
-          break;
-        }
-      }
-      if (passed) {
-        ret.add(info);
-      }
-    }
-    return ret;
+
+    Predicate<BackupInfo> combinedPredicate = Stream.of(filters)
+      .map(filter -> (Predicate<BackupInfo>) filter).reduce(Predicate::and).orElse(x -> true);
+
+    return infos.stream().filter(combinedPredicate).limit(n).toList();
   }
 
   public static BackupInfo loadBackupInfo(Path backupRootPath, String backupId, FileSystem fs)
-      throws IOException {
+    throws IOException {
     Path backupPath = new Path(backupRootPath, backupId);
 
     RemoteIterator<LocatedFileStatus> it = fs.listFiles(backupPath, true);
@@ -646,31 +619,37 @@ public final class BackupUtils {
   /**
    * Create restore request.
    * @param backupRootDir backup root dir
-   * @param backupId backup id
-   * @param check check only
-   * @param fromTables table list from
-   * @param toTables table list to
-   * @param isOverwrite overwrite data
+   * @param backupId      backup id
+   * @param check         check only
+   * @param fromTables    table list from
+   * @param toTables      table list to
+   * @param isOverwrite   overwrite data
    * @return request obkect
    */
   public static RestoreRequest createRestoreRequest(String backupRootDir, String backupId,
-      boolean check, TableName[] fromTables, TableName[] toTables, boolean isOverwrite) {
+    boolean check, TableName[] fromTables, TableName[] toTables, boolean isOverwrite) {
+    return createRestoreRequest(backupRootDir, backupId, check, fromTables, toTables, isOverwrite,
+      false);
+  }
+
+  public static RestoreRequest createRestoreRequest(String backupRootDir, String backupId,
+    boolean check, TableName[] fromTables, TableName[] toTables, boolean isOverwrite,
+    boolean isKeepOriginalSplits) {
     RestoreRequest.Builder builder = new RestoreRequest.Builder();
-    RestoreRequest request =
-        builder.withBackupRootDir(backupRootDir).withBackupId(backupId).withCheck(check)
-            .withFromTables(fromTables).withToTables(toTables).withOvewrite(isOverwrite).build();
+    RestoreRequest request = builder.withBackupRootDir(backupRootDir).withBackupId(backupId)
+      .withCheck(check).withFromTables(fromTables).withToTables(toTables).withOverwrite(isOverwrite)
+      .withKeepOriginalSplits(isKeepOriginalSplits).build();
     return request;
   }
 
-  public static boolean validate(HashMap<TableName, BackupManifest> backupManifestMap,
-      Configuration conf) throws IOException {
+  public static boolean validate(List<TableName> tables, BackupManifest backupManifest,
+    Configuration conf) throws IOException {
     boolean isValid = true;
 
-    for (Entry<TableName, BackupManifest> manifestEntry : backupManifestMap.entrySet()) {
-      TableName table = manifestEntry.getKey();
+    for (TableName table : tables) {
       TreeSet<BackupImage> imageSet = new TreeSet<>();
 
-      ArrayList<BackupImage> depList = manifestEntry.getValue().getDependentListByTable(table);
+      ArrayList<BackupImage> depList = backupManifest.getDependentListByTable(table);
       if (depList != null && !depList.isEmpty()) {
         imageSet.addAll(depList);
       }
@@ -678,7 +657,7 @@ public final class BackupUtils {
       LOG.info("Dependent image(s) from old to new:");
       for (BackupImage image : imageSet) {
         String imageDir =
-            HBackupFileSystem.getTableBackupDir(image.getRootDir(), image.getBackupId(), table);
+          HBackupFileSystem.getTableBackupDir(image.getRootDir(), image.getBackupId(), table);
         if (!BackupUtils.checkPathExist(imageDir, conf)) {
           LOG.error("ERROR: backup image does not exist: " + imageDir);
           isValid = false;
@@ -690,22 +669,38 @@ public final class BackupUtils {
     return isValid;
   }
 
-  public static Path getBulkOutputDir(String tableName, Configuration conf, boolean deleteOnExit)
-      throws IOException {
-    FileSystem fs = FileSystem.get(conf);
-    String tmp = conf.get(HConstants.TEMPORARY_FS_DIRECTORY_KEY,
-            fs.getHomeDirectory() + "/hbase-staging");
-    Path path =
-        new Path(tmp + Path.SEPARATOR + "bulk_output-" + tableName + "-"
-            + EnvironmentEdgeManager.currentTime());
+  public static Path getBulkOutputDir(Path restoreRootDir, String tableName, Configuration conf,
+    boolean deleteOnExit) throws IOException {
+    FileSystem fs = restoreRootDir.getFileSystem(conf);
+    Path path = new Path(restoreRootDir,
+      "bulk_output-" + tableName + "-" + EnvironmentEdgeManager.currentTime());
     if (deleteOnExit) {
       fs.deleteOnExit(path);
     }
     return path;
   }
 
-  public static Path getBulkOutputDir(String tableName, Configuration conf) throws IOException {
-    return getBulkOutputDir(tableName, conf, true);
+  public static Path getBulkOutputDir(Path restoreRootDir, String tableName, Configuration conf)
+    throws IOException {
+    return getBulkOutputDir(restoreRootDir, tableName, conf, true);
+  }
+
+  public static Path getBulkOutputDir(String tableName, Configuration conf, boolean deleteOnExit)
+    throws IOException {
+    FileSystem fs = FileSystem.get(conf);
+    return getBulkOutputDir(getTmpRestoreOutputDir(fs, conf), tableName, conf, deleteOnExit);
+  }
+
+  /**
+   * Build temporary output path
+   * @param fs   filesystem for default output dir
+   * @param conf configuration
+   * @return output path
+   */
+  public static Path getTmpRestoreOutputDir(FileSystem fs, Configuration conf) {
+    String tmp =
+      conf.get(HConstants.TEMPORARY_FS_DIRECTORY_KEY, fs.getHomeDirectory() + "/hbase-staging");
+    return new Path(tmp);
   }
 
   public static String getFileNameCompatibleString(TableName table) {
@@ -738,7 +733,7 @@ public final class BackupUtils {
   public static String findMostRecentBackupId(String[] backupIds) {
     long recentTimestamp = Long.MIN_VALUE;
     for (String backupId : backupIds) {
-      long ts = Long.parseLong(backupId.split("_")[1]);
+      long ts = Long.parseLong(Iterators.get(Splitter.on('_').split(backupId).iterator(), 1));
       if (ts > recentTimestamp) {
         recentTimestamp = ts;
       }
@@ -746,4 +741,52 @@ public final class BackupUtils {
     return BackupRestoreConstants.BACKUPID_PREFIX + recentTimestamp;
   }
 
+  /**
+   * roll WAL writer for all region servers and record the newest log roll result
+   */
+  public static void logRoll(Connection conn, String backupRootDir, Configuration conf)
+    throws IOException {
+    boolean legacy = conf.getBoolean("hbase.backup.logroll.legacy.used", false);
+    if (legacy) {
+      logRollV1(conn, backupRootDir);
+    } else {
+      logRollV2(conn, backupRootDir);
+    }
+  }
+
+  private static void logRollV1(Connection conn, String backupRootDir) throws IOException {
+    try (Admin admin = conn.getAdmin()) {
+      admin.execProcedure(LogRollMasterProcedureManager.ROLLLOG_PROCEDURE_SIGNATURE,
+        LogRollMasterProcedureManager.ROLLLOG_PROCEDURE_NAME,
+        ImmutableMap.of("backupRoot", backupRootDir));
+    }
+  }
+
+  private static void logRollV2(Connection conn, String backupRootDir) throws IOException {
+    BackupSystemTable backupSystemTable = new BackupSystemTable(conn);
+    HashMap<String, Long> lastLogRollResult =
+      backupSystemTable.readRegionServerLastLogRollResult(backupRootDir);
+    try (Admin admin = conn.getAdmin()) {
+      Map<ServerName, Long> newLogRollResult = admin.rollAllWALWriters();
+
+      for (Map.Entry<ServerName, Long> entry : newLogRollResult.entrySet()) {
+        ServerName serverName = entry.getKey();
+        long newHighestWALFilenum = entry.getValue();
+
+        String address = serverName.getAddress().toString();
+        Long lastHighestWALFilenum = lastLogRollResult.get(address);
+        if (lastHighestWALFilenum != null && lastHighestWALFilenum > newHighestWALFilenum) {
+          LOG.warn("Won't update last roll log result for server {}: current = {}, new = {}",
+            serverName, lastHighestWALFilenum, newHighestWALFilenum);
+        } else {
+          backupSystemTable.writeRegionServerLastLogRollResult(address, newHighestWALFilenum,
+            backupRootDir);
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("updated last roll log result for {} from {} to {}", serverName,
+              lastHighestWALFilenum, newHighestWALFilenum);
+          }
+        }
+      }
+    }
+  }
 }

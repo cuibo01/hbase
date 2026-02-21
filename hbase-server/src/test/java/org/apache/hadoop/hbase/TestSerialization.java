@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -46,6 +46,7 @@ import org.apache.hadoop.hbase.filter.RowFilter;
 import org.apache.hadoop.hbase.io.TimeRange;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
+import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.io.DataInputBuffer;
@@ -102,8 +103,10 @@ public class TestSerialization {
 
     long l = 0;
     try {
-      l = KeyValue.oswrite(kv_0, dos, false);
-      l += KeyValue.oswrite(kv_1, dos, false);
+      ByteBufferUtils.putInt(dos, kv_0.getSerializedSize(false));
+      l = (long) kv_0.write(dos, false) + Bytes.SIZEOF_INT;
+      ByteBufferUtils.putInt(dos, kv_1.getSerializedSize(false));
+      l += (long) kv_1.write(dos, false) + Bytes.SIZEOF_INT;
       assertEquals(100L, l);
     } catch (IOException e) {
       fail("Unexpected IOException" + e.getMessage());
@@ -150,7 +153,6 @@ public class TestSerialization {
 
   /**
    * Test RegionInfo serialization
-   * @throws Exception
    */
   @Test
   public void testRegionInfo() throws Exception {
@@ -301,7 +303,7 @@ public class TestSerialization {
 
   /**
    * Create a table of name <code>name</code> with {@link #COLUMNS} for families.
-   * @param name Name to give table.
+   * @param name     Name to give table.
    * @param versions How many versions to allow per column.
    * @return Column descriptor.
    */

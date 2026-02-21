@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,28 +17,24 @@
  */
 package org.apache.hadoop.hbase.rest.model;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Iterator;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.builder.ToStringBuilder;
 import org.apache.commons.lang3.builder.ToStringStyle;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.RestTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 
-@Category({RestTests.class, SmallTests.class})
+@Tag(RestTests.TAG)
+@Tag(SmallTests.TAG)
 public class TestRowModel extends TestModelBase<RowModel> {
-
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestRowModel.class);
 
   private static final byte[] ROW1 = Bytes.toBytes("testrow1");
   private static final byte[] COLUMN1 = Bytes.toBytes("testcolumn1");
@@ -48,12 +44,12 @@ public class TestRowModel extends TestModelBase<RowModel> {
   public TestRowModel() throws Exception {
     super(RowModel.class);
     AS_XML =
-      "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Row key=\"dGVzdHJvdzE=\">" +
-      "<Cell column=\"dGVzdGNvbHVtbjE=\" timestamp=\"1245219839331\">dGVzdHZhbHVlMQ==</Cell></Row>";
+      "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" + "<Row key=\"dGVzdHJvdzE=\">"
+        + "<Cell column=\"dGVzdGNvbHVtbjE=\" timestamp=\"1245219839331\">dGVzdHZhbHVlMQ==</Cell>"
+        + "</Row>";
 
-    AS_JSON =
-      "{\"key\":\"dGVzdHJvdzE=\",\"Cell\":[{\"column\":\"dGVzdGNvbHVtbjE=\"," +
-      "\"timestamp\":1245219839331,\"$\":\"dGVzdHZhbHVlMQ==\"}]}";
+    AS_JSON = "{\"key\":\"dGVzdHJvdzE=\",\"Cell\":[{\"column\":\"dGVzdGNvbHVtbjE=\","
+      + "\"timestamp\":1245219839331,\"$\":\"dGVzdHZhbHVlMQ==\"}]}";
   }
 
   @Override
@@ -78,7 +74,7 @@ public class TestRowModel extends TestModelBase<RowModel> {
 
   @Override
   public void testFromPB() throws Exception {
-    //do nothing row model has no PB
+    // do nothing row model has no PB
   }
 
   @Test
@@ -89,17 +85,13 @@ public class TestRowModel extends TestModelBase<RowModel> {
     assertEquals(rowModel1, rowModel2);
 
     RowModel rowModel3 = new RowModel();
-    assertFalse(rowModel1.equals(rowModel3));
+    assertNotEquals(rowModel1, rowModel3);
   }
 
   @Test
   public void testToString() throws Exception {
     String expectedRowKey = ToStringBuilder.reflectionToString(ROW1, ToStringStyle.SIMPLE_STYLE);
-
     RowModel rowModel = buildTestModel();
-    System.out.println(rowModel);
-
     assertTrue(StringUtils.contains(rowModel.toString(), expectedRowKey));
   }
 }
-

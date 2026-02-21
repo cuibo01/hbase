@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,27 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver.querymatcher;
 
 import java.io.IOException;
-
-import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.KeyValueUtil;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.regionserver.querymatcher.ScanQueryMatcher.MatchCode;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Keeps track of the columns for a scan if they are not explicitly specified
  */
 @InterfaceAudience.Private
 public class ScanWildcardColumnTracker implements ColumnTracker {
-  private Cell columnCell = null;
+  private ExtendedCell columnCell = null;
   private int currentCount = 0;
   private final int maxVersions;
   private final int minVersions;
@@ -50,15 +48,16 @@ public class ScanWildcardColumnTracker implements ColumnTracker {
   private long oldestStamp;
 
   private final CellComparator comparator;
+
   /**
    * Return maxVersions of every row.
-   * @param minVersion Minimum number of versions to keep
-   * @param maxVersion Maximum number of versions to return
+   * @param minVersion        Minimum number of versions to keep
+   * @param maxVersion        Maximum number of versions to return
    * @param oldestUnexpiredTS oldest timestamp that has not expired according to the TTL.
-   * @param comparator used to compare the qualifier of cell
+   * @param comparator        used to compare the qualifier of cell
    */
-  public ScanWildcardColumnTracker(int minVersion, int maxVersion,
-      long oldestUnexpiredTS, CellComparator comparator) {
+  public ScanWildcardColumnTracker(int minVersion, int maxVersion, long oldestUnexpiredTS,
+    CellComparator comparator) {
     this.maxVersions = maxVersion;
     this.minVersions = minVersion;
     this.oldestStamp = oldestUnexpiredTS;
@@ -69,7 +68,7 @@ public class ScanWildcardColumnTracker implements ColumnTracker {
    * {@inheritDoc} This receives puts *and* deletes.
    */
   @Override
-  public MatchCode checkColumn(Cell cell, byte type) throws IOException {
+  public MatchCode checkColumn(ExtendedCell cell, byte type) throws IOException {
     return MatchCode.INCLUDE;
   }
 
@@ -78,8 +77,8 @@ public class ScanWildcardColumnTracker implements ColumnTracker {
    * take the version of the previous put (so eventually all but the last can be reclaimed).
    */
   @Override
-  public ScanQueryMatcher.MatchCode checkVersions(Cell cell, long timestamp, byte type,
-      boolean ignoreCount) throws IOException {
+  public ScanQueryMatcher.MatchCode checkVersions(ExtendedCell cell, long timestamp, byte type,
+    boolean ignoreCount) throws IOException {
     if (columnCell == null) {
       // first iteration.
       resetCell(cell);
@@ -119,11 +118,10 @@ public class ScanWildcardColumnTracker implements ColumnTracker {
     // was incorrectly stored into the store for this one. Throw an exception,
     // because this might lead to data corruption.
     throw new IOException("ScanWildcardColumnTracker.checkColumn ran into a column actually "
-        + "smaller than the previous column: "
-        + Bytes.toStringBinary(CellUtil.cloneQualifier(cell)));
+      + "smaller than the previous column: " + Bytes.toStringBinary(CellUtil.cloneQualifier(cell)));
   }
 
-  private void resetCell(Cell columnCell) {
+  private void resetCell(ExtendedCell columnCell) {
     this.columnCell = columnCell;
     currentCount = 0;
   }
@@ -187,7 +185,6 @@ public class ScanWildcardColumnTracker implements ColumnTracker {
 
   /**
    * We can never know a-priori if we are done, so always return false.
-   * @return false
    */
   @Override
   public boolean done() {
@@ -195,7 +192,7 @@ public class ScanWildcardColumnTracker implements ColumnTracker {
   }
 
   @Override
-  public MatchCode getNextRowOrNextColumn(Cell cell) {
+  public MatchCode getNextRowOrNextColumn(ExtendedCell cell) {
     return MatchCode.SEEK_NEXT_COL;
   }
 

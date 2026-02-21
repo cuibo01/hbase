@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,10 +19,12 @@ package org.apache.hadoop.hbase.replication;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.net.URI;
+import java.util.Collection;
 import java.util.List;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
@@ -36,19 +38,15 @@ import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
-@Category({ReplicationTests.class, SmallTests.class})
+@Category({ ReplicationTests.class, SmallTests.class })
 public class TestHBaseReplicationEndpoint {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
     HBaseClassTestRule.forClass(TestHBaseReplicationEndpoint.class);
-
-  private static final Logger LOG = LoggerFactory.getLogger(TestHBaseReplicationEndpoint.class);
 
   private static final HBaseTestingUtil UTIL = new HBaseTestingUtil();
 
@@ -56,15 +54,15 @@ public class TestHBaseReplicationEndpoint {
 
   @Before
   public void setUp() throws Exception {
-    try {
-      ReplicationEndpoint.Context context =
-        new ReplicationEndpoint.Context(null, UTIL.getConfiguration(), UTIL.getConfiguration(),
-          null, null, null, null, null, null, null);
-      endpoint = new DummyHBaseReplicationEndpoint();
-      endpoint.init(context);
-    } catch (Exception e) {
-      LOG.info("Failed", e);
-    }
+    ReplicationPeer replicationPeer = mock(ReplicationPeer.class);
+    ReplicationPeerConfig peerConfig = mock(ReplicationPeerConfig.class);
+    when(replicationPeer.getPeerConfig()).thenReturn(peerConfig);
+    when(peerConfig.getClusterKey()).thenReturn("hbase+zk://server1:2181/hbase");
+    ReplicationEndpoint.Context context =
+      new ReplicationEndpoint.Context(null, UTIL.getConfiguration(), UTIL.getConfiguration(), null,
+        null, null, replicationPeer, null, null, null);
+    endpoint = new DummyHBaseReplicationEndpoint();
+    endpoint.init(context);
   }
 
   @Test
@@ -82,8 +80,8 @@ public class TestHBaseReplicationEndpoint {
 
   @Test
   public void testChooseSinksLessThanRatioAvailable() {
-    List<ServerName> serverNames = Lists.newArrayList(mock(ServerName.class),
-      mock(ServerName.class));
+    List<ServerName> serverNames =
+      Lists.newArrayList(mock(ServerName.class), mock(ServerName.class));
     ((DummyHBaseReplicationEndpoint) endpoint).setRegionServers(serverNames);
     endpoint.chooseSinks();
     assertEquals(1, endpoint.getNumSinks());
@@ -106,8 +104,8 @@ public class TestHBaseReplicationEndpoint {
   }
 
   /**
-   * Once a SinkPeer has been reported as bad more than BAD_SINK_THRESHOLD times, it should not
-   * be replicated to anymore.
+   * Once a SinkPeer has been reported as bad more than BAD_SINK_THRESHOLD times, it should not be
+   * replicated to anymore.
    */
   @Test
   public void testReportBadSinkPastThreshold() {
@@ -168,6 +166,9 @@ public class TestHBaseReplicationEndpoint {
     ServerName serverNameA = endpoint.getSinkServers().get(0);
     ServerName serverNameB = endpoint.getSinkServers().get(1);
 
+    serverNames.remove(serverNameA);
+    serverNames.remove(serverNameB);
+
     SinkPeer sinkPeerA = new SinkPeer(serverNameA, mock(AsyncRegionServerAdmin.class));
     SinkPeer sinkPeerB = new SinkPeer(serverNameB, mock(AsyncRegionServerAdmin.class));
 
@@ -193,7 +194,7 @@ public class TestHBaseReplicationEndpoint {
     }
 
     @Override
-    public List<ServerName> fetchSlavesAddresses() {
+    protected Collection<ServerName> fetchPeerAddresses() {
       return regionServers;
     }
 
@@ -203,7 +204,8 @@ public class TestHBaseReplicationEndpoint {
     }
 
     @Override
-    public AsyncClusterConnection createConnection(Configuration conf) throws IOException {
+    public AsyncClusterConnection createConnection(URI clusterURI, Configuration conf)
+      throws IOException {
       return null;
     }
   }

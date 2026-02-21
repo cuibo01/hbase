@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,29 +18,23 @@
 package org.apache.hadoop.hbase.mapred;
 
 import java.io.IOException;
-
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.mapred.RecordReader;
-
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Iterate over an HBase table data, return (Text, RowResult) pairs
  */
 @InterfaceAudience.Public
-public class TableRecordReader
-implements RecordReader<ImmutableBytesWritable, Result> {
+public class TableRecordReader implements RecordReader<ImmutableBytesWritable, Result> {
 
   private TableRecordReaderImpl recordReaderImpl = new TableRecordReaderImpl();
 
   /**
    * Restart from survivable exceptions by creating a new scanner.
-   *
-   * @param firstRow
-   * @throws IOException
    */
   public void restart(byte[] firstRow) throws IOException {
     this.recordReaderImpl.restart(firstRow);
@@ -49,8 +42,6 @@ implements RecordReader<ImmutableBytesWritable, Result> {
 
   /**
    * Build the scanner. Not done in constructor to allow for extension.
-   *
-   * @throws IOException
    */
   public void init() throws IOException {
     this.recordReaderImpl.restart(this.recordReaderImpl.getStartRow());
@@ -66,22 +57,21 @@ implements RecordReader<ImmutableBytesWritable, Result> {
   /**
    * @param inputColumns the columns to be placed in {@link Result}.
    */
-  public void setInputColumns(final byte [][] inputColumns) {
+  public void setInputColumns(final byte[][] inputColumns) {
     this.recordReaderImpl.setInputColumns(inputColumns);
   }
 
   /**
    * @param startRow the first row in the split
    */
-  public void setStartRow(final byte [] startRow) {
+  public void setStartRow(final byte[] startRow) {
     this.recordReaderImpl.setStartRow(startRow);
   }
 
   /**
-   *
    * @param endRow the last row in the split
    */
-  public void setEndRow(final byte [] endRow) {
+  public void setEndRow(final byte[] endRow) {
     this.recordReaderImpl.setEndRow(endRow);
   }
 
@@ -92,28 +82,28 @@ implements RecordReader<ImmutableBytesWritable, Result> {
     this.recordReaderImpl.setRowFilter(rowFilter);
   }
 
+  @Override
   public void close() {
     this.recordReaderImpl.close();
   }
 
   /**
-   * @return ImmutableBytesWritable
-   *
    * @see org.apache.hadoop.mapred.RecordReader#createKey()
    */
+  @Override
   public ImmutableBytesWritable createKey() {
     return this.recordReaderImpl.createKey();
   }
 
   /**
-   * @return RowResult
-   *
    * @see org.apache.hadoop.mapred.RecordReader#createValue()
    */
+  @Override
   public Result createValue() {
     return this.recordReaderImpl.createValue();
   }
 
+  @Override
   public long getPos() {
 
     // This should be the ordinal tuple in the range;
@@ -121,19 +111,19 @@ implements RecordReader<ImmutableBytesWritable, Result> {
     return this.recordReaderImpl.getPos();
   }
 
+  @Override
   public float getProgress() {
     // Depends on the total number of tuples and getPos
     return this.recordReaderImpl.getPos();
   }
 
   /**
-   * @param key HStoreKey as input key.
+   * @param key   HStoreKey as input key.
    * @param value MapWritable as input value
    * @return true if there was more data
-   * @throws IOException
    */
-  public boolean next(ImmutableBytesWritable key, Result value)
-  throws IOException {
+  @Override
+  public boolean next(ImmutableBytesWritable key, Result value) throws IOException {
     return this.recordReaderImpl.next(key, value);
   }
 }

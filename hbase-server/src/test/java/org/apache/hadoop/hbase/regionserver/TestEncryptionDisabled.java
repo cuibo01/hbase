@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,7 +26,7 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.io.crypto.Encryption;
-import org.apache.hadoop.hbase.io.crypto.KeyProviderForTesting;
+import org.apache.hadoop.hbase.io.crypto.MockAesKeyProvider;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -39,12 +39,12 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.ExpectedException;
 
-@Category({MasterTests.class, MediumTests.class})
+@Category({ MasterTests.class, MediumTests.class })
 public class TestEncryptionDisabled {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestEncryptionDisabled.class);
+    HBaseClassTestRule.forClass(TestEncryptionDisabled.class);
 
   @Rule
   public ExpectedException exception = ExpectedException.none();
@@ -53,11 +53,10 @@ public class TestEncryptionDisabled {
   private static Configuration conf = TEST_UTIL.getConfiguration();
   private static TableDescriptorBuilder tdb;
 
-
   @BeforeClass
   public static void setUp() throws Exception {
     conf.setInt("hfile.format.version", 3);
-    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
+    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
     conf.set(HConstants.CRYPTO_MASTERKEY_NAME_CONF_KEY, "hbase");
     conf.set(Encryption.CRYPTO_ENABLED_CONF_KEY, "false");
     conf.set(TableDescriptorChecker.TABLE_SANITY_CHECKS, "true");
@@ -75,8 +74,8 @@ public class TestEncryptionDisabled {
   public void testEncryptedTableShouldNotBeCreatedWhenEncryptionDisabled() throws Exception {
     // Create the table schema
     // Specify an encryption algorithm without a key (normally HBase would generate a random key)
-    tdb = TableDescriptorBuilder.newBuilder(TableName.valueOf("default",
-      "TestEncryptionDisabledFail"));
+    tdb =
+      TableDescriptorBuilder.newBuilder(TableName.valueOf("default", "TestEncryptionDisabledFail"));
     ColumnFamilyDescriptorBuilder columnFamilyDescriptorBuilder =
       ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes("cf"));
     String algorithm = conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
@@ -92,8 +91,8 @@ public class TestEncryptionDisabled {
   @Test
   public void testNonEncryptedTableShouldBeCreatedWhenEncryptionDisabled() throws Exception {
     // Create the table schema
-    tdb = TableDescriptorBuilder.newBuilder(TableName.valueOf("default",
-      "TestEncryptionDisabledSuccess"));
+    tdb = TableDescriptorBuilder
+      .newBuilder(TableName.valueOf("default", "TestEncryptionDisabledSuccess"));
     ColumnFamilyDescriptorBuilder columnFamilyDescriptorBuilder =
       ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes("cf"));
     tdb.setColumnFamily(columnFamilyDescriptorBuilder.build());

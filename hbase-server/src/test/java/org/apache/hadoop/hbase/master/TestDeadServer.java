@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,14 +18,13 @@
 package org.apache.hadoop.hbase.master;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
-import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.procedure.ServerCrashProcedure;
@@ -43,12 +42,12 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({MasterTests.class, MediumTests.class})
+@Category({ MasterTests.class, MediumTests.class })
 public class TestDeadServer {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestDeadServer.class);
+    HBaseClassTestRule.forClass(TestDeadServer.class);
 
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
 
@@ -67,7 +66,8 @@ public class TestDeadServer {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  @Test public void testIsDead() {
+  @Test
+  public void testIsDead() {
     DeadServer ds = new DeadServer();
     ds.putIfAbsent(hostname123);
 
@@ -75,8 +75,8 @@ public class TestDeadServer {
 
     ds.putIfAbsent(hostname12345);
 
-    // Already dead =       127.0.0.1,9090,112321
-    // Coming back alive =  127.0.0.1,9090,223341
+    // Already dead = 127.0.0.1,9090,112321
+    // Coming back alive = 127.0.0.1,9090,223341
 
     final ServerName deadServer = ServerName.valueOf("127.0.0.1", 9090, 112321L);
     assertFalse(ds.cleanPreviousInstance(deadServer));
@@ -84,10 +84,9 @@ public class TestDeadServer {
     assertTrue(ds.isDeadServer(deadServer));
     Set<ServerName> deadServerNames = ds.copyServerNames();
     for (ServerName eachDeadServer : deadServerNames) {
-      Assert.assertNotNull(ds.getTimeOfDeath(eachDeadServer));
+      assertNotEquals(0, ds.getDeathTimestamp(eachDeadServer));
     }
-    final ServerName deadServerHostComingAlive =
-        ServerName.valueOf("127.0.0.1", 9090, 223341L);
+    final ServerName deadServerHostComingAlive = ServerName.valueOf("127.0.0.1", 9090, 223341L);
     assertTrue(ds.cleanPreviousInstance(deadServerHostComingAlive));
     assertFalse(ds.isDeadServer(deadServer));
     assertFalse(ds.cleanPreviousInstance(deadServerHostComingAlive));
@@ -97,8 +96,8 @@ public class TestDeadServer {
   public void testCrashProcedureReplay() throws Exception {
     HMaster master = TEST_UTIL.getHBaseCluster().getMaster();
     final ProcedureExecutor<MasterProcedureEnv> pExecutor = master.getMasterProcedureExecutor();
-    ServerCrashProcedure proc = new ServerCrashProcedure(
-      pExecutor.getEnvironment(), hostname123, false, false);
+    ServerCrashProcedure proc =
+      new ServerCrashProcedure(pExecutor.getEnvironment(), hostname123, false, false);
 
     pExecutor.stop();
     ProcedureTestingUtility.submitAndWait(pExecutor, proc);
@@ -110,7 +109,7 @@ public class TestDeadServer {
   }
 
   @Test
-  public void testSortExtract(){
+  public void testSortExtract() {
     ManualEnvironmentEdge mee = new ManualEnvironmentEdge();
     EnvironmentEdgeManager.injectEdge(mee);
     mee.setValue(1);
@@ -127,16 +126,16 @@ public class TestDeadServer {
     Assert.assertEquals(2, copy.size());
 
     Assert.assertEquals(hostname1234, copy.get(0).getFirst());
-    Assert.assertEquals(new Long(2L), copy.get(0).getSecond());
+    Assert.assertEquals(Long.valueOf(2L), copy.get(0).getSecond());
 
     Assert.assertEquals(hostname12345, copy.get(1).getFirst());
-    Assert.assertEquals(new Long(3L), copy.get(1).getSecond());
+    Assert.assertEquals(Long.valueOf(3L), copy.get(1).getSecond());
 
     EnvironmentEdgeManager.reset();
   }
 
   @Test
-  public void testClean(){
+  public void testClean() {
     DeadServer d = new DeadServer();
     d.putIfAbsent(hostname123);
 
@@ -151,7 +150,7 @@ public class TestDeadServer {
   }
 
   @Test
-  public void testClearDeadServer(){
+  public void testClearDeadServer() {
     DeadServer d = new DeadServer();
     d.putIfAbsent(hostname123);
     d.putIfAbsent(hostname1234);
@@ -169,4 +168,3 @@ public class TestDeadServer {
     Assert.assertTrue(d.isEmpty());
   }
 }
-

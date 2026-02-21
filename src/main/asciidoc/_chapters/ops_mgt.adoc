@@ -432,7 +432,7 @@ The `WALPrettyPrinter` is a tool with configurable options to print the contents
 or a _recovered.edits_ file. You can invoke it via the HBase cli with the 'wal' command.
 
 ----
- $ ./bin/hbase wal hdfs://example.org:8020/hbase/WALs/example.org,60020,1283516293161/10.10.21.10%3A60020.1283973724012
+ $ ./bin/hbase wal hdfs://example.org:9000/hbase/WALs/example.org,60020,1283516293161/10.10.21.10%3A60020.1283973724012
 ----
 
 .WAL Printing in older versions of HBase
@@ -442,7 +442,7 @@ Prior to version 2.0, the `WALPrettyPrinter` was called the `HLogPrettyPrinter`,
 In those versions, you can print the contents of a WAL using the same configuration as above, but with the 'hlog' command.
 
 ----
- $ ./bin/hbase hlog hdfs://example.org:8020/hbase/.logs/example.org,60020,1283516293161/10.10.21.10%3A60020.1283973724012
+ $ ./bin/hbase hlog hdfs://example.org:9000/hbase/.logs/example.org,60020,1283516293161/10.10.21.10%3A60020.1283973724012
 ----
 ====
 
@@ -475,8 +475,11 @@ Options:
  endtime      end of the time range.  Ignored if no starttime specified.
  versions     number of cell versions to copy
  new.name     new table's name
+ peer.uri     The URI of the peer cluster
  peer.adr     Address of the peer cluster given in the format
               hbase.zookeeer.quorum:hbase.zookeeper.client.port:zookeeper.znode.parent
+              Do not take effect if peer.uri is specified
+              Deprecated, please use peer.uri instead
  families     comma-separated list of families to copy
               To copy from cf1 to cf2, give sourceCfName:destCfName.
               To keep the same name, just give "cfName"
@@ -498,10 +501,14 @@ For performance consider the following general options:
     -Dmapred.map.tasks.speculative.execution=false
 ----
 
+Starting from 3.0.0, we introduce a `peer.uri` option so the `peer.adr` option is deprecated. Please
+use connection URI for specifying HBase clusters. For all previous versions, you should still use
+the `peer.adr` option.
+
 .Scanner Caching
 [NOTE]
 ====
-Caching for the input Scan is configured via `hbase.client.scanner.caching`          in the job configuration.
+Caching for the input Scan is configured via `hbase.client.scanner.caching` in the job configuration.
 ====
 
 .Versions
@@ -586,10 +593,18 @@ $ ./bin/hbase org.apache.hadoop.hbase.mapreduce.SyncTable --help
 Usage: SyncTable [options] <sourcehashdir> <sourcetable> <targettable>
 
 Options:
+ sourceuri        Cluster connection uri of the source table
+                  (defaults to cluster in classpath's config)
  sourcezkcluster  ZK cluster key of the source table
+                  (defaults to cluster in classpath's config)
+                  Do not take effect if sourceuri is specifie
+                  Deprecated, please use sourceuri instead
+ targeturi        Cluster connection uri of the target table
                   (defaults to cluster in classpath's config)
  targetzkcluster  ZK cluster key of the target table
                   (defaults to cluster in classpath's config)
+                  Do not take effect if targeturi is specified
+                  Deprecated, please use targeturi instead
  dryrun           if true, output counters but no writes
                   (defaults to false)
  doDeletes        if false, does not perform deletes
@@ -613,6 +628,10 @@ Examples:
  $ bin/hbase org.apache.hadoop.hbase.mapreduce.SyncTable --dryrun=true --sourcezkcluster=zk1.example.com,zk2.example.com,zk3.example.com:2181:/hbase hdfs://nn:9000/hashes/tableA tableA tableA
 ----
 
+Starting from 3.0.0, we introduce `sourceuri` and `targeturi` options so `sourcezkcluster` and
+`targetzkcluster` are deprecated. Please use connection URI for specifying HBase clusters. For all
+previous versions, you should still use `sourcezkcluster` and `targetzkcluster`.
+
 Cell comparison takes ROW/FAMILY/QUALIFIER/TIMESTAMP/VALUE into account for equality. When syncing at the target, missing cells will be
 added with original timestamp value from source. That may cause unexpected results after SyncTable completes, for example, if missing
 cells on target have a delete marker with a timestamp T2 (say, a bulk delete performed by mistake), but source cells timestamps have an
@@ -634,7 +653,7 @@ and doPuts to false would give same effect as setting dryrun to true.
 [NOTE]
 ====
 "doDeletes/doPuts" were only added by
-link:https://jira.apache.org/jira/browse/HBASE-20305[HBASE-20305], so these may not be available on
+link:https://issues.apache.org/jira/browse/HBASE-20305[HBASE-20305], so these may not be available on
 all released versions.
 For major 1.x versions, minimum minor release including it is *1.4.10*.
 For major 2.x versions, minimum minor release including it is *2.1.5*.
@@ -668,7 +687,7 @@ which does not give any meaningful result.
 [NOTE]
 ====
 Often, remote clusters may be deployed on different Kerberos Realms.
-link:https://jira.apache.org/jira/browse/HBASE-20586[HBASE-20586] added SyncTable support for
+link:https://issues.apache.org/jira/browse/HBASE-20586[HBASE-20586] added SyncTable support for
 cross realm authentication, allowing a SyncTable process running on target cluster to connect to
 source cluster and read both HashTable output files and the given HBase table when performing the
 required comparisons.
@@ -950,7 +969,7 @@ For performance also consider the following options:
 [[rowcounter]]
 === RowCounter
 
-link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/mapreduce/RowCounter.html[RowCounter] is a mapreduce job to count all the rows of a table.
+link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/mapreduce/RowCounter.html[RowCounter] is a mapreduce job to count all the rows of a table.
 This is a good utility to use as a sanity check to ensure that HBase can read all the blocks of a table if there are any concerns of metadata inconsistency.
 It will run the mapreduce all in a single process but it will run faster if you have a MapReduce cluster in place for it to exploit.
 It is possible to limit the time range of data to be scanned by using the `--starttime=[starttime]` and `--endtime=[endtime]` flags.
@@ -967,7 +986,7 @@ For performance consider to use `-Dhbase.client.scanner.caching=100` and `-Dmapr
 [[cellcounter]]
 === CellCounter
 
-HBase ships another diagnostic mapreduce job called link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/mapreduce/CellCounter.html[CellCounter].
+HBase ships another diagnostic mapreduce job called link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/mapreduce/CellCounter.html[CellCounter].
 Like RowCounter, it gathers more fine-grained statistics about your table.
 The statistics gathered by CellCounter are more fine-grained and include:
 
@@ -1203,15 +1222,15 @@ If the problem is about PREFIX_TREE encoding it is necessary to change encodings
 The following log message shows an example of incorrect HFiles.
 
 ----
-2018-06-05 16:20:46,976 WARN  [hfilevalidator-pool1-t3] hbck.HFileCorruptionChecker: Found corrupt HFile hdfs://example.com:8020/hbase/data/default/t/72ea7f7d625ee30f959897d1a3e2c350/prefix/7e6b3d73263c4851bf2b8590a9b3791e
-org.apache.hadoop.hbase.io.hfile.CorruptHFileException: Problem reading HFile Trailer from file hdfs://example.com:8020/hbase/data/default/t/72ea7f7d625ee30f959897d1a3e2c350/prefix/7e6b3d73263c4851bf2b8590a9b3791e
+2018-06-05 16:20:46,976 WARN  [hfilevalidator-pool1-t3] hbck.HFileCorruptionChecker: Found corrupt HFile hdfs://example.com:9000/hbase/data/default/t/72ea7f7d625ee30f959897d1a3e2c350/prefix/7e6b3d73263c4851bf2b8590a9b3791e
+org.apache.hadoop.hbase.io.hfile.CorruptHFileException: Problem reading HFile Trailer from file hdfs://example.com:9000/hbase/data/default/t/72ea7f7d625ee30f959897d1a3e2c350/prefix/7e6b3d73263c4851bf2b8590a9b3791e
     ...
 Caused by: java.io.IOException: Invalid data block encoding type in file info: PREFIX_TREE
     ...
 Caused by: java.lang.IllegalArgumentException: No enum constant org.apache.hadoop.hbase.io.encoding.DataBlockEncoding.PREFIX_TREE
     ...
-2018-06-05 16:20:47,322 INFO  [main] tool.HFileContentValidator: Corrupted file: hdfs://example.com:8020/hbase/data/default/t/72ea7f7d625ee30f959897d1a3e2c350/prefix/7e6b3d73263c4851bf2b8590a9b3791e
-2018-06-05 16:20:47,383 INFO  [main] tool.HFileContentValidator: Corrupted file: hdfs://example.com:8020/hbase/archive/data/default/t/56be41796340b757eb7fff1eb5e2a905/f/29c641ae91c34fc3bee881f45436b6d1
+2018-06-05 16:20:47,322 INFO  [main] tool.HFileContentValidator: Corrupted file: hdfs://example.com:9000/hbase/data/default/t/72ea7f7d625ee30f959897d1a3e2c350/prefix/7e6b3d73263c4851bf2b8590a9b3791e
+2018-06-05 16:20:47,383 INFO  [main] tool.HFileContentValidator: Corrupted file: hdfs://example.com:9000/hbase/archive/data/default/t/56be41796340b757eb7fff1eb5e2a905/f/29c641ae91c34fc3bee881f45436b6d1
 ----
 
 ===== Fixing PREFIX_TREE errors
@@ -1296,13 +1315,22 @@ Options:
 
 ----
 
+[[ops.conf-tool]]
+=== HBase Conf Tool
+HBase Conf tool can be used to print out the current value of a configuration. It can be used by passing the configuration key on the command-line.
+
+[source, bash]
+----
+$ bin/hbase org.apache.hadoop.hbase.util.HBaseConfTool <configuration_key>
+----
+
 [[ops.regionmgt]]
 == Region Management
 
 [[ops.regionmgt.majorcompact]]
 === Major Compaction
 
-Major compactions can be requested via the HBase shell or link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Admin.html#majorCompact-org.apache.hadoop.hbase.TableName-[Admin.majorCompact].
+Major compactions can be requested via the HBase shell or link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/Admin.html#majorCompact(org.apache.hadoop.hbase.TableName)[Admin.majorCompact].
 
 Note: major compactions do NOT do region merges.
 See <<compaction,compaction>> for more information about compactions.
@@ -1610,6 +1638,15 @@ See link:https://hadoop.apache.org/docs/current/api/org/apache/hadoop/metrics2/p
 To disable metrics for a region server, edit the _conf/hadoop-metrics2-hbase.properties_ file and comment out any uncommented lines.
 Restart the region server for the changes to take effect.
 
+[[enabling.metrics.servlets]]
+=== Enabling Metrics Servlets
+
+HBase exposes the metrics in many formats such as JSON, prometheus-format through different servlets (`/jmx`, `/metrics`, `/prometheus`). Any of these servlets can be enabled or disabled by the configuration property `hbase.http.metrics.servlets`. The value for the property should be a comma separated list of the servlet aliases which are `{jmx, metrics, prometheus}`. `/jmx`, `/metrics`, `/prometheus` are enabled by default. To get metrics using these servlets access the URL `http://SERVER_HOSTNAME:SERVER_WEB_UI_PORT/endpoint`. Where endpoint is one of {`/jmx`, `/metrics`, `/prometheus`}. Eg. `http://my.rs.xyz.com:16030/prometheus`
+
+[[prometheus.format.metrics]]
+=== Prometheus servlets
+HBase exposes the metrics in prometheus friendly format through a servlet, `/prometheus`. Currently `/prometheus` exposes all the available metrics.
+
 [[discovering.available.metrics]]
 === Discovering Available Metrics
 
@@ -1617,15 +1654,15 @@ Rather than listing each metric which HBase emits by default, you can browse thr
 Different metrics are exposed for the Master process and each region server process.
 
 .Procedure: Access a JSON Output of Available Metrics
-. After starting HBase, access the region server's web UI, at pass:[http://REGIONSERVER_HOSTNAME:60030] by default (or port 16030 in HBase 1.0+).
+. After starting HBase, access the region server's web UI, at pass:[http://REGIONSERVER_HOSTNAME:16030] by default.
 . Click the [label]#Metrics Dump# link near the top.
   The metrics for the region server are presented as a dump of the JMX bean in JSON format.
   This will dump out all metrics names and their values.
-  To include metrics descriptions in the listing -- this can be useful when you are exploring what is available -- add a query string of `?description=true` so your URL becomes pass:[http://REGIONSERVER_HOSTNAME:60030/jmx?description=true].
+  To include metrics descriptions in the listing -- this can be useful when you are exploring what is available -- add a query string of `?description=true` so your URL becomes pass:[http://REGIONSERVER_HOSTNAME:16030/jmx?description=true].
   Not all beans and attributes have descriptions.
-. To view metrics for the Master, connect to the Master's web UI instead (defaults to pass:[http://localhost:60010] or port 16010 in HBase 1.0+) and click its [label]#Metrics
+. To view metrics for the Master, connect to the Master's web UI instead (defaults to pass:[http://localhost:16010]) and click its [label]#Metrics
   Dump# link.
-  To include metrics descriptions in the listing -- this can be useful when you are exploring what is available -- add a query string of `?description=true` so your URL becomes pass:[http://REGIONSERVER_HOSTNAME:60010/jmx?description=true].
+  To include metrics descriptions in the listing -- this can be useful when you are exploring what is available -- add a query string of `?description=true` so your URL becomes pass:[http://REGIONSERVER_HOSTNAME:16010/jmx?description=true].
   Not all beans and attributes have descriptions.
 
 
@@ -1895,13 +1932,21 @@ It is also prepended with identifying tags `(responseTooSlow)`, `(responseTooLar
 
 ==== Configuration
 
-There are two configuration knobs that can be used to adjust the thresholds for when queries are logged.
+There are four configuration knobs that can be used to adjust the thresholds for when queries are logged. Two of these knobs
+control the size and time thresholds for all queries. Because Scans can often be larger and slower than other types of
+queries, there are two additional knobs which can control size and time thresholds for Scans specifically.
 
 * `hbase.ipc.warn.response.time` Maximum number of milliseconds that a query can be run without being logged.
   Defaults to 10000, or 10 seconds.
   Can be set to -1 to disable logging by time.
 * `hbase.ipc.warn.response.size` Maximum byte size of response that a query can return without being logged.
   Defaults to 100 megabytes.
+  Can be set to -1 to disable logging by size.
+* `hbase.ipc.warn.response.time.scan` Maximum number of milliseconds that a Scan can be run without being logged.
+  Defaults to the `hbase.ipc.warn.response.time` value.
+  Can be set to -1 to disable logging by time.
+* `hbase.ipc.warn.response.size.scan` Maximum byte size of response that a Scan can return without being logged.
+  Defaults to the `hbase.ipc.warn.response.size` value.
   Can be set to -1 to disable logging by size.
 
 ==== Metrics
@@ -2172,6 +2217,8 @@ Before enabling replication for a column family, create the table and all column
 NOTE: Replication is asynchronous as we send WAL to another cluster in background, which means that when you want to do recovery through replication, you could loss some data. To address this problem, we have introduced a new feature called synchronous replication. As the mechanism is a bit different so we use a separated section to describe it. Please see
 <<Synchronous Replication,Synchronous Replication>>.
 
+NOTE: At present, there is compatibility problem if Replication and WAL Compression are used together. If you need to use Replication, it is recommended to set the `hbase.regionserver.wal.enablecompression` property to `false`. See (https://issues.apache.org/jira/browse/HBASE-26849[HBASE-26849]) for details.
+
 === Replication Overview
 
 Cluster replication uses a source-push methodology.
@@ -2264,6 +2311,33 @@ enable_table_replication <TABLE_NAME>::
   Enable the table replication switch for all its column families. If the table is not found in the destination cluster then it will create one with the same name and column families.
 disable_table_replication <TABLE_NAME>::
   Disable the table replication switch for all its column families.
+peer_modification_switch <enable_or_disable>, <drain_procedures>::
+  Enabled/Disable peer modification operations, such as adding/removing replication peers.
+  The second parameter means whether you want to wait until all existing peer modification
+procedures to finish before returning when disabling peer modification.
+peer_modification_enabled::
+  Check whether peer modification is enabled.
+
+=== Migrate Across Different Replication Peer Storages
+Starting from 2.6.0, we introduce a file system based `ReplicationPeerStorage`, which stores
+the replication peer state with files on HFile file system, instead of znodes on ZooKeeper.
+And we have also implemented a tool to copy replication peer state across different replication
+peer storages.
+[source,shell]
+----
+./bin/hbase copyreppeers <SRC_REPLICATION_PEER_STORAGE> <DST_REPLICATION_PEER_STORAGE>
+----
+To support doing the migrate online, we introduce a shell command called `peer_modification_switch`.
+[source,ruby]
+----
+hbase> peer_modification_switch false, true
+----
+Use the above command can disable peer modification operations. The second `true` means you want to
+wait until all the existing replication peer modification procedures to finish before returning.
+After disabling the peer modification, it is safe for you to copy replication peer state with the
+above tool, and then update all the _hbase-site.xml_ files in the cluster to specify the new
+replication peer storage, and finally trigger an online configuration update to load the new
+replication peer storage.
 
 === Serial Replication
 
@@ -2341,7 +2415,7 @@ A single WAL edit goes through several steps in order to be replicated to a slav
 . The edit is tagged with the master's UUID and added to a buffer.
   When the buffer is filled, or the reader reaches the end of the file, the buffer is sent to a random region server on the slave cluster.
 . The region server reads the edits sequentially and separates them into buffers, one buffer per table.
-  After all edits are read, each buffer is flushed using link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Table.html[Table], HBase's normal client.
+  After all edits are read, each buffer is flushed using link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/Table.html[Table], HBase's normal client.
   The master's UUID and the UUIDs of slaves which have already consumed the data are preserved in the edits they are applied, in order to prevent replication loops.
 . In the master, the offset for the WAL that is currently being replicated is registered in ZooKeeper.
 
@@ -2373,16 +2447,28 @@ This option was introduced in link:https://issues.apache.org/jira/browse/HBASE-1
 
 ==== Replication Internals
 
+Replication State Storage::
+  In HBASE-15867, we abstract two interfaces for storing replication state,
+`ReplicationPeerStorage` and `ReplicationQueueStorage`. The former one is for storing the
+replication peer related states, and the latter one is for storing the replication queue related
+states.
+  HBASE-15867 is only half done, as although we have abstract these two interfaces, we still only
+have zookeeper based implementations.
+
+  And in HBASE-27110, we have implemented a file system based replication peer storage, to store replication peer state on file system. Of course you can still use the zookeeper based replication peer storage.
+  And in HBASE-27109, we have changed the replication queue storage from zookeeper based to hbase table based. See the below `Replication Queue State` in hbase:replication table section for more details.
+
 Replication State in ZooKeeper::
-  HBase replication maintains its state in ZooKeeper.
   By default, the state is contained in the base node _/hbase/replication_.
-  This node contains two child nodes, the `Peers` znode and the `RS`                znode.
+  Usually this nodes contains two child nodes, the peers znode is for storing replication peer state, and the rs znodes is for storing replication queue state. And if you choose the file system based replication peer storage, you will not see the peers znode.
+  And starting from 3.0.0, we have moved the replication queue state to <<hbase:replication,hbase:replication>> table, so you will not see the rs znode.
 
 The `Peers` Znode::
   The `peers` znode is stored in _/hbase/replication/peers_ by default.
   It consists of a list of all peer replication clusters, along with the status of each of them.
   The value of each peer is its cluster key, which is provided in the HBase Shell.
   The cluster key contains a list of ZooKeeper nodes in the cluster's quorum, the client port for the ZooKeeper quorum, and the base znode for HBase in HDFS on that cluster.
+  Starting from 3.0.0, you can also specify connection URI as a cluster key. See <<client.connectionuri>> for more details about connection URI.
 
 The `RS` Znode::
   The `rs` znode contains a list of WAL logs which need to be replicated.
@@ -2390,6 +2476,21 @@ The `RS` Znode::
   The rs znode has one child znode for each region server in the cluster.
   The child znode name is the region server's hostname, client port, and start code.
   This list includes both live and dead region servers.
+
+[[hbase:replication]]
+The hbase:replication Table::
+  After 3.0.0, the `Queue` has been stored in the hbase:replication table, where the row key is <PeerId>-<ServerName>[/<SourceServerName>], the WAL group will be the qualifier, and the serialized ReplicationGroupOffset will be the value.
+  The ReplicationGroupOffset includes the wal file of the corresponding queue (<PeerId>-<ServerName>[/<SourceServerName>]) and its offset.
+  Because we track replication offset per queue instead of per file, we only need to store one replication offset per queue.
+
+Other implementations for `ReplicationPeerStorage`::
+  Starting from 2.6.0, we introduce a file system based `ReplicationPeerStorage`, which stores
+the replication peer state with files on HFile file system, instead of znodes on ZooKeeper.
+  The layout is almost the same with znodes on zookeeper, the main difference is that, the HFile
+file system may not support atomic rename, so we use two files to store the state and when reading
+we will read them both and compare the timestamp to find out the newer one. So typically, you will
+see two peer config files. And for enable/disable state, we just touch a disabled file if the peer
+is disabled, and remove the file when enabling the peer.
 
 ==== Choosing Region Servers to Replicate To
 
@@ -2401,7 +2502,7 @@ A ZooKeeper watcher is placed on the _${zookeeper.znode.parent}/rs_ node of the 
 This watch is used to monitor changes in the composition of the slave cluster.
 When nodes are removed from the slave cluster, or if nodes go down or come back up, the master cluster's region servers will respond by selecting a new pool of slave region servers to replicate to.
 
-==== Keeping Track of Logs
+==== Keeping Track of Logs(based on ZooKeeper)
 
 Each master cluster region server has its own znode in the replication znodes hierarchy.
 It contains one znode per peer cluster (if 5 slave clusters, 5 znodes are created), and each of these contain a queue of WALs to process.
@@ -2421,6 +2522,18 @@ If a particular source has already finished with an archived log, it will just i
 If the log is in the queue, the path will be updated in memory.
 If the log is currently being replicated, the change will be done atomically so that the reader doesn't attempt to open the file when has already been moved.
 Because moving a file is a NameNode operation , if the reader is currently reading the log, it won't generate any exception.
+
+==== Keeping Track of Logs(based on hbase table)
+
+After 3.0.0, for table based implementation, we have server name in row key, which means we will have lots of rows for a given peer.
+
+For a normal replication queue, the WAL files belong to the region server that is still alive, all the WAL files are kept in memory, so we do not need to get the WAL files from replication queue storage.
+And for a recovered replication queue, we could get the WAL files of the dead region server by listing the old WAL directory on HDFS. So theoretically, we do not need to store every WAL file in replication queue storage.
+And what’s more, we store the created time(usually) in the WAL file name, so for all the WAL files in a WAL group, we can sort them(actually we will sort them in the current replication framework), which means we only need to store one replication offset per queue.
+When starting a recovered replication queue, we will skip all the files before this offset, and start replicating from this offset.
+
+For ReplicationLogCleaner, all the files before this offset can be deleted, otherwise not.
+
 
 ==== Reading, Filtering and Sending Edits
 
@@ -2451,8 +2564,8 @@ NOTE: WALs are saved when replication is enabled or disabled as long as peers ex
 
 When no region servers are failing, keeping track of the logs in ZooKeeper adds no value.
 Unfortunately, region servers do fail, and since ZooKeeper is highly available, it is useful for managing the transfer of the queues in the event of a failure.
-
-Each of the master cluster region servers keeps a watcher on every other region server, in order to be notified when one dies (just as the master does). When a failure happens, they all race to create a znode called `lock` inside the dead region server's znode that contains its queues.
+Each of the master cluster region servers keeps a watcher on every other region server, in order to be notified when one dies (just as the master does).
+When a failure happens, they all race to create a znode called `lock` inside the dead region server's znode that contains its queues.
 The region server that creates it successfully then transfers all the queues to its own znode, one at a time since ZooKeeper does not support renaming queues.
 After queues are all transferred, they are deleted from the old location.
 The znodes that were recovered are renamed with the ID of the slave cluster appended with the name of the dead server.
@@ -2460,6 +2573,11 @@ The znodes that were recovered are renamed with the ID of the slave cluster appe
 Next, the master cluster region server creates one new source thread per copied queue, and each of the source threads follows the read/filter/ship pattern.
 The main difference is that those queues will never receive new data, since they do not belong to their new region server.
 When the reader hits the end of the last log, the queue's znode is deleted and the master cluster region server closes that replication source.
+
+And starting from 2.5.0, the failover logic has been moved to SCP, where we add a SERVER_CRASH_CLAIM_REPLICATION_QUEUES step in SCP to claim the replication queues for a dead server.
+And starting from 3.0.0, where we changed the replication queue storage from zookeeper to table, the update to the replication queue storage is async, so we also need an extra step to add the missing replication queues before claiming.
+
+==== The replication queue claiming(based on ZooKeeper)
 
 Given a master cluster with 3 region servers replicating to a single slave with id `2`, the following hierarchy represents what the znodes layout could be at some point in time.
 The region servers' znodes all contain a `peers`          znode which contains a single queue.
@@ -2538,6 +2656,32 @@ The new layout will be:
       1.1.1.2,60020.1312  (Contains a position)
 ----
 
+==== The replication queue claiming(based on hbase table)
+
+Given a master cluster with 3 region servers replicating to a single slave with id `2`, the following info represents what the storage layout of queue in the hbase:replication at some point in time.
+Row key is <PeerId>-<ServerName>[/<SourceServerName>], and value is WAL && Offset.
+
+----
+
+  <PeerId>-<ServerName>[/<SourceServerName>]                        WAL && Offset
+  2-1.1.1.1,60020,123456780                            1.1.1.1,60020.1234  (Contains a position)
+  2-1.1.1.2,60020,123456790                            1.1.1.2,60020.1214  (Contains a position)
+  2-1.1.1.3,60020,123456630                            1.1.1.3,60020.1280  (Contains a position)
+----
+
+Assume that 1.1.1.2 failed.
+The survivors will claim queue of that, and, arbitrarily, 1.1.1.3 wins.
+It will claim all the queue of 1.1.1.2, including removing the row of a replication queue, and inserting a new row(where we change the server name to the region server which claims the queue).
+Finally, the layout will look like the following:
+
+----
+
+  <PeerId>-<ServerName>[/<SourceServerName>]                        WAL && Offset
+  2-1.1.1.1,60020,123456780                            1.1.1.1,60020.1234  (Contains a position)
+  2-1.1.1.3,60020,123456630                            1.1.1.3,60020.1280  (Contains a position)
+  2-1.1.1.3,60020,123456630 1.1.1.2,60020,123456790    1.1.1.2,60020.1214  (Contains a position)
+----
+
 === Replication Metrics
 
 The following metrics are exposed at the global region server level and at the peer level:
@@ -2613,6 +2757,23 @@ The following metrics are exposed at the global region server level and at the p
 | The number of region servers a given region server should attempt to
                   failover simultaneously.
 | 1
+
+| hbase.replication.peer.storage.impl
+| The replication peer storage implementation
+| zookeeper
+
+| hbase.replication.peers.directory
+| The directory for storing replication peer state, when filesystem replication
+                  peer storage is specified
+| peers
+
+| hbase.replication.queue.table.name
+| The table for storing replication queue state
+| hbase:replication
+
+| hbase.replication.queue.storage.impl
+| The replication queue storage implementation
+| TableReplicationQueueStorage
 |===
 
 === Monitoring Replication Status
@@ -2707,6 +2868,84 @@ clusters communication. This could also happen if replication is manually paused
 (via hbase shell `disable_peer` command, for example), but data keeps getting ingested
 in the source cluster tables.
 
+=== Replication Observability Framework
+The core idea is to create `replication marker rows` periodically and insert them into WAL.
+These marker rows will help track the replication delays/bugs back to the `originating region
+server, WAL and timestamp of occurrence`. This tracker rows' WAL entries are interleaved with
+the regular table WAL entries and have a very high chance of running into the same replication
+delays/bugs that the user tables are seeing. Details as follows:
+
+==== REPLICATION.WALEVENTTRACKER table
+Create  a new table called `REPLICATION.WALEVENTTRACKER` table and persist all the WAL events
+(like `ACTIVE`, `ROLLING`, `ROLLED`) to this table. +
+The properties of this table are: Replication is set to 0, Block Cache is Disabled,
+Max versions is 1, TTL is 1 year.
+
+This table has single ColumnFamily: `info` +
+`info` contains multiple qualifiers:
+
+* `info:region_server_name`
+* `info:wal_name`
+* `info:timestamp`
+* `info:wal_state`
+* `info:wal_length`
+
+Whenever we roll a WAL (`old-wal-name` -> `new-wal-name`), it will create 3 rows in this table. +
+`<region_server_name>, <old-wal-name>, <current timestamp>, <ROLLING>, <length of old-wal-name>` +
+`<region_server_name>, <old-wal-name>, <current timestamp>, <ROLLED>,  <length of old-wal-name>` +
+`<region_server_name>, <new-wal-name>, <current timestamp>, <ACTIVE>,  0` +
+
+.Configuration
+To enable persisting WAL events, there is a configuration property:
+`hbase.regionserver.wal.event.tracker.enabled` (defaults to false)
+
+==== REPLICATION.SINK_TRACKER table
+Create a new table called `REPLICATION.SINK_TRACKER`. +
+The properties of this table are: Replication is set to 0, Block Cache is Disabled,
+Max versions is 1, TTL is 1 year.
+
+This table has single ColumnFamily: `info` +
+`info` contains multiple qualifiers:
+
+* `info:region_server_name`
+* `info:wal_name`
+* `info:timestamp`
+* `info:offset`
+
+.Configuration
+To create the above table, there is a configuration property:
+`hbase.regionserver.replication.sink.tracker.enabled` (defaults to false)
+
+==== ReplicationMarker Chore
+We introduced a new chore called `ReplicationMarkerChore` which will create the marker rows
+periodically into active WAL. The marker rows has the following metadata: `region_server_name,
+wal_name, timestamp and offset within WAL`. These markers are replicated (with special handling)
+and they are persisted into a sink side table `REPLICATION.SINK_TRACKER`.
+
+.Configuration:
+`ReplicationMarkerChore` is enabled with configuration property:
+`hbase.regionserver.replication.marker.enabled` (defaults to false) and the period at which it
+creates marker rows is controlled by `hbase.regionserver.replication.marker.chore.duration`
+(defaults to 30 seconds). Sink cluster can choose to process these marker rows and persist
+to `REPLICATION.SINK_TRACKER` table or it can ignore these rows. This behavior is controlled by
+configuration property `hbase.regionserver.replication.sink.tracker.enabled` (defaults to false).
+If set to false, it will ignore the marker rows.
+
+==== How to enable end-to-end feature ?
+To use this whole feature, we will need to enable the above configuration properties in 2
+phases/releases. +
+In first phase/release, set the following configuration properties to `true`:
+
+* `hbase.regionserver.wal.event.tracker.enabled`: This will just persist all the WAL events to
+REPLICATION.WALEVENTTRACKER table.
+* `hbase.regionserver.replication.sink.tracker.enabled`: This will create REPLICATION.SINK_TRACKER
+table and will process special marker rows coming from source cluster.
+
+In second phase/release, set the following configuration property to `true`:
+
+*  `hbase.regionserver.replication.marker.enabled`: This will create marker rows periodically and
+sink cluster will persist these marker rows in `REPLICATION.SINK_TRACKER` table.
+
 == Running Multiple Workloads On a Single Cluster
 
 HBase provides the following mechanisms for managing the performance of a cluster
@@ -2798,6 +3037,31 @@ hbase> set_quota NAMESPACE => 'ns1', LIMIT => '100req/min'               # a per
 hbase> set_quota USER => 'u1', GLOBAL_BYPASS => true                     # user u1 is not affected by the limit
 ----
 
+.Enabling, Disabling, and Checking RPC Throttling
+
+HBase provides shell commands to control RPC throttling at runtime. When throttling
+is disabled, HBase will not apply any request throttling. This can be useful in
+production environments that require temporary unthrottled operation.
+
+The following HBase shell commands are available:
+
+----
+# Enable RPC throttling
+hbase> enable_rpc_throttle
+
+# Disable RPC throttling
+hbase> disable_rpc_throttle
+
+# Check whether RPC throttling is enabled
+hbase> rpc_throttle_enabled
+----
+
+`enable_rpc_throttle` and `disable_rpc_throttle` return the previous RPC throttling
+state as a boolean value. `rpc_throttle_enabled` returns the current state.
+
+NOTE: If no quotas are configured, RPC throttling is not applied, and enabling or
+disabling throttling will always return `false`.
+
 [[namespace_quotas]]
 .Setting Namespace Quotas
 
@@ -2823,7 +3087,7 @@ hbase> alter_namespace 'ns2', {METHOD => 'unset', NAME=>'hbase.namespace.quota.m
 .Limiting Regions Per Namespace
 ----
 # Create a namespace with a max of 10 regions
-hbase> create_namespace 'ns1', {'hbase.namespace.quota.maxregions'=>'10'
+hbase> create_namespace 'ns1', {'hbase.namespace.quota.maxregions'=>'10'}
 
 # Show quota information for a namespace
 hbase> describe_namespace 'ns1'
@@ -3030,7 +3294,7 @@ SNAPSHOT                                      SIZE
 There are two broad strategies for performing HBase backups: backing up with a full cluster shutdown, and backing up on a live cluster.
 Each approach has pros and cons.
 
-For additional information, see link:http://blog.sematext.com/2011/03/11/hbase-backup-options/[HBase Backup
+For additional information, see link:https://web.archive.org/web/20160110232448/http://blog.sematext.com/2011/03/11/hbase-backup-options/[HBase Backup
         Options] over on the Sematext Blog.
 
 [[ops.backup.fullshutdown]]
@@ -3375,6 +3639,21 @@ as in <<snapshots_s3>>.
 After you meet the prerequisites, follow the instructions
 in <<snapshots_s3>>, replacingthe protocol specifier with `wasb://` or `wasbs://`.
 
+[[snapshots_oss]]
+== Storing Snapshots in Aliyun Object Storage Service
+
+You can store snapshots in Aliyun Object Storage Service(Aliyun OSS) using the same techniques
+as in <<snapshots_s3>>.
+
+.Prerequisites
+- You must be using HBase 1.2 or higher with Hadoop 2.9.1 or
+higher.
+- Your hosts must be configured to be aware of the Aliyun oss filesystem.
+See https://hadoop.apache.org/docs/stable/hadoop-aliyun/tools/hadoop-aliyun/index.html.
+
+After you meet the prerequisites, follow the instructions
+in <<snapshots_s3>>, replacing the protocol specifier with `oss://`.
+
 [[ops.capacity]]
 == Capacity Planning and Region Sizing
 
@@ -3432,7 +3711,7 @@ See <<gcpause,gcpause>>, <<trouble.log.gc,trouble.log.gc>> and elsewhere (TODO: 
 Generally less regions makes for a smoother running cluster (you can always manually split the big regions later (if necessary) to spread the data, or request load, over the cluster); 20-200 regions per RS is a reasonable range.
 The number of regions cannot be configured directly (unless you go for fully <<disable.splitting,disable.splitting>>); adjust the region size to achieve the target region size given table size.
 
-When configuring regions for multiple tables, note that most region settings can be set on a per-table basis via link:https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/HTableDescriptor.html[HTableDescriptor], as well as shell commands.
+When configuring regions for multiple tables, note that most region settings can be set on a per-table basis via link:https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/client/TableDescriptorBuilder.html[TableDescriptorBuilder], as well as shell commands.
 These settings will override the ones in `hbase-site.xml`.
 That is useful if your tables have different workloads/use cases.
 
@@ -3853,7 +4132,7 @@ when the schema includes timestamp in the rowkey, as it will automatically
 merge away regions whose contents have expired.
 
 (The bulk of the below detail was copied wholesale from the blog by Romil Choksi at
-link:https://community.hortonworks.com/articles/54987/hbase-region-normalizer.html[HBase Region Normalizer]).
+link:https://community.cloudera.com/t5/Community-Articles/HBase-Region-Normalizer/ta-p/247266[HBase Region Normalizer]).
 
 The Region Normalizer is feature available since HBase-1.2. It runs a set of
 pre-calculated merge/split actions to resize regions that are either too

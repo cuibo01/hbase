@@ -22,7 +22,6 @@ import static org.junit.Assert.assertNotEquals;
 
 import java.util.HashMap;
 import java.util.Map;
-
 import org.apache.hadoop.hbase.CompatibilitySingletonFactory;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.MetricsTests;
@@ -31,17 +30,17 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({MetricsTests.class, SmallTests.class})
+@Category({ MetricsTests.class, SmallTests.class })
 public class TestMetricsRegionSourceImpl {
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMetricsRegionSourceImpl.class);
+    HBaseClassTestRule.forClass(TestMetricsRegionSourceImpl.class);
 
   @SuppressWarnings("SelfComparison")
   @Test
   public void testCompareToHashCodeEquals() {
-    MetricsRegionServerSourceFactory fact = CompatibilitySingletonFactory.getInstance(
-            MetricsRegionServerSourceFactory.class);
+    MetricsRegionServerSourceFactory fact =
+      CompatibilitySingletonFactory.getInstance(MetricsRegionServerSourceFactory.class);
 
     MetricsRegionSource one = fact.createRegion(new RegionWrapperStub("TEST"));
     MetricsRegionSource oneClone = fact.createRegion(new RegionWrapperStub("TEST"));
@@ -114,6 +113,11 @@ public class TestMetricsRegionSourceImpl {
 
     @Override
     public long getStoreFileSize() {
+      return 0;
+    }
+
+    @Override
+    public float getCurrentRegionCacheRatio() {
       return 0;
     }
 
@@ -232,6 +236,11 @@ public class TestMetricsRegionSourceImpl {
       Map<String, Long> map = new HashMap<String, Long>();
       map.put("info", 0L);
       return map;
+    }
+
+    @Override
+    public String getTableDescriptorHash() {
+      return "testhash";
     }
   }
 }

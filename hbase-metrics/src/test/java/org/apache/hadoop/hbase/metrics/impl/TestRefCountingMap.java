@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,32 +17,26 @@
  */
 package org.apache.hadoop.hbase.metrics.impl;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Collection;
 import java.util.Set;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
-@Category(SmallTests.class)
+@Tag(SmallTests.TAG)
 public class TestRefCountingMap {
-
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestRefCountingMap.class);
 
   private RefCountingMap<String, String> map;
 
-  @Before
+  @BeforeEach
   public void setUp() {
     map = new RefCountingMap<>();
   }
@@ -59,7 +53,7 @@ public class TestRefCountingMap {
   @Test
   public void testPutMulti() {
     String v1 = map.put("foo", () -> "foovalue");
-    String v2 =  map.put("foo", () -> "foovalue2");
+    String v2 = map.put("foo", () -> "foovalue2");
     String v3 = map.put("foo", () -> "foovalue3");
 
     String v = map.get("foo");
@@ -127,7 +121,6 @@ public class TestRefCountingMap {
     assertEquals(0, map.size());
   }
 
-
   @Test
   public void testKeySet() {
     map.put("foo", () -> "foovalue");
@@ -151,6 +144,6 @@ public class TestRefCountingMap {
     assertEquals(3, values.size());
 
     Lists.newArrayList("foovalue", "foovalue3", "foovalue4").stream()
-            .forEach(v -> assertTrue(values.contains(v)));
+      .forEach(v -> assertTrue(values.contains(v)));
   }
 }

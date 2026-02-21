@@ -30,12 +30,16 @@
 DRY_RUN=${DRY_RUN:-1} #default to dry run
 DEBUG=${DEBUG:-0}
 GPG=${GPG:-gpg}
-GPG_ARGS=(--no-autostart --batch)
+GPG_ARGS=(--no-autostart --batch --pinentry-mode error)
 if [ -n "${GPG_KEY}" ]; then
   GPG_ARGS=("${GPG_ARGS[@]}" --local-user "${GPG_KEY}")
 fi
 # Maven Profiles for publishing snapshots and release to Maven Central and Dist
 PUBLISH_PROFILES=("-P" "apache-release,release")
+
+# get the current directory, we want to use some python scripts to generate
+# CHANGES.md and RELEASENOTES.md
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 function error {
   log "Error: $*" >&2
@@ -56,8 +60,11 @@ function read_config {
 }
 
 function parse_version {
-  grep -e '<version>.*</version>' | \
-    head -n 2 | tail -n 1 | cut -d'>' -f2 | cut -d '<' -f1
+  xmllint --xpath "//*[local-name()='project']/*[local-name()='version']/text()" -
+}
+
+function parse_revision {
+  xmllint --xpath "//*[local-name()='project']/*[local-name()='properties']/*[local-name()='revision']/text()" -
 }
 
 function banner {
@@ -68,7 +75,7 @@ function banner {
 }
 
 function log {
-  echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${1}"
+  echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") $*"
 }
 
 # current number of seconds since epoch
@@ -131,26 +138,33 @@ function get_api_diff_version {
 # Get all branches that begin with 'branch-', the hbase convention for
 # release branches, sort them and then pop off the most recent.
 function get_release_info {
+  init_xmllint
+
   PROJECT="$(read_config "PROJECT" "$PROJECT")"
   export PROJECT
 
   if [[ -z "${ASF_REPO}" ]]; then
     ASF_REPO="https://gitbox.apache.org/repos/asf/${PROJECT}.git"
   fi
-  if [[ -z "${ASF_REPO_WEBUI}" ]]; then
-    ASF_REPO_WEBUI="https://gitbox.apache.org/repos/asf?p=${PROJECT}.git"
-  fi
   if [[ -z "${ASF_GITHUB_REPO}" ]]; then
     ASF_GITHUB_REPO="https://github.com/apache/${PROJECT}"
   fi
+  if [[ -z "${ASF_GITHUB_WEBUI}" ]] ; then
+    ASF_GITHUB_WEBUI="https://raw.githubusercontent.com/apache/${PROJECT}"
+  fi
   if [ -z "$GIT_BRANCH" ]; then
-    # If no branch is specified, find out the latest branch from the repo.
-    GIT_BRANCH="$(git ls-remote --heads "$ASF_REPO" |
-      grep refs/heads/branch- |
-      awk '{print $2}' |
-      sort -r |
-      head -n 1 |
-      cut -d/ -f3)"
+    # Except for hbase main repo, all other repos usually release from master branch
+    if [[ "$PROJECT" =~ ^hbase- ]]; then
+      GIT_BRANCH="master"
+    else
+      # If no branch is specified, find out the latest branch from the repo.
+      GIT_BRANCH="$(git ls-remote --heads "$ASF_REPO" |
+        grep refs/heads/branch- |
+        awk '{print $2}' |
+        sort -r |
+        head -n 1 |
+        cut -d/ -f3)"
+    fi
   fi
 
   GIT_BRANCH="$(read_config "GIT_BRANCH" "$GIT_BRANCH")"
@@ -158,8 +172,16 @@ function get_release_info {
 
   # Find the current version for the branch.
   local version
-  version="$(curl -s "$ASF_REPO_WEBUI;a=blob_plain;f=pom.xml;hb=refs/heads/$GIT_BRANCH" |
+  version="$(curl -s "$ASF_GITHUB_WEBUI/refs/heads/$GIT_BRANCH/pom.xml" |
     parse_version)"
+  # We do not want to expand ${revision} here, see https://maven.apache.org/maven-ci-friendly.html
+  # If we use ${revision} as placeholder, we need to parse the revision property to
+  # get maven version
+  # shellcheck disable=SC2016
+  if [[ "${version}" == '${revision}' ]]; then
+    version="$(curl -s "$ASF_GITHUB_WEBUI/refs/heads/$GIT_BRANCH/pom.xml" |
+      parse_revision)"
+  fi
   log "Current branch VERSION is $version."
 
   NEXT_VERSION="$version"
@@ -183,7 +205,8 @@ function get_release_info {
     local RC_COUNT
     if [ "$REV" != 0 ]; then
       local PREV_REL_REV=$((REV - 1))
-      PREV_REL_TAG="rel/${SHORT_VERSION}.${PREV_REL_REV}"
+      PREV_VERSION=${SHORT_VERSION}.${PREV_REL_REV}
+      PREV_REL_TAG="rel/${PREV_VERSION}"
       if git ls-remote --tags "$ASF_REPO" "$PREV_REL_TAG" | grep -q "refs/tags/${PREV_REL_TAG}$" ; then
         RC_COUNT=0
         REV=$((REV + 1))
@@ -197,13 +220,16 @@ function get_release_info {
     else
       REV=$((REV + 1))
       NEXT_VERSION="${SHORT_VERSION}.${REV}-SNAPSHOT"
+      # not easy to calculate it, just leave it as empty and let users provide it
+      PREV_VERSION=""
       RC_COUNT=0
     fi
   fi
 
   RELEASE_VERSION="$(read_config "RELEASE_VERSION" "$RELEASE_VERSION")"
   NEXT_VERSION="$(read_config "NEXT_VERSION" "$NEXT_VERSION")"
-  export RELEASE_VERSION NEXT_VERSION
+  PREV_VERSION="$(read_config "PREV_VERSION" "$PREV_VERSION")"
+  export RELEASE_VERSION NEXT_VERSION PREV_VERSION
 
   RC_COUNT="$(read_config "RC_COUNT" "$RC_COUNT")"
   if [[ -z "${RELEASE_TAG}" ]]; then
@@ -259,6 +285,7 @@ Release details:
 GIT_BRANCH:      $GIT_BRANCH
 RELEASE_VERSION: $RELEASE_VERSION
 NEXT_VERSION:    $NEXT_VERSION
+PREV_VERSION:    $PREV_VERSION
 RELEASE_TAG:     $RELEASE_TAG $([[ "$GIT_REF" != "$RELEASE_TAG" ]] && printf "\n%s\n" "GIT_REF:         $GIT_REF")
 API_DIFF_TAG:    $API_DIFF_TAG
 ASF_USERNAME:    $ASF_USERNAME
@@ -276,12 +303,11 @@ EOF
   fi
   GPG_ARGS=("${GPG_ARGS[@]}" --local-user "${GPG_KEY}")
 
-  if ! is_dry_run; then
-    if [ -z "$ASF_PASSWORD" ]; then
-      stty -echo && printf "ASF_PASSWORD: " && read -r ASF_PASSWORD && printf '\n' && stty echo
-    fi
-  else
-    ASF_PASSWORD="***INVALID***"
+  # The nexus staging plugin needs the password to contact to remote server even if
+  # skipRemoteStaging is set to true, not sure why so here we need the password even
+  # if this is a dry run
+  if [ -z "$ASF_PASSWORD" ]; then
+    stty -echo && printf "ASF_PASSWORD: " && read -r ASF_PASSWORD && printf '\n' && stty echo
   fi
 
   export ASF_PASSWORD
@@ -335,6 +361,17 @@ function init_locale {
   export LANG="$locale_value"
 }
 
+# Check whether xmllint is available
+function init_xmllint {
+  if ! [ -x "$(command -v xmllint)"  ]; then
+    log "Error: xmllint is not available, we need to use it for parsing pom.xml." >&2
+    log "Ubuntu: apt install libxml2-utils" >&2
+    log "CentOS: yum install xmlstarlet" >&2
+    log "Mac OS: brew install xmlstarlet" >&2
+    exit 1
+  fi
+}
+
 # Initializes JAVA_VERSION to the version of the JVM in use.
 function init_java {
   if [ -z "$JAVA_HOME" ]; then
@@ -345,11 +382,48 @@ function init_java {
   export JAVA_VERSION
 }
 
-function init_python {
-  if ! [ -x "$(command -v python2)"  ]; then
-    error 'python2 needed by yetus. Install or add link? E.g: sudo ln -sf /usr/bin/python2.7 /usr/local/bin/python2'
+function set_java8_home() {
+  if [ -z "$JAVA8_HOME" ]; then
+    # Ubuntu default path for jdk 8, included in docker image
+    export JAVA8_HOME="/usr/lib/jvm/java-8-openjdk-amd64"
+    log "Setting JAVA8_HOME to $JAVA8_HOME"
   fi
-  log "python version: $(python2 --version)"
+}
+
+function set_java17_home() {
+  if [ -z "$JAVA17_HOME" ]; then
+    # Ubuntu default path for JDK 17, included in docker image
+    export JAVA17_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+    log "Setting JAVA17_HOME to $JAVA17_HOME"
+  fi
+}
+
+function set_java17_as_default_java() {
+  log "Build requires JDK 17"
+  # Must be called after init_java
+  if [ "$JAVA_VERSION" != 17* ]; then
+    set_java17_home
+    log "Changing JAVA_HOME to $JAVA17_HOME"
+    export JAVA_HOME="$JAVA17_HOME"
+    # re-detect java version
+    init_java
+  fi
+}
+
+# Check the releaseTarget defined in the project, and switch to JDK17
+# if JAVA_HOME does not already point to JDK17
+function init_java17() {
+  RELEASETARGET=$(maven_get_release_target)
+  if [ "$RELEASETARGET" = "17" ]; then
+    set_java17_as_default_java
+  fi
+}
+
+function init_python {
+  if ! [ -x "$(command -v python3)"  ]; then
+    error 'python3 needed by yetus and api report. Install or add link?'
+  fi
+  log "python3 version: $(python3 --version)"
 }
 
 # Set MVN
@@ -367,6 +441,45 @@ function init_mvn {
   echo -n "mvn version: "
   "${MVN[@]}" --version
   configure_maven
+}
+
+function init_toolchains {
+  # Requires JAVA8_HOME and JAVA17_HOME to be set
+  set_java8_home
+  set_java17_home
+
+  MAVEN_TOOLCHAINS_FILE="${MAVEN_LOCAL_REPO}/toolchains.xml"
+  log "Creating toolchains.xml under $MAVEN_TOOLCHAINS_FILE"
+
+  cat <<'EOF' > "$MAVEN_TOOLCHAINS_FILE"
+ <?xml version="1.0" encoding="UTF-8"?>
+ <toolchains xmlns="http://maven.apache.org/TOOLCHAINS/1.1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+   xsi:schemaLocation="http://maven.apache.org/TOOLCHAINS/1.1.0 http://maven.apache.org/xsd/toolchains-1.1.0.xsd">
+   <toolchain>
+     <type>jdk</type>
+     <provides>
+       <version>1.8</version>
+     </provides>
+     <configuration>
+       <jdkHome>${env.JAVA8_HOME}</jdkHome>
+     </configuration>
+   </toolchain>
+   <toolchain>
+     <type>jdk</type>
+     <provides>
+       <version>17</version>
+     </provides>
+     <configuration>
+       <jdkHome>${env.JAVA17_HOME}</jdkHome>
+     </configuration>
+   </toolchain>
+ </toolchains>
+EOF
+
+  # Pass toolchains.xml to every mvn call
+  log "Adding toolchains file to Maven command"
+  MVN=("${MVN[@]}" --toolchains "${MAVEN_TOOLCHAINS_FILE}")
+  export MVN MAVEN_TOOLCHAINS_FILE
 }
 
 function init_yetus {
@@ -431,8 +544,8 @@ function git_clone_overwrite {
     log "Clone will be of the gitbox repo for ${PROJECT}."
     if [ -n "${ASF_USERNAME}" ] && [ -n "${ASF_PASSWORD}" ]; then
       # Ugly!
-      encoded_username=$(python -c "import urllib; print urllib.quote('''$ASF_USERNAME''', '')")
-      encoded_password=$(python -c "import urllib; print urllib.quote('''$ASF_PASSWORD''', '')")
+      encoded_username=$(python3 -c "from urllib.parse import quote; print(quote('''$ASF_USERNAME''', ''))")
+      encoded_password=$(python3 -c "from urllib.parse import quote; print(quote('''$ASF_PASSWORD''', ''))")
       GIT_REPO="https://$encoded_username:$encoded_password@${asf_repo}"
     else
       GIT_REPO="https://${asf_repo}"
@@ -524,7 +637,7 @@ function get_jira_name {
 # Update the CHANGES.md
 # DOES NOT DO COMMITS! Caller should do that.
 # requires yetus to have a defined home already.
-# yetus requires python2 to be on the path.
+# yetus requires python3 to be on the path.
 function update_releasenotes {
   local project_dir="$1"
   local jira_fix_version="$2"
@@ -547,11 +660,17 @@ function update_releasenotes {
     sed -i -e \
         "/^## Release ${jira_fix_version}/,/^## Release/ {//!d; /^## Release ${jira_fix_version}/d;}" \
         "${project_dir}/CHANGES.md" || true
+  else
+    # should be hbase 3.x, will copy CHANGES.md from archive.a.o/dist
+    curl --location --fail --silent --show-error --output ${project_dir}/CHANGES.md "https://archive.apache.org/dist/hbase/${PREV_VERSION}/CHANGES.md"
   fi
   if [ -f "${project_dir}/RELEASENOTES.md" ]; then
     sed -i -e \
         "/^# ${jira_project}  ${jira_fix_version} Release Notes/,/^# ${jira_project}/{//!d; /^# ${jira_project}  ${jira_fix_version} Release Notes/d;}" \
         "${project_dir}/RELEASENOTES.md" || true
+  else
+    # should be hbase 3.x, will copy CHANGES.md from archive.a.o/dist
+    curl --location --fail --silent --show-error --output ${project_dir}/RELEASENOTES.md "https://archive.apache.org/dist/hbase/${PREV_VERSION}/RELEASENOTES.md"
   fi
 
   # Yetus will not generate CHANGES if no JIRAs fixed against the release version
@@ -566,21 +685,12 @@ function update_releasenotes {
 
   # The releasedocmaker call above generates RELEASENOTES.X.X.X.md and CHANGELOG.X.X.X.md.
   if [ -f "${project_dir}/CHANGES.md" ]; then
-    # To insert into project's CHANGES.md...need to cut the top off the
-    # CHANGELOG.X.X.X.md file removing license and first line and then
-    # insert it after the license comment closing where we have a
-    # DO NOT REMOVE marker text!
-    sed -i -e '/## Release/,$!d' "${changelog}"
-    sed -i -e '2,${/^# HBASE Changelog/d;}' "${project_dir}/CHANGES.md"
-    sed -i -e "/DO NOT REMOVE/r ${changelog}" "${project_dir}/CHANGES.md"
+    $SELF/prepend_changes.py "${changelog}" "${project_dir}/CHANGES.md"
   else
     mv "${changelog}" "${project_dir}/CHANGES.md"
   fi
   if [ -f "${project_dir}/RELEASENOTES.md" ]; then
-    # Similar for RELEASENOTES but slightly different.
-    sed -i -e '/Release Notes/,$!d' "${releasenotes}"
-    sed -i -e '2,${/^# RELEASENOTES/d;}' "${project_dir}/RELEASENOTES.md"
-    sed -i -e "/DO NOT REMOVE/r ${releasenotes}" "${project_dir}/RELEASENOTES.md"
+    $SELF/prepend_releasenotes.py "${releasenotes}" "${project_dir}/RELEASENOTES.md"
   else
     mv "${releasenotes}" "${project_dir}/RELEASENOTES.md"
   fi
@@ -614,6 +724,53 @@ make_src_release() {
   stop_step "${timing_token}"
 }
 
+build_release_binary() {
+  local project="${1}"
+  local version="${2}"
+  local extra_flags=()
+  if [[ "${version}" = *-hadoop3 ]] || [[ "${version}" = *-hadoop3-SNAPSHOT ]]; then
+    extra_flags=("-Drevision=${version}" "-Dhadoop.profile=3.0")
+  fi
+
+  cd "$project" || exit
+  git clean -d -f -x
+  # Three invocations of maven. This seems to work. One to
+  # populate the repo, another to build the site, and then
+  # a third to assemble the binary artifact. Trying to do
+  # all in the one invocation fails; a problem in our
+  # assembly spec to in maven. TODO. Meantime, three invocations.
+  cmd=("${MVN[@]}" "${extra_flags[@]}" clean install -DskipTests)
+  echo "${cmd[*]}"
+  "${cmd[@]}"
+  cmd=("${MVN[@]}" "${extra_flags[@]}" site -DskipTests)
+  echo "${cmd[*]}"
+  "${cmd[@]}"
+  kick_gpg_agent
+  cmd=("${MVN[@]}" "${extra_flags[@]}" install assembly:single -DskipTests -Dcheckstyle.skip=true "${PUBLISH_PROFILES[@]}")
+  echo "${cmd[*]}"
+  "${cmd[@]}"
+
+  # Check there are bin gz outputs. The build may not produce one: e.g. hbase-thirdparty.
+  POSTFIXES=("" "-byo-hadoop")
+  local builddir=$(pwd)
+  for postfix in "${POSTFIXES[@]}"; do
+    cd "${builddir}"
+    local assembly_name=${project}${postfix}-${version}
+    local f_bin_prefix="./${PROJECT}-assembly${postfix}/target/${assembly_name}"
+    if ls "${f_bin_prefix}"*-bin.tar.gz &>/dev/null; then
+      cp "${f_bin_prefix}"*-bin.tar.gz ..
+      cd .. || exit
+      for i in "${assembly_name}"*-bin.tar.gz; do
+        "${GPG}" "${GPG_ARGS[@]}" --armour --output "${i}.asc" --detach-sig "${i}"
+        "${GPG}" "${GPG_ARGS[@]}" --print-md SHA512 "${i}" > "${i}.sha512"
+      done
+    else
+      cd .. || exit
+      log "No ${f_bin_prefix}*-bin.tar.gz product; expected?"
+    fi
+  done
+}
+
 # Make binary release.
 # Takes as arguments first the project name -- e.g. hbase or hbase-operator-tools
 # -- and then the version string. Expects to find checkout adjacent to this script
@@ -631,31 +788,10 @@ make_binary_release() {
   local timing_token
   timing_token="$(start_step)"
   rm -rf "${base_name}"-bin*
-  cd "$project" || exit
 
-  git clean -d -f -x
-  # Three invocations of maven. This seems to work. One to
-  # populate the repo, another to build the site, and then
-  # a third to assemble the binary artifact. Trying to do
-  # all in the one invocation fails; a problem in our
-  # assembly spec to in maven. TODO. Meantime, three invocations.
-  "${MVN[@]}" clean install -DskipTests
-  "${MVN[@]}" site -DskipTests
-  kick_gpg_agent
-  "${MVN[@]}" install assembly:single -DskipTests -Dcheckstyle.skip=true "${PUBLISH_PROFILES[@]}"
-
-  # Check there is a bin gz output. The build may not produce one: e.g. hbase-thirdparty.
-  local f_bin_prefix="./${PROJECT}-assembly/target/${base_name}"
-  if ls "${f_bin_prefix}"*-bin.tar.gz &>/dev/null; then
-    cp "${f_bin_prefix}"*-bin.tar.gz ..
-    cd .. || exit
-    for i in "${base_name}"*-bin.tar.gz; do
-      "${GPG}" "${GPG_ARGS[@]}" --armour --output "${i}.asc" --detach-sig "${i}"
-      "${GPG}" "${GPG_ARGS[@]}" --print-md SHA512 "${i}" > "${i}.sha512"
-    done
-  else
-    cd .. || exit
-    log "No ${f_bin_prefix}*-bin.tar.gz product; expected?"
+  build_release_binary "${project}" "${version}"
+  if should_build_with_hadoop3 "$project/pom.xml"; then
+    build_release_binary "${project}" "$(get_hadoop3_version "${version}")"
   fi
 
   stop_step "${timing_token}"
@@ -678,8 +814,23 @@ function kick_gpg_agent {
 # Do maven command to set version into local pom
 function maven_set_version { #input: <version_to_set>
   local this_version="$1"
-  log "${MVN[@]}" versions:set -DnewVersion="$this_version"
-  "${MVN[@]}" versions:set -DnewVersion="$this_version" | grep -v "no value" # silence logs
+  local use_revision='false'
+  local maven_version
+  maven_version="$(parse_version < pom.xml)"
+  # We do not want to expand ${revision} here, see https://maven.apache.org/maven-ci-friendly.html
+  # If we use ${revision} as placeholder, the way to bump maven version will be different
+  # shellcheck disable=SC2016
+  if [[ "${maven_version}" == '${revision}' ]]; then
+    use_revision='true'
+  fi
+
+  if [ "${use_revision}" = 'false' ] ; then
+    log "${MVN[@]}" versions:set -DnewVersion="$this_version"
+    "${MVN[@]}" versions:set -DnewVersion="$this_version" | grep -v "no value" # silence logs
+  else
+    log "${MVN[@]}" versions:set-property -Dproperty=revision -DnewVersion="$this_version" -DgenerateBackupPoms=false
+    "${MVN[@]}" versions:set-property -Dproperty=revision -DnewVersion="$this_version" -DgenerateBackupPoms=false | grep -v "no value" # silence logs
+  fi
 }
 
 # Do maven command to read version from local pom
@@ -688,12 +839,19 @@ function maven_get_version {
   "${MVN[@]}" -q -N -Dexec.executable="echo" -Dexec.args='${project.version}' exec:exec
 }
 
+# Do maven command to read target Java version from local pom
+function maven_get_release_target {
+  # shellcheck disable=SC2016
+  "${MVN[@]}"  -q -N -Dexec.executable="echo" -Dexec.args='${releaseTarget}' exec:exec
+}
+
 # Do maven deploy to snapshot or release artifact repository, with checks.
 function maven_deploy { #inputs: <snapshot|release> <log_file_path>
   local timing_token
   # Invoke with cwd=$PROJECT
   local deploy_type="$1"
   local mvn_log_file="$2" #secondary log file used later to extract staged_repo_id
+  local staging_dir
   if [[ "$deploy_type" != "snapshot" && "$deploy_type" != "release" ]]; then
     error "unrecognized deploy type, must be 'snapshot'|'release'"
   fi
@@ -707,6 +865,8 @@ function maven_deploy { #inputs: <snapshot|release> <log_file_path>
   elif [[ "$deploy_type" == "release" ]] && [[ "$RELEASE_VERSION" =~ SNAPSHOT ]]; then
     error "Non-snapshot release version must not include the word 'SNAPSHOT'; you gave version '$RELEASE_VERSION'"
   fi
+  # Just output to parent directory, the staging directory has a staging prefix already
+  staging_dir="$(dirname "$(pwd)")/local-staged"
   # Publish ${PROJECT} to Maven repo
   # shellcheck disable=SC2154
   log "Publishing ${PROJECT} checkout at '$GIT_REF' ($git_hash)"
@@ -715,19 +875,43 @@ function maven_deploy { #inputs: <snapshot|release> <log_file_path>
   maven_set_version "$RELEASE_VERSION"
   # Prepare for signing
   kick_gpg_agent
-  declare -a mvn_goals=(clean)
-  if ! is_dry_run; then
-    mvn_goals=("${mvn_goals[@]}" deploy)
+  declare -a mvn_extra_flags=()
+  if is_dry_run; then
+    # In dry run mode, skip deploying to remote repo
+    mvn_extra_flags=("${mvn_extra_flags[@]}" -DskipRemoteStaging)
   fi
-  log "${MVN[@]}" -DskipTests -Dcheckstyle.skip=true "${PUBLISH_PROFILES[@]}" "${mvn_goals[@]}"
+  log "${MVN[@]}" clean deploy -DskipTests -Dcheckstyle.skip=true \
+    -DaltStagingDirectory="${staging_dir}" "${PUBLISH_PROFILES[@]}" "${mvn_extra_flags[@]}"
   log "Logging to ${mvn_log_file}.  This will take a while..."
   rm -f "$mvn_log_file"
   # The tortuous redirect in the next command allows mvn's stdout and stderr to go to mvn_log_file,
   # while also sending stderr back to the caller.
   # shellcheck disable=SC2094
-  if ! "${MVN[@]}" -DskipTests -Dcheckstyle.skip=true "${PUBLISH_PROFILES[@]}" \
-      "${mvn_goals[@]}" 1>> "$mvn_log_file" 2> >( tee -a "$mvn_log_file" >&2 ); then
+  if ! "${MVN[@]}" clean deploy -DskipTests -Dcheckstyle.skip=true "${PUBLISH_PROFILES[@]}" \
+      -DaltStagingDirectory="${staging_dir}" "${PUBLISH_PROFILES[@]}" "${mvn_extra_flags[@]}" \
+      1>> "$mvn_log_file" 2> >( tee -a "$mvn_log_file" >&2 ); then
     error "Deploy build failed, for details see log at '$mvn_log_file'."
+  fi
+  local hadoop3_version
+  if should_build_with_hadoop3 pom.xml; then
+    hadoop3_version="$(get_hadoop3_version "${RELEASE_VERSION}")"
+    hadoop3_staging_dir="${staging_dir}-hadoop3"
+    log "Deploying artifacts for hadoop3..."
+    log "${MVN[@]}" clean deploy -DskipTests -Dcheckstyle.skip=true \
+      -Drevision="${hadoop3_version}" -Dhadoop.profile=3.0 \
+      -DaltStagingDirectory="${hadoop3_staging_dir}" "${PUBLISH_PROFILES[@]}" "${mvn_extra_flags[@]}"
+    {
+      echo "========================================================================"
+      echo "Deploy build for hadoop3"
+      echo "========================================================================"
+    } >> "$mvn_log_file"
+    # shellcheck disable=SC2094
+    if ! "${MVN[@]}" clean deploy -DskipTests -Dcheckstyle.skip=true "${PUBLISH_PROFILES[@]}" \
+        -Drevision="${hadoop3_version}" -Dhadoop.profile=3.0 \
+        -DaltStagingDirectory="${hadoop3_staging_dir}" "${PUBLISH_PROFILES[@]}" "${mvn_extra_flags[@]}" \
+        1>> "$mvn_log_file" 2> >( tee -a "$mvn_log_file" >&2 ); then
+      error "Deploy build failed, for details see log at '$mvn_log_file'."
+    fi
   fi
   log "BUILD SUCCESS."
   stop_step "${timing_token}"
@@ -739,4 +923,55 @@ function maven_deploy { #inputs: <snapshot|release> <log_file_path>
 # * LINUX
 function get_host_os() {
   uname -s | tr '[:lower:]' '[:upper:]'
+}
+
+function is_tracked() {
+  local file=$1
+  git ls-files --error-unmatch "$file" &>/dev/null
+  return $?
+}
+
+# When we have all the below conditions matched, we will build hadoop3 binaries
+# 1. Use $revision place holder as version in pom
+# 2. Has a hadoop-2.0 profile
+# 3. Has a hadoop-3.0 profile
+function should_build_with_hadoop3() {
+  local pom="$1"
+  maven_version="$(parse_version < "${pom}")"
+  # We do not want to expand ${revision} here, see https://maven.apache.org/maven-ci-friendly.html
+  # If we use ${revision} as placeholder, the way to bump maven version will be different
+  # shellcheck disable=SC2016
+  if [[ "${maven_version}" != '${revision}' ]]; then
+    return 1
+  fi
+  if ! xmllint --xpath "//*[local-name()='project']/*[local-name()='profiles']/*[local-name()='profile']/*[local-name()='id']/text()" "${pom}" \
+    | grep -q ^hadoop-2.0$; then
+    return 1
+  fi
+  if ! xmllint --xpath "//*[local-name()='project']/*[local-name()='profiles']/*[local-name()='profile']/*[local-name()='id']/text()" "${pom}" \
+    | grep -q ^hadoop-3.0$; then
+    return 1
+  fi
+  return 0
+}
+
+function get_hadoop3_version() {
+  local version="$1"
+  if [[ "${version}" =~ -SNAPSHOT$ ]]; then
+    echo "${version/-SNAPSHOT/-hadoop3-SNAPSHOT}"
+  else
+    echo "${version}-hadoop3"
+  fi
+}
+
+# Run mvn spotless:apply to format the code base
+# For 2.x, the generated CHANGES.md and RELEASENOTES.md may have lines end with whitespace and
+# case spotless:check failure, so we should run spotless:apply before committing
+function maven_spotless_apply() {
+  # our spotless plugin version requires at least java 11 to run, so we use java 17 here
+  JAVA_HOME="${JAVA17_HOME}" "${MVN[@]}" spotless:apply
+}
+
+function git_add_poms() {
+  find . -name pom.xml -exec git add {} \;
 }

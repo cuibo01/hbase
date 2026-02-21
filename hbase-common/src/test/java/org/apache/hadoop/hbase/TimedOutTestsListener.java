@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hbase;
 
+import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.management.LockInfo;
@@ -24,29 +25,32 @@ import java.lang.management.ManagementFactory;
 import java.lang.management.MonitorInfo;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Map;
-
 import org.junit.runner.notification.Failure;
 import org.junit.runner.notification.RunListener;
 
 /**
- * JUnit run listener which prints full thread dump into System.err
- * in case a test is failed due to timeout.
+ * JUnit run listener which prints full thread dump into System.err in case a test is failed due to
+ * timeout.
  */
 public class TimedOutTestsListener extends RunListener {
 
-  static final String TEST_TIMED_OUT_PREFIX = "test timed out after";
+  private static final String TEST_TIMED_OUT_PREFIX = "test timed out after";
+
+  private static final DateTimeFormatter TIMESTAMP_FORMATTER =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss,SSS Z").withZone(ZoneId.systemDefault());
 
   private static String INDENT = "    ";
 
   private final PrintWriter output;
 
   public TimedOutTestsListener() {
-    this.output = new PrintWriter(System.err);
+    this.output = new PrintWriter(new OutputStreamWriter(System.err, StandardCharsets.UTF_8));
   }
 
   public TimedOutTestsListener(PrintWriter output) {
@@ -55,8 +59,10 @@ public class TimedOutTestsListener extends RunListener {
 
   @Override
   public void testFailure(Failure failure) throws Exception {
-    if (failure != null && failure.getMessage() != null
-        && failure.getMessage().startsWith(TEST_TIMED_OUT_PREFIX)) {
+    if (
+      failure != null && failure.getMessage() != null
+        && failure.getMessage().startsWith(TEST_TIMED_OUT_PREFIX)
+    ) {
       output.println("====> TEST TIMED OUT. PRINTING THREAD DUMP. <====");
       output.println();
       output.print(buildThreadDiagnosticString());
@@ -68,8 +74,7 @@ public class TimedOutTestsListener extends RunListener {
     StringWriter sw = new StringWriter();
     PrintWriter output = new PrintWriter(sw);
 
-    DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss,SSS");
-    output.println(String.format("Timestamp: %s", dateFormat.format(new Date())));
+    output.println(String.format("Timestamp: %s", TIMESTAMP_FORMATTER.format(Instant.now())));
     output.println();
     output.println(buildThreadDump());
 
@@ -83,21 +88,19 @@ public class TimedOutTestsListener extends RunListener {
     return sw.toString();
   }
 
-  static String buildThreadDump() {
+  private static String buildThreadDump() {
     StringBuilder dump = new StringBuilder();
     Map<Thread, StackTraceElement[]> stackTraces = Thread.getAllStackTraces();
     for (Map.Entry<Thread, StackTraceElement[]> e : stackTraces.entrySet()) {
       Thread thread = e.getKey();
-      dump.append(String.format(
-          "\"%s\" %s prio=%d tid=%d %s\njava.lang.Thread.State: %s",
-          thread.getName(),
-          (thread.isDaemon() ? "daemon" : ""),
-          thread.getPriority(),
-          thread.getId(),
-          Thread.State.WAITING.equals(thread.getState()) ? 
-              "in Object.wait()" : thread.getState().name().toLowerCase(Locale.ROOT),
-          Thread.State.WAITING.equals(thread.getState()) ? 
-              "WAITING (on object monitor)" : thread.getState()));
+      dump.append(String.format("\"%s\" %s prio=%d tid=%d %s\njava.lang.Thread.State: %s",
+        thread.getName(), (thread.isDaemon() ? "daemon" : ""), thread.getPriority(), thread.getId(),
+        Thread.State.WAITING.equals(thread.getState())
+          ? "in Object.wait()"
+          : thread.getState().name().toLowerCase(Locale.ROOT),
+        Thread.State.WAITING.equals(thread.getState())
+          ? "WAITING (on object monitor)"
+          : thread.getState()));
       for (StackTraceElement stackTraceElement : e.getValue()) {
         dump.append("\n        at ");
         dump.append(stackTraceElement);
@@ -107,7 +110,7 @@ public class TimedOutTestsListener extends RunListener {
     return dump.toString();
   }
 
-  static String buildDeadlockInfo() {
+  private static String buildDeadlockInfo() {
     ThreadMXBean threadBean = ManagementFactory.getThreadMXBean();
     long[] threadIds = threadBean.findMonitorDeadlockedThreads();
     if (threadIds != null && threadIds.length > 0) {
@@ -148,8 +151,8 @@ public class TimedOutTestsListener extends RunListener {
   }
 
   private static void printThread(ThreadInfo ti, PrintWriter out) {
-    out.print("\"" + ti.getThreadName() + "\"" + " Id="
-        + ti.getThreadId() + " in " + ti.getThreadState());
+    out.print(
+      "\"" + ti.getThreadName() + "\"" + " Id=" + ti.getThreadId() + " in " + ti.getThreadState());
     if (ti.getLockName() != null) {
       out.print(" on lock=" + ti.getLockName());
     }
@@ -161,8 +164,7 @@ public class TimedOutTestsListener extends RunListener {
     }
     out.println();
     if (ti.getLockOwnerName() != null) {
-      out.println(INDENT + " owned by " + ti.getLockOwnerName() + " Id="
-          + ti.getLockOwnerId());
+      out.println(INDENT + " owned by " + ti.getLockOwnerName() + " Id=" + ti.getLockOwnerId());
     }
   }
 

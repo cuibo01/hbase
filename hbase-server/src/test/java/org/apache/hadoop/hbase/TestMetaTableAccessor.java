@@ -21,7 +21,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.anyObject;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
@@ -79,7 +80,6 @@ public class TestMetaTableAccessor {
   private static final Logger LOG = LoggerFactory.getLogger(TestMetaTableAccessor.class);
   private static final HBaseTestingUtil UTIL = new HBaseTestingUtil();
   private static Connection connection;
-  private Random random = new Random();
 
   @Rule
   public TestName name = new TestName();
@@ -292,9 +292,11 @@ public class TestMetaTableAccessor {
 
   @Test
   public void testMetaLocationsForRegionReplicas() throws IOException {
-    ServerName serverName0 = ServerName.valueOf("foo", 60010, random.nextLong());
-    ServerName serverName1 = ServerName.valueOf("bar", 60010, random.nextLong());
-    ServerName serverName100 = ServerName.valueOf("baz", 60010, random.nextLong());
+    Random rand = ThreadLocalRandom.current();
+
+    ServerName serverName0 = ServerName.valueOf("foo", 60010, rand.nextLong());
+    ServerName serverName1 = ServerName.valueOf("bar", 60010, rand.nextLong());
+    ServerName serverName100 = ServerName.valueOf("baz", 60010, rand.nextLong());
 
     long regionId = EnvironmentEdgeManager.currentTime();
     RegionInfo primary = RegionInfoBuilder.newBuilder(TableName.valueOf(name.getMethodName()))
@@ -307,9 +309,9 @@ public class TestMetaTableAccessor {
       .setStartKey(HConstants.EMPTY_START_ROW).setEndKey(HConstants.EMPTY_END_ROW).setSplit(false)
       .setRegionId(regionId).setReplicaId(100).build();
 
-    long seqNum0 = random.nextLong();
-    long seqNum1 = random.nextLong();
-    long seqNum100 = random.nextLong();
+    long seqNum0 = rand.nextLong();
+    long seqNum1 = rand.nextLong();
+    long seqNum100 = rand.nextLong();
 
     try (Table meta = MetaTableAccessor.getMetaHTable(connection)) {
       MetaTableAccessor.updateRegionLocation(connection, primary, serverName0, seqNum0,
@@ -403,31 +405,31 @@ public class TestMetaTableAccessor {
     HBaseTestingUtil.countRows(table);
 
     ClientMetaTableAccessor.Visitor visitor = mock(ClientMetaTableAccessor.Visitor.class);
-    doReturn(true).when(visitor).visit((Result) anyObject());
+    doReturn(true).when(visitor).visit(any());
 
     // Scanning the entire table should give us three rows
     MetaTableAccessor.scanMetaForTableRegions(connection, visitor, tableName);
-    verify(visitor, times(3)).visit((Result) anyObject());
+    verify(visitor, times(3)).visit(any());
 
     // Scanning the table with a specified empty start row should also
     // give us three hbase:meta rows
     reset(visitor);
-    doReturn(true).when(visitor).visit((Result) anyObject());
+    doReturn(true).when(visitor).visit(any());
     MetaTableAccessor.scanMeta(connection, visitor, tableName, null, 1000);
-    verify(visitor, times(3)).visit((Result) anyObject());
+    verify(visitor, times(3)).visit(any());
 
     // Scanning the table starting in the middle should give us two rows:
     // region_a and region_b
     reset(visitor);
-    doReturn(true).when(visitor).visit((Result) anyObject());
+    doReturn(true).when(visitor).visit(any());
     MetaTableAccessor.scanMeta(connection, visitor, tableName, Bytes.toBytes("region_ac"), 1000);
-    verify(visitor, times(2)).visit((Result) anyObject());
+    verify(visitor, times(2)).visit(any());
 
     // Scanning with a limit of 1 should only give us one row
     reset(visitor);
-    doReturn(true).when(visitor).visit((Result) anyObject());
+    doReturn(true).when(visitor).visit(any());
     MetaTableAccessor.scanMeta(connection, visitor, tableName, Bytes.toBytes("region_ac"), 1);
-    verify(visitor, times(1)).visit((Result) anyObject());
+    verify(visitor, times(1)).visit(any());
     table.close();
   }
 
@@ -485,7 +487,7 @@ public class TestMetaTableAccessor {
     }
 
     @Override
-    public boolean dispatch(CallRunner task) throws IOException, InterruptedException {
+    public boolean dispatch(CallRunner task) {
       int priority = task.getRpcCall().getPriority();
 
       if (priority > HConstants.QOS_THRESHOLD) {

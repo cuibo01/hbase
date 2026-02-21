@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -24,7 +24,7 @@ import javax.servlet.http.HttpServletResponse;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 
-import org.apache.hbase.thirdparty.org.eclipse.jetty.servlet.DefaultServlet;
+import org.apache.hbase.thirdparty.org.eclipse.jetty.ee8.servlet.DefaultServlet;
 
 /**
  * General servlet which is admin-authorized.
@@ -39,8 +39,7 @@ public class AdminAuthorizedServlet extends DefaultServlet {
   protected void doGet(HttpServletRequest request, HttpServletResponse response)
     throws ServletException, IOException {
     // Do the authorization
-    if (HttpServer.hasAdministratorAccess(getServletContext(), request,
-        response)) {
+    if (HttpServer.hasAdministratorAccess(getServletContext(), request, response)) {
       // Authorization is done. Just call super.
       super.doGet(request, response);
     }

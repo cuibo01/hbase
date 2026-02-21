@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver;
 
 import java.io.IOException;
@@ -30,7 +29,7 @@ import org.apache.hadoop.hbase.util.LossyCounting;
 import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Private
-public class MetricsUserAggregateImpl implements MetricsUserAggregate{
+public class MetricsUserAggregateImpl implements MetricsUserAggregate {
 
   /** Provider for mapping principal names to Users */
   private final UserProvider userProvider;
@@ -40,15 +39,15 @@ public class MetricsUserAggregateImpl implements MetricsUserAggregate{
 
   public MetricsUserAggregateImpl(Configuration conf) {
     source = CompatibilitySingletonFactory.getInstance(MetricsRegionServerSourceFactory.class)
-        .getUserAggregate();
+      .getUserAggregate();
     userMetricLossyCounting = new LossyCounting<>("userMetrics", conf, source::deregister);
     this.userProvider = UserProvider.instantiate(conf);
   }
 
   /**
-   * Returns the active user to which authorization checks should be applied.
-   * If we are in the context of an RPC call, the remote user is used,
-   * otherwise the currently logged in user is used.
+   * Returns the active user to which authorization checks should be applied. If we are in the
+   * context of an RPC call, the remote user is used, otherwise the currently logged in user is
+   * used.
    */
   private String getActiveUser() {
     Optional<User> user = RpcServer.getRequestUser();
@@ -115,30 +114,30 @@ public class MetricsUserAggregateImpl implements MetricsUserAggregate{
   }
 
   @Override
-  public void updateGet(long t) {
+  public void updateGet(long time, long blockBytesScanned) {
     String user = getActiveUser();
     if (user != null) {
       MetricsUserSource userSource = getOrCreateMetricsUser(user);
-      userSource.updateGet(t);
+      userSource.updateGet(time, blockBytesScanned);
     }
   }
 
   @Override
-  public void updateIncrement(long t) {
+  public void updateIncrement(long time, long blockBytesScanned) {
     String user = getActiveUser();
     if (user != null) {
       MetricsUserSource userSource = getOrCreateMetricsUser(user);
-      userSource.updateIncrement(t);
+      userSource.updateIncrement(time, blockBytesScanned);
       incrementClientWriteMetrics(userSource);
     }
   }
 
   @Override
-  public void updateAppend(long t) {
+  public void updateAppend(long time, long blockBytesScanned) {
     String user = getActiveUser();
     if (user != null) {
       MetricsUserSource userSource = getOrCreateMetricsUser(user);
-      userSource.updateAppend(t);
+      userSource.updateAppend(time, blockBytesScanned);
       incrementClientWriteMetrics(userSource);
     }
   }
@@ -154,15 +153,25 @@ public class MetricsUserAggregateImpl implements MetricsUserAggregate{
   }
 
   @Override
-  public void updateScanTime(long t) {
+  public void updateScan(long time, long blockBytesScanned) {
     String user = getActiveUser();
     if (user != null) {
       MetricsUserSource userSource = getOrCreateMetricsUser(user);
-      userSource.updateScanTime(t);
+      userSource.updateScan(time, blockBytesScanned);
     }
   }
 
-  @Override public void updateFilteredReadRequests() {
+  @Override
+  public void updateCheckAndMutate(long blockBytesScanned) {
+    String user = getActiveUser();
+    if (user != null) {
+      MetricsUserSource userSource = getOrCreateMetricsUser(user);
+      userSource.updateCheckAndMutate(blockBytesScanned);
+    }
+  }
+
+  @Override
+  public void updateFilteredReadRequests() {
     String user = getActiveUser();
     if (user != null) {
       MetricsUserSource userSource = getOrCreateMetricsUser(user);
@@ -170,7 +179,8 @@ public class MetricsUserAggregateImpl implements MetricsUserAggregate{
     }
   }
 
-  @Override public void updateReadRequestCount() {
+  @Override
+  public void updateReadRequestCount() {
     String user = getActiveUser();
     if (user != null) {
       MetricsUserSource userSource = getOrCreateMetricsUser(user);

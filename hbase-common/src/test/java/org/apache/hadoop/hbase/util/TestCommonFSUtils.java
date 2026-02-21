@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,7 +23,6 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
@@ -39,12 +38,12 @@ import org.junit.experimental.categories.Category;
 /**
  * Test {@link CommonFSUtils}.
  */
-@Category({MiscTests.class, SmallTests.class})
+@Category({ MiscTests.class, SmallTests.class })
 public class TestCommonFSUtils {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCommonFSUtils.class);
+    HBaseClassTestRule.forClass(TestCommonFSUtils.class);
 
   private HBaseCommonTestingUtil htu;
   private Configuration conf;
@@ -78,14 +77,6 @@ public class TestCommonFSUtils {
     assertTrue(CommonFSUtils.isStartingWithPath(rootdir, fullyQualifiedPath.toString()));
     assertFalse(CommonFSUtils.isMatchingTail(fullPath, new Path("x")));
     assertFalse(CommonFSUtils.isMatchingTail(new Path("x"), fullPath));
-  }
-
-  private void WriteDataToHDFS(FileSystem fs, Path file, int dataSize)
-    throws Exception {
-    FSDataOutputStream out = fs.create(file);
-    byte [] data = new byte[dataSize];
-    out.write(data, 0, dataSize);
-    out.close();
   }
 
   @Test
@@ -122,7 +113,7 @@ public class TestCommonFSUtils {
     assertEquals(walRoot, CommonFSUtils.getWALRootDir(conf));
   }
 
-  @Test(expected=IllegalStateException.class)
+  @Test(expected = IllegalStateException.class)
   public void testGetWALRootDirIllegalWALDir() throws IOException {
     Path root = new Path("file:///hbase/root");
     Path invalidWALDir = new Path("file:///hbase/root/logroot");

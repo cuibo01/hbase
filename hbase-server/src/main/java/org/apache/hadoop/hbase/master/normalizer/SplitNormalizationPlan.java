@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -47,10 +46,14 @@ final class SplitNormalizationPlan implements NormalizationPlan {
   }
 
   @Override
+  public long getPlanSizeMb() {
+    return splitTarget.getRegionSizeMb();
+  }
+
+  @Override
   public String toString() {
     return new ToStringBuilder(this, ToStringStyle.SHORT_PREFIX_STYLE)
-      .append("splitTarget", splitTarget)
-      .toString();
+      .append("splitTarget", splitTarget).toString();
   }
 
   @Override
@@ -65,14 +68,11 @@ final class SplitNormalizationPlan implements NormalizationPlan {
 
     SplitNormalizationPlan that = (SplitNormalizationPlan) o;
 
-    return new EqualsBuilder()
-      .append(splitTarget, that.splitTarget)
-      .isEquals();
+    return new EqualsBuilder().append(splitTarget, that.splitTarget).isEquals();
   }
 
-  @Override public int hashCode() {
-    return new HashCodeBuilder(17, 37)
-      .append(splitTarget)
-      .toHashCode();
+  @Override
+  public int hashCode() {
+    return new HashCodeBuilder(17, 37).append(splitTarget).toHashCode();
   }
 }

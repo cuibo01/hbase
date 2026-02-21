@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.chaos.actions;
 
 import java.io.IOException;
@@ -23,8 +22,8 @@ import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.util.Threads;
 
 /**
-* Base class for restarting HBaseServer's
-*/
+ * Base class for restarting HBaseServer's
+ */
 public abstract class RestartActionBaseAction extends Action {
   long sleepTime; // how long should we sleep
 
@@ -53,7 +52,7 @@ public abstract class RestartActionBaseAction extends Action {
 
   /**
    * Stop and then restart the region server instead of killing it.
-   * @param server hostname to restart the regionserver on
+   * @param server    hostname to restart the regionserver on
    * @param sleepTime number of milliseconds between stop and restart
    * @throws IOException if something goes wrong
    */
@@ -81,6 +80,8 @@ public abstract class RestartActionBaseAction extends Action {
     sleep(sleepTime);
     getLogger().info("Starting region server: {}", server);
     startRs(server);
+    // Sleep some time to make sure RS is online.
+    sleep(sleepTime);
   }
 
   void restartZKNode(ServerName server, long sleepTime) throws IOException {
@@ -120,5 +121,18 @@ public abstract class RestartActionBaseAction extends Action {
     sleep(sleepTime);
     getLogger().info("Starting name node: {}", server);
     startNameNode(server);
+  }
+
+  void restartJournalNode(ServerName server, long sleepTime) throws IOException {
+    sleepTime = Math.max(sleepTime, 1000);
+    // Don't try the kill if we're stopping
+    if (context.isStopping()) {
+      return;
+    }
+    getLogger().info("Killing journal node: {}", server);
+    killJournalNode(server);
+    sleep(sleepTime);
+    getLogger().info("Starting journal node: {}", server);
+    startJournalNode(server);
   }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -29,6 +29,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
@@ -70,12 +71,12 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.common.io.Closeables;
 
-@Category({ReplicationTests.class, MediumTests.class})
+@Category({ ReplicationTests.class, MediumTests.class })
 public class TestReplicationWithTags {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestReplicationWithTags.class);
+    HBaseClassTestRule.forClass(TestReplicationWithTags.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestReplicationWithTags.class);
   private static final byte TAG_TYPE = 1;
@@ -114,7 +115,7 @@ public class TestReplicationWithTags {
     conf1.setBoolean("hbase.tests.use.shortcircuit.reads", false);
     conf1.setStrings(HConstants.REPLICATION_CODEC_CONF_KEY, KeyValueCodecWithTags.class.getName());
     conf1.setStrings(CoprocessorHost.USER_REGION_COPROCESSOR_CONF_KEY,
-        TestCoprocessorForTagsAtSource.class.getName());
+      TestCoprocessorForTagsAtSource.class.getName());
 
     utility1 = new HBaseTestingUtil(conf1);
     utility1.startMiniZKCluster();
@@ -132,7 +133,7 @@ public class TestReplicationWithTags {
     conf2.setBoolean("hbase.tests.use.shortcircuit.reads", false);
     conf2.setStrings(HConstants.REPLICATION_CODEC_CONF_KEY, KeyValueCodecWithTags.class.getName());
     conf2.setStrings(CoprocessorHost.USER_REGION_COPROCESSOR_CONF_KEY,
-            TestCoprocessorForTagsAtSink.class.getName());
+      TestCoprocessorForTagsAtSink.class.getName());
 
     utility2 = new HBaseTestingUtil(conf2);
     utility2.setZkCluster(miniZK);
@@ -143,8 +144,8 @@ public class TestReplicationWithTags {
 
     connection1 = ConnectionFactory.createConnection(conf1);
     replicationAdmin = connection1.getAdmin();
-    ReplicationPeerConfig rpc = ReplicationPeerConfig.newBuilder()
-      .setClusterKey(utility2.getClusterKey()).build();
+    ReplicationPeerConfig rpc =
+      ReplicationPeerConfig.newBuilder().setClusterKey(utility2.getRpcConnnectionURI()).build();
     replicationAdmin.addReplicationPeer("2", rpc);
 
     TableDescriptor tableDescriptor = TableDescriptorBuilder.newBuilder(TABLE_NAME)
@@ -152,11 +153,11 @@ public class TestReplicationWithTags {
         .setScope(HConstants.REPLICATION_SCOPE_GLOBAL).build())
       .build();
     try (Connection conn = ConnectionFactory.createConnection(conf1);
-        Admin admin = conn.getAdmin()) {
+      Admin admin = conn.getAdmin()) {
       admin.createTable(tableDescriptor, HBaseTestingUtil.KEYS_FOR_HBA_CREATE_TABLE);
     }
     try (Connection conn = ConnectionFactory.createConnection(conf2);
-        Admin admin = conn.getAdmin()) {
+      Admin admin = conn.getAdmin()) {
       admin.createTable(tableDescriptor, HBaseTestingUtil.KEYS_FOR_HBA_CREATE_TABLE);
     }
     htable1 = utility1.getConnection().getTable(TABLE_NAME);
@@ -211,15 +212,15 @@ public class TestReplicationWithTags {
     }
 
     @Override
-    public void prePut(final ObserverContext<RegionCoprocessorEnvironment> e, final Put put,
-        final WALEdit edit, final Durability durability) throws IOException {
+    public void prePut(final ObserverContext<? extends RegionCoprocessorEnvironment> e,
+      final Put put, final WALEdit edit, final Durability durability) throws IOException {
       byte[] attribute = put.getAttribute("visibility");
       byte[] cf = null;
       List<Cell> updatedCells = new ArrayList<>();
       if (attribute != null) {
         for (List<? extends Cell> edits : put.getFamilyCellMap().values()) {
           for (Cell cell : edits) {
-            KeyValue kv = KeyValueUtil.ensureKeyValue(cell);
+            KeyValue kv = KeyValueUtil.ensureKeyValue((ExtendedCell) cell);
             if (cf == null) {
               cf = CellUtil.cloneFamily(kv);
             }
@@ -227,11 +228,11 @@ public class TestReplicationWithTags {
             List<Tag> tagList = new ArrayList<>(1);
             tagList.add(tag);
 
-            KeyValue newKV = new KeyValue(CellUtil.cloneRow(kv), 0, kv.getRowLength(),
-                CellUtil.cloneFamily(kv), 0, kv.getFamilyLength(), CellUtil.cloneQualifier(kv), 0,
-                kv.getQualifierLength(), kv.getTimestamp(),
-                KeyValue.Type.codeToType(kv.getTypeByte()), CellUtil.cloneValue(kv), 0,
-                kv.getValueLength(), tagList);
+            KeyValue newKV =
+              new KeyValue(CellUtil.cloneRow(kv), 0, kv.getRowLength(), CellUtil.cloneFamily(kv), 0,
+                kv.getFamilyLength(), CellUtil.cloneQualifier(kv), 0, kv.getQualifierLength(),
+                kv.getTimestamp(), KeyValue.Type.codeToType(kv.getTypeByte()),
+                CellUtil.cloneValue(kv), 0, kv.getValueLength(), tagList);
             ((List<Cell>) updatedCells).add(newKV);
           }
         }
@@ -251,13 +252,13 @@ public class TestReplicationWithTags {
     }
 
     @Override
-    public void postGetOp(ObserverContext<RegionCoprocessorEnvironment> e, Get get,
-        List<Cell> results) throws IOException {
+    public void postGetOp(ObserverContext<? extends RegionCoprocessorEnvironment> e, Get get,
+      List<Cell> results) throws IOException {
       if (results.size() > 0) {
         // Check tag presence in the 1st cell in 1st Result
         if (!results.isEmpty()) {
           Cell cell = results.get(0);
-          TAGS = PrivateCellUtil.getTags(cell);
+          TAGS = PrivateCellUtil.getTags((ExtendedCell) cell);
         }
       }
     }

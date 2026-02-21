@@ -26,6 +26,7 @@
   import="org.apache.hadoop.hbase.regionserver.HRegionServer"
   import="org.apache.hadoop.hbase.HConstants"
   import="org.apache.hadoop.hbase.shaded.protobuf.generated.TooSlowLog"
+  import="org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil"
   import="org.apache.hadoop.hbase.namequeues.NamedQueueRecorder"
   import="org.apache.hadoop.hbase.namequeues.RpcLogDetails"
   import="org.apache.hadoop.hbase.namequeues.request.NamedQueueGetRequest"
@@ -80,23 +81,25 @@
     </div>
   </div>
 <div class="tabbable">
-  <ul class="nav nav-pills">
-    <li class="active">
-      <a href="#tab_named_queue1" data-toggle="tab"> Slow RPCs </a>
+  <ul class="nav nav-pills" role="tablist">
+    <li class="nav-item">
+      <a class="nav-link active" href="#tab_named_queue1" data-bs-toggle="tab" role="tab"> Slow RPCs </a>
     </li>
-    <li class="">
-      <a href="#tab_named_queue2" data-toggle="tab"> Large Response RPCs </a>
+    <li class="nav-item">
+      <a class="nav-link" href="#tab_named_queue2" data-bs-toggle="tab" role="tab"> Large Response RPCs </a>
     </li>
   </ul>
-    <div class="tab-content" style="padding-bottom: 9px; border-bottom: 1px solid #ddd;">
-      <div class="tab-pane active" id="tab_named_queue1">
+    <div class="tab-content">
+      <div class="tab-pane active" id="tab_named_queue1" role="tabpanel">
       <p>Slow RPCs record those RPCs whose processing time is greater than the threshold (see the setting 'hbase.ipc.warn.response.time' for details)</p>
         <table class="table table-striped" style="white-space:nowrap">
         <tr>
             <th>Start Time</th>
             <th>Processing Time</th>
             <th>Queue Time</th>
+            <th>FsRead Time</th>
             <th>Response Size</th>
+            <th>Block Bytes Scanned</th>
             <th>Client Address</th>
             <th>Server Class</th>
             <th>Method Name</th>
@@ -107,6 +110,8 @@
             <th>MultiService Calls</th>
             <th>Call Details</th>
             <th>Param</th>
+            <th>Request Attributes</th>
+            <th>Connection Attributes</th>
           </tr>
           <% if (slowLogs != null && !slowLogs.isEmpty()) {%>
             <% for (TooSlowLog.SlowLogPayload r : slowLogs) { %>
@@ -114,7 +119,9 @@
              <td><%=new Date(r.getStartTime() + 1800*1000)%></td>
              <td><%=r.getProcessingTime()%>ms</td>
              <td><%=r.getQueueTime()%>ms</td>
+             <td><%=r.getFsReadTime()%>ms</td>
              <td><%=StringUtils.byteDesc(r.getResponseSize())%></td>
+             <td><%=StringUtils.byteDesc(r.getBlockBytesScanned())%></td>
              <td><%=r.getClientAddress()%></td>
              <td><%=r.getServerClass()%></td>
              <td><%=r.getMethodName()%></td>
@@ -125,19 +132,23 @@
              <td><%=r.getMultiServiceCalls()%></td>
              <td><%=r.getCallDetails()%></td>
              <td><%=r.getParam()%></td>
+             <td><%=ProtobufUtil.convertAttributesToCsv(r.getRequestAttributeList())%></td>
+             <td><%=ProtobufUtil.convertAttributesToCsv(r.getConnectionAttributeList())%></td>
             </tr>
             <% } %>
           <% } %>
           </table>
       </div>
-      <div class="tab-pane" id="tab_named_queue2">
+      <div class="tab-pane" id="tab_named_queue2" role="tabpanel">
         <p>Large response RPCs record those RPCs whose returned data size is greater than the threshold (see the setting'hbase.ipc.warn.response.size' for details)</p>
           <table class="table table-striped" style="white-space:nowrap">
           <tr>
             <th>Start Time</th>
             <th>Processing Time</th>
             <th>Queue Time</th>
+            <th>FsRead Time</th>
             <th>Response Size</th>
+            <th>Block Bytes Scanned</th>
             <th>Client Address</th>
             <th>Server Class</th>
             <th>Method Name</th>
@@ -148,6 +159,8 @@
             <th>MultiService Calls</th>
             <th>Call Details</th>
             <th>Param</th>
+            <th>Request Attributes</th>
+            <th>Connection Attributes</th>
           </tr>
           <% if (largeLogs != null && !largeLogs.isEmpty()) {%>
             <% for (TooSlowLog.SlowLogPayload r : largeLogs) { %>
@@ -155,7 +168,9 @@
              <td><%=new Date(r.getStartTime() + 1800*1000)%></td>
              <td><%=r.getProcessingTime()%>ms</td>
              <td><%=r.getQueueTime()%>ms</td>
+             <td><%=r.getFsReadTime()%>ms</td>
              <td><%=StringUtils.byteDesc(r.getResponseSize())%></td>
+             <td><%=StringUtils.byteDesc(r.getBlockBytesScanned())%></td>
              <td><%=r.getClientAddress()%></td>
              <td><%=r.getServerClass()%></td>
              <td><%=r.getMethodName()%></td>
@@ -166,6 +181,8 @@
              <td><%=r.getMultiServiceCalls()%></td>
              <td><%=r.getCallDetails()%></td>
              <td><%=r.getParam()%></td>
+             <td><%=ProtobufUtil.convertAttributesToCsv(r.getRequestAttributeList())%></td>
+             <td><%=ProtobufUtil.convertAttributesToCsv(r.getConnectionAttributeList())%></td>
             </tr>
             <% } %>
           <% } %>

@@ -24,6 +24,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.ipc.ServerCall;
@@ -31,18 +32,19 @@ import org.apache.hadoop.hbase.regionserver.MultiVersionConcurrencyControl;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALEditInternalHelper;
 import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.apache.yetus.audience.InterfaceAudience;
 
 import org.apache.hbase.thirdparty.org.apache.commons.collections4.CollectionUtils;
 
 /**
- * A WAL Entry for {@link AbstractFSWAL} implementation.  Immutable.
- * A subclass of {@link Entry} that carries extra info across the ring buffer such as
- * region sequenceid (we want to use this later, just before we write the WAL to ensure region
- * edits maintain order).  The extra info added here is not 'serialized' as part of the WALEdit
- * hence marked 'transient' to underline this fact.  It also adds mechanism so we can wait on
- * the assign of the region sequence id.  See #stampRegionSequenceId().
+ * A WAL Entry for {@link AbstractFSWAL} implementation. Immutable. A subclass of {@link Entry} that
+ * carries extra info across the ring buffer such as region sequenceid (we want to use this later,
+ * just before we write the WAL to ensure region edits maintain order). The extra info added here is
+ * not 'serialized' as part of the WALEdit hence marked 'transient' to underline this fact. It also
+ * adds mechanism so we can wait on the assign of the region sequence id. See
+ * #stampRegionSequenceId().
  */
 @InterfaceAudience.Private
 class FSWALEntry extends Entry {
@@ -51,9 +53,9 @@ class FSWALEntry extends Entry {
   private final transient long txid;
 
   /**
-   * If false, means this is a meta edit written by the hbase system itself. It was not in
-   * memstore. HBase uses these edit types to note in the log operational transitions such
-   * as compactions, flushes, or region open/closes.
+   * If false, means this is a meta edit written by the hbase system itself. It was not in memstore.
+   * HBase uses these edit types to note in the log operational transitions such as compactions,
+   * flushes, or region open/closes.
    */
   private final transient boolean inMemstore;
 
@@ -67,8 +69,8 @@ class FSWALEntry extends Entry {
   private final transient ServerCall<?> rpcCall;
 
   /**
-   * @param inMemstore If true, then this is a data edit, one that came from client. If false, it
-   *   is a meta edit made by the hbase system itself and is for the WAL only.
+   * @param inMemstore If true, then this is a data edit, one that came from client. If false, it is
+   *                   a meta edit made by the hbase system itself and is for the WAL only.
    */
   FSWALEntry(final long txid, final WALKeyImpl key, final WALEdit edit, final RegionInfo regionInfo,
     final boolean inMemstore, ServerCall<?> rpcCall) {
@@ -80,7 +82,8 @@ class FSWALEntry extends Entry {
     if (inMemstore) {
       // construct familyNames here to reduce the work of log sinker.
       Set<byte[]> families = edit.getFamilies();
-      this.familyNames = families != null ? families : collectFamilies(edit.getCells());
+      this.familyNames =
+        families != null ? families : collectFamilies(WALEditInternalHelper.getExtendedCells(edit));
     } else {
       this.familyNames = Collections.emptySet();
     }
@@ -90,12 +93,12 @@ class FSWALEntry extends Entry {
     }
   }
 
-  static Set<byte[]> collectFamilies(List<Cell> cells) {
+  static Set<byte[]> collectFamilies(List<ExtendedCell> cells) {
     if (CollectionUtils.isEmpty(cells)) {
       return Collections.emptySet();
     } else {
       Set<byte[]> set = new TreeSet<>(Bytes.BYTES_COMPARATOR);
-      for (Cell cell: cells) {
+      for (Cell cell : cells) {
         if (!WALEdit.isMetaEditFamily(cell)) {
           set.add(CellUtil.cloneFamily(cell));
         }
@@ -121,9 +124,7 @@ class FSWALEntry extends Entry {
     return this.regionInfo;
   }
 
-  /**
-   * @return The transaction id of this edit.
-   */
+  /** Returns The transaction id of this edit. */
   long getTxid() {
     return this.txid;
   }
@@ -145,9 +146,7 @@ class FSWALEntry extends Entry {
     return regionSequenceId;
   }
 
-  /**
-   * @return the family names which are effected by this edit.
-   */
+  /** Returns the family names which are effected by this edit. */
   Set<byte[]> getFamilyNames() {
     return familyNames;
   }

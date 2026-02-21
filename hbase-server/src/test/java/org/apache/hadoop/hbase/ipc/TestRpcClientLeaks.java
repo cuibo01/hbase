@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -24,6 +24,7 @@ import static org.junit.Assert.fail;
 import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketAddress;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import org.apache.hadoop.conf.Configuration;
@@ -71,8 +72,8 @@ public class TestRpcClientLeaks {
     }
 
     public MyRpcClientImpl(Configuration conf, String clusterId, SocketAddress address,
-        MetricsConnection metrics) {
-      super(conf, clusterId, address, metrics);
+      MetricsConnection metrics, Map<String, byte[]> connectionAttributes) {
+      super(conf, clusterId, address, metrics, connectionAttributes);
     }
 
     @Override
@@ -84,7 +85,7 @@ public class TestRpcClientLeaks {
           if (throwException) {
             SAVED_SOCKETS.add(socket);
             throw new IOException(
-                "Sample exception for verifying socket closure in case of exceptions.");
+              "Sample exception for verifying socket closure in case of exceptions.");
           }
         }
       };

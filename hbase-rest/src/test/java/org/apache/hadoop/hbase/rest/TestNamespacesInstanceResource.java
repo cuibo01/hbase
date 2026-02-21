@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,10 +17,10 @@
  */
 package org.apache.hadoop.hbase.rest;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
@@ -34,7 +34,6 @@ import java.util.Map;
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.TableName;
@@ -53,51 +52,45 @@ import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.RestTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.http.Header;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.ClassRule;
-import org.junit.Ignore;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 
 import org.apache.hbase.thirdparty.com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import org.apache.hbase.thirdparty.javax.ws.rs.core.MediaType;
 
-@Category({RestTests.class, MediumTests.class})
+@Tag(RestTests.TAG)
+@Tag(MediumTests.TAG)
 public class TestNamespacesInstanceResource {
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestNamespacesInstanceResource.class);
 
-  private static String NAMESPACE1 = "TestNamespacesInstanceResource1";
-  private static Map<String,String> NAMESPACE1_PROPS = new HashMap<>();
-  private static String NAMESPACE2 = "TestNamespacesInstanceResource2";
-  private static Map<String,String> NAMESPACE2_PROPS = new HashMap<>();
-  private static String NAMESPACE3 = "TestNamespacesInstanceResource3";
-  private static Map<String,String> NAMESPACE3_PROPS = new HashMap<>();
-  private static String NAMESPACE4 = "TestNamespacesInstanceResource4";
-  private static Map<String,String> NAMESPACE4_PROPS = new HashMap<>();
+  private static final String NAMESPACE1 = "TestNamespacesInstanceResource1";
+  private static final Map<String, String> NAMESPACE1_PROPS = new HashMap<>();
+  private static final String NAMESPACE2 = "TestNamespacesInstanceResource2";
+  private static final Map<String, String> NAMESPACE2_PROPS = new HashMap<>();
+  private static final String NAMESPACE3 = "TestNamespacesInstanceResource3";
+  private static final Map<String, String> NAMESPACE3_PROPS = new HashMap<>();
+  private static final String NAMESPACE4 = "TestNamespacesInstanceResource4";
+  private static final Map<String, String> NAMESPACE4_PROPS = new HashMap<>();
 
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
-  private static final HBaseRESTTestingUtility REST_TEST_UTIL =
-    new HBaseRESTTestingUtility();
+  private static final HBaseRESTTestingUtility REST_TEST_UTIL = new HBaseRESTTestingUtility();
   private static Client client;
   private static JAXBContext context;
   private static Configuration conf;
   private static TestNamespacesInstanceModel testNamespacesInstanceModel;
   protected static ObjectMapper jsonMapper;
 
-  @BeforeClass
+  @BeforeAll
   public static void setUpBeforeClass() throws Exception {
     conf = TEST_UTIL.getConfiguration();
     TEST_UTIL.startMiniCluster();
     REST_TEST_UTIL.startServletContainer(conf);
-    client = new Client(new Cluster().add("localhost",
-      REST_TEST_UTIL.getServletPort()));
+    client = new Client(new Cluster().add("localhost", REST_TEST_UTIL.getServletPort()));
     testNamespacesInstanceModel = new TestNamespacesInstanceModel();
     context = JAXBContext.newInstance(NamespacesInstanceModel.class, TableListModel.class);
-    jsonMapper = new JacksonJaxbJsonProvider()
-      .locateMapper(NamespacesInstanceModel.class, MediaType.APPLICATION_JSON_TYPE);
+    jsonMapper = new JacksonJaxbJsonProvider().locateMapper(NamespacesInstanceModel.class,
+      MediaType.APPLICATION_JSON_TYPE);
     NAMESPACE1_PROPS.put("key1", "value1");
     NAMESPACE2_PROPS.put("key2a", "value2a");
     NAMESPACE2_PROPS.put("key2b", "value2b");
@@ -106,7 +99,7 @@ public class TestNamespacesInstanceResource {
     NAMESPACE4_PROPS.put("key4b", "value4b");
   }
 
-  @AfterClass
+  @AfterAll
   public static void tearDownAfterClass() throws Exception {
     REST_TEST_UTIL.shutdownServletContainer();
     TEST_UTIL.shutdownMiniCluster();
@@ -119,12 +112,12 @@ public class TestNamespacesInstanceResource {
   }
 
   @SuppressWarnings("unchecked")
-  private static <T> T fromXML(byte[] content)
-      throws JAXBException {
-    return (T) context.createUnmarshaller().unmarshal(new ByteArrayInputStream(content));
+  private static <T> T fromXML(byte[] content, Class<T> clazz) throws JAXBException {
+    JAXBContext jaxbContext = JAXBContext.newInstance(clazz);
+    return (T) jaxbContext.createUnmarshaller().unmarshal(new ByteArrayInputStream(content));
   }
 
-  private NamespaceDescriptor findNamespace(Admin admin, String namespaceName) throws IOException{
+  private NamespaceDescriptor findNamespace(Admin admin, String namespaceName) throws IOException {
     NamespaceDescriptor[] nd = admin.listNamespaceDescriptors();
     for (NamespaceDescriptor namespaceDescriptor : nd) {
       if (namespaceDescriptor.getName().equals(namespaceName)) {
@@ -134,19 +127,19 @@ public class TestNamespacesInstanceResource {
     return null;
   }
 
-  private void checkNamespaceProperties(NamespaceDescriptor nd, Map<String,String> testProps){
+  private void checkNamespaceProperties(NamespaceDescriptor nd, Map<String, String> testProps) {
     checkNamespaceProperties(nd.getConfiguration(), testProps);
   }
 
-  private void checkNamespaceProperties(Map<String,String> namespaceProps,
-      Map<String,String> testProps){
-    assertTrue(namespaceProps.size() == testProps.size());
-    for (String key: testProps.keySet()) {
+  private void checkNamespaceProperties(Map<String, String> namespaceProps,
+    Map<String, String> testProps) {
+    assertEquals(namespaceProps.size(), testProps.size());
+    for (String key : testProps.keySet()) {
       assertEquals(testProps.get(key), namespaceProps.get(key));
     }
   }
 
-  private void checkNamespaceTables(List<TableModel> namespaceTables, List<String> testTables){
+  private void checkNamespaceTables(List<TableModel> namespaceTables, List<String> testTables) {
     assertEquals(namespaceTables.size(), testTables.size());
     for (TableModel namespaceTable : namespaceTables) {
       String tableName = namespaceTable.getName();
@@ -189,8 +182,7 @@ public class TestNamespacesInstanceResource {
 
     // Create two tables via admin.
     TableName tn1 = TableName.valueOf(nsName + ":table1");
-    TableDescriptorBuilder tableDescriptorBuilder =
-      TableDescriptorBuilder.newBuilder(tn1);
+    TableDescriptorBuilder tableDescriptorBuilder = TableDescriptorBuilder.newBuilder(tn1);
     ColumnFamilyDescriptor columnFamilyDescriptor =
       ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes("cf1")).build();
     tableDescriptorBuilder.setColumnFamily(columnFamilyDescriptor);
@@ -211,7 +203,7 @@ public class TestNamespacesInstanceResource {
 
     response = client.get(namespacePath, Constants.MIMETYPE_XML);
     assertEquals(200, response.getCode());
-    NamespacesInstanceModel model = fromXML(response.getBody());
+    NamespacesInstanceModel model = fromXML(response.getBody(), NamespacesInstanceModel.class);
     checkNamespaceProperties(model.getProperties(), nsProperties);
 
     response = client.get(namespacePath, Constants.MIMETYPE_JSON);
@@ -231,7 +223,7 @@ public class TestNamespacesInstanceResource {
 
     response = client.get(namespacePath, Constants.MIMETYPE_XML);
     assertEquals(200, response.getCode());
-    TableListModel tablemodel = fromXML(response.getBody());
+    TableListModel tablemodel = fromXML(response.getBody(), TableListModel.class);
     checkNamespaceTables(tablemodel.getTables(), nsTables);
 
     response = client.get(namespacePath, Constants.MIMETYPE_JSON);
@@ -251,7 +243,6 @@ public class TestNamespacesInstanceResource {
     assertEquals(503, response.getCode());
   }
 
-  @Ignore("HBASE-19210")
   @Test
   public void testInvalidNamespacePostsAndPuts() throws IOException, JAXBException {
     String namespacePath1 = "/namespaces/" + NAMESPACE1;
@@ -336,7 +327,7 @@ public class TestNamespacesInstanceResource {
     jsonString = jsonMapper.writeValueAsString(model2);
     response = client.post(namespacePath2, Constants.MIMETYPE_JSON, Bytes.toBytes(jsonString));
     assertEquals(201, response.getCode());
-    //check passing null content-type with a payload returns 415
+    // check passing null content-type with a payload returns 415
     Header[] nullHeaders = null;
     response = client.post(namespacePath1, nullHeaders, toXML(model1));
     assertEquals(415, response.getCode());
@@ -392,23 +383,23 @@ public class TestNamespacesInstanceResource {
     model4 = testNamespacesInstanceModel.buildTestModel(NAMESPACE4, NAMESPACE4_PROPS);
     testNamespacesInstanceModel.checkModel(model4, NAMESPACE4, NAMESPACE4_PROPS);
 
-    //Defines null headers for use in tests where no body content is provided, so that we set
+    // Defines null headers for use in tests where no body content is provided, so that we set
     // no content-type in the request
     Header[] nullHeaders = null;
 
     // Test cannot PUT (alter) non-existent namespace.
-    response = client.put(namespacePath3, nullHeaders, new byte[]{});
+    response = client.put(namespacePath3, nullHeaders, new byte[] {});
     assertEquals(403, response.getCode());
-    response = client.put(namespacePath4, Constants.MIMETYPE_PROTOBUF,
-      model4.createProtobufOutput());
+    response =
+      client.put(namespacePath4, Constants.MIMETYPE_PROTOBUF, model4.createProtobufOutput());
     assertEquals(403, response.getCode());
 
     // Test cannot create tables when in read only mode.
     conf.set("hbase.rest.readonly", "true");
-    response = client.post(namespacePath3, nullHeaders, new byte[]{});
+    response = client.post(namespacePath3, nullHeaders, new byte[] {});
     assertEquals(403, response.getCode());
-    response = client.put(namespacePath4, Constants.MIMETYPE_PROTOBUF,
-      model4.createProtobufOutput());
+    response =
+      client.put(namespacePath4, Constants.MIMETYPE_PROTOBUF, model4.createProtobufOutput());
     assertEquals(403, response.getCode());
     NamespaceDescriptor nd3 = findNamespace(admin, NAMESPACE3);
     NamespaceDescriptor nd4 = findNamespace(admin, NAMESPACE4);
@@ -417,14 +408,14 @@ public class TestNamespacesInstanceResource {
     conf.set("hbase.rest.readonly", "false");
 
     // Create namespace with no body and binary content type.
-    response = client.post(namespacePath3, nullHeaders, new byte[]{});
+    response = client.post(namespacePath3, nullHeaders, new byte[] {});
     assertEquals(201, response.getCode());
     // Create namespace with protobuf content-type.
-    response = client.post(namespacePath4, Constants.MIMETYPE_PROTOBUF,
-      model4.createProtobufOutput());
+    response =
+      client.post(namespacePath4, Constants.MIMETYPE_PROTOBUF, model4.createProtobufOutput());
     assertEquals(201, response.getCode());
-    //check setting unsupported content-type returns 415
-    response = client.post(namespacePath3, Constants.MIMETYPE_BINARY, new byte[]{});
+    // check setting unsupported content-type returns 415
+    response = client.post(namespacePath3, Constants.MIMETYPE_BINARY, new byte[] {});
     assertEquals(415, response.getCode());
 
     // Check that created namespaces correctly.
@@ -436,10 +427,10 @@ public class TestNamespacesInstanceResource {
     checkNamespaceProperties(nd4, NAMESPACE4_PROPS);
 
     // Check cannot post tables that already exist.
-    response = client.post(namespacePath3, nullHeaders, new byte[]{});
+    response = client.post(namespacePath3, nullHeaders, new byte[] {});
     assertEquals(403, response.getCode());
-    response = client.post(namespacePath4, Constants.MIMETYPE_PROTOBUF,
-      model4.createProtobufOutput());
+    response =
+      client.post(namespacePath4, Constants.MIMETYPE_PROTOBUF, model4.createProtobufOutput());
     assertEquals(403, response.getCode());
 
     // Check cannot post tables when in read only mode.

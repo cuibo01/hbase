@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -34,6 +34,7 @@ import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.regionserver.StorefileRefresherChore;
+import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -74,11 +75,13 @@ public class TestAsyncTableUseMetaReplicas {
     }
 
     @Override
-    public void preScannerOpen(ObserverContext<RegionCoprocessorEnvironment> c, Scan scan)
-        throws IOException {
+    public void preScannerOpen(ObserverContext<? extends RegionCoprocessorEnvironment> c, Scan scan)
+      throws IOException {
       RegionInfo region = c.getEnvironment().getRegionInfo();
-      if (FAIL_PRIMARY_SCAN && TableName.isMetaTableName(region.getTable()) &&
-        region.getReplicaId() == RegionReplicaUtil.DEFAULT_REPLICA_ID) {
+      if (
+        FAIL_PRIMARY_SCAN && TableName.isMetaTableName(region.getTable())
+          && region.getReplicaId() == RegionReplicaUtil.DEFAULT_REPLICA_ID
+      ) {
         throw new IOException("Inject error");
       }
     }
@@ -92,7 +95,7 @@ public class TestAsyncTableUseMetaReplicas {
       FailPrimaryMetaScanCp.class.getName());
     UTIL.startMiniCluster(3);
     HBaseTestingUtil.setReplicas(UTIL.getAdmin(), TableName.META_TABLE_NAME, 3);
-    try (ConnectionRegistry registry = ConnectionRegistryFactory.getRegistry(conf)) {
+    try (ConnectionRegistry registry = ConnectionRegistryFactory.create(conf, User.getCurrent())) {
       RegionReplicaTestHelper.waitUntilAllMetaReplicasAreReady(UTIL, registry);
     }
     try (Table table = UTIL.createTable(TABLE_NAME, FAMILY)) {
@@ -116,7 +119,7 @@ public class TestAsyncTableUseMetaReplicas {
   }
 
   private void testRead(boolean useMetaReplicas)
-      throws IOException, InterruptedException, ExecutionException {
+    throws IOException, InterruptedException, ExecutionException {
     FAIL_PRIMARY_SCAN = true;
     Configuration conf = new Configuration(UTIL.getConfiguration());
     conf.setBoolean(HConstants.USE_META_REPLICAS, useMetaReplicas);
@@ -130,7 +133,7 @@ public class TestAsyncTableUseMetaReplicas {
 
   @Test(expected = RetriesExhaustedException.class)
   public void testNotUseMetaReplicas()
-      throws IOException, InterruptedException, ExecutionException {
+    throws IOException, InterruptedException, ExecutionException {
     testRead(false);
   }
 

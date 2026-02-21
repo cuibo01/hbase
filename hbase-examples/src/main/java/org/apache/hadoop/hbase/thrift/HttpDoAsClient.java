@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,7 +25,6 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.security.auth.Subject;
@@ -37,8 +35,6 @@ import javax.security.auth.login.LoginContext;
 import org.apache.hadoop.hbase.thrift.generated.AlreadyExists;
 import org.apache.hadoop.hbase.thrift.generated.ColumnDescriptor;
 import org.apache.hadoop.hbase.thrift.generated.Hbase;
-import org.apache.hadoop.hbase.thrift.generated.TCell;
-import org.apache.hadoop.hbase.thrift.generated.TRowResult;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClientUtils;
 import org.apache.thrift.protocol.TBinaryProtocol;
@@ -74,7 +70,7 @@ public class HttpDoAsClient {
     if (args.length < 3 || args.length > 6) {
       System.out.println("Invalid arguments!");
       System.out.println(
-          "Usage: HttpDoAsClient host port doAsUserName [security=true] [principal] [keytab]");
+        "Usage: HttpDoAsClient host port doAsUserName [security=true] [principal] [keytab]");
       System.exit(-1);
     }
 
@@ -96,14 +92,13 @@ public class HttpDoAsClient {
     }
 
     final HttpDoAsClient client = new HttpDoAsClient();
-    Subject.doAs(getSubject(),
-        new PrivilegedExceptionAction<Void>() {
-          @Override
-          public Void run() throws Exception {
-            client.run();
-            return null;
-          }
-        });
+    Subject.doAs(getSubject(), new PrivilegedExceptionAction<Void>() {
+      @Override
+      public Void run() throws Exception {
+        client.run();
+        return null;
+      }
+    });
   }
 
   HttpDoAsClient() {
@@ -131,13 +126,13 @@ public class HttpDoAsClient {
     //
     System.out.println("scanning tables...");
     for (ByteBuffer name : refresh(client, httpClient).getTableNames()) {
-      System.out.println("  found: " + ClientUtils.utf8(name.array()));
-      if (ClientUtils.utf8(name.array()).equals(ClientUtils.utf8(t))) {
+      System.out.println("  found: " + ClientUtils.utf8(name));
+      if (ClientUtils.utf8(name).equals(ClientUtils.utf8(t))) {
         if (refresh(client, httpClient).isTableEnabled(name)) {
-          System.out.println("    disabling table: " + ClientUtils.utf8(name.array()));
+          System.out.println("    disabling table: " + ClientUtils.utf8(name));
           refresh(client, httpClient).disableTable(name);
         }
-        System.out.println("    deleting table: " + ClientUtils.utf8(name.array()));
+        System.out.println("    deleting table: " + ClientUtils.utf8(name));
         refresh(client, httpClient).deleteTable(name);
       }
     }
@@ -166,11 +161,11 @@ public class HttpDoAsClient {
     }
 
     System.out.println("column families in " + ClientUtils.utf8(t) + ": ");
-    Map<ByteBuffer, ColumnDescriptor> columnMap = refresh(client, httpClient)
-        .getColumnDescriptors(ByteBuffer.wrap(t));
+    Map<ByteBuffer, ColumnDescriptor> columnMap =
+      refresh(client, httpClient).getColumnDescriptors(ByteBuffer.wrap(t));
     for (ColumnDescriptor col2 : columnMap.values()) {
-      System.out.println("  column: " + ClientUtils.utf8(col2.name.array()) + ", maxVer: "
-          + col2.maxVersions);
+      System.out
+        .println("  column: " + ClientUtils.utf8(col2.name) + ", maxVer: " + col2.maxVersions);
     }
 
     transport.close();
@@ -194,42 +189,24 @@ public class HttpDoAsClient {
     // Oid for kerberos principal name
     Oid krb5PrincipalOid = new Oid("1.2.840.113554.1.2.2.1");
     Oid KERB_V5_OID = new Oid("1.2.840.113554.1.2.2");
-    final GSSName clientName = manager.createName(principal,
-        krb5PrincipalOid);
-    final GSSCredential clientCred = manager.createCredential(clientName,
-        8 * 3600,
-        KERB_V5_OID,
-        GSSCredential.INITIATE_ONLY);
+    final GSSName clientName = manager.createName(principal, krb5PrincipalOid);
+    final GSSCredential clientCred =
+      manager.createCredential(clientName, 8 * 3600, KERB_V5_OID, GSSCredential.INITIATE_ONLY);
 
     final GSSName serverName = manager.createName(principal, krb5PrincipalOid);
 
-    final GSSContext context = manager.createContext(serverName,
-        KERB_V5_OID,
-        clientCred,
-        GSSContext.DEFAULT_LIFETIME);
+    final GSSContext context =
+      manager.createContext(serverName, KERB_V5_OID, clientCred, GSSContext.DEFAULT_LIFETIME);
     context.requestMutualAuth(true);
     context.requestConf(false);
     context.requestInteg(true);
 
     final byte[] outToken = context.initSecContext(new byte[0], 0, 0);
-    StringBuffer outputBuffer = new StringBuffer();
+    StringBuilder outputBuffer = new StringBuilder();
     outputBuffer.append("Negotiate ");
     outputBuffer.append(Bytes.toString(Base64.getEncoder().encode(outToken)));
     System.out.print("Ticket is: " + outputBuffer);
     return outputBuffer.toString();
-  }
-
-  private void printVersions(ByteBuffer row, List<TCell> versions) {
-    StringBuilder rowStr = new StringBuilder();
-    for (TCell cell : versions) {
-      rowStr.append(ClientUtils.utf8(cell.value.array()));
-      rowStr.append("; ");
-    }
-    System.out.println("row: " + ClientUtils.utf8(row.array()) + ", values: " + rowStr);
-  }
-
-  private void printRow(TRowResult rowResult) {
-    ClientUtils.printRow(rowResult);
   }
 
   static Subject getSubject() throws Exception {
@@ -238,8 +215,8 @@ public class HttpDoAsClient {
     }
 
     /*
-     * To authenticate the DemoClient, kinit should be invoked ahead.
-     * Here we try to get the Kerberos credential from the ticket cache.
+     * To authenticate the DemoClient, kinit should be invoked ahead. Here we try to get the
+     * Kerberos credential from the ticket cache.
      */
     LoginContext context;
 
@@ -247,14 +224,13 @@ public class HttpDoAsClient {
       // To authenticate the HttpDoAsClient using principal and keyTab
       Set<Principal> principals = new HashSet<>();
       principals.add(new KerberosPrincipal(principal));
-      Subject subject =
-          new Subject(false, principals, new HashSet<>(), new HashSet<>());
+      Subject subject = new Subject(false, principals, new HashSet<>(), new HashSet<>());
 
       context = new LoginContext("", subject, null, new KerberosConfiguration(principal, keyTab));
     } else {
       /*
-       * To authenticate the HttpDoAsClient, kinit should be invoked ahead. Here we try to
-       * get the Kerberos credential from the ticket cache.
+       * To authenticate the HttpDoAsClient, kinit should be invoked ahead. Here we try to get the
+       * Kerberos credential from the ticket cache.
        */
       context = new LoginContext("", new Subject(), null, new KerberosConfiguration());
     }

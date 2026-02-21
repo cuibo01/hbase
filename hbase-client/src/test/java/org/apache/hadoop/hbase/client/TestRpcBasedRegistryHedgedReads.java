@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,6 +23,7 @@ import static org.junit.Assert.assertThrows;
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -57,7 +58,9 @@ import org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback;
 import org.apache.hbase.thirdparty.com.google.protobuf.RpcChannel;
 import org.apache.hbase.thirdparty.com.google.protobuf.RpcController;
 
+import org.apache.hadoop.hbase.shaded.protobuf.generated.RegistryProtos.ConnectionRegistryService;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RegistryProtos.GetClusterIdResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.RegistryProtos.GetConnectionRegistryResponse;
 
 @Category({ ClientTests.class, SmallTests.class })
 public class TestRpcBasedRegistryHedgedReads {
@@ -95,7 +98,7 @@ public class TestRpcBasedRegistryHedgedReads {
   public static final class RpcClientImpl implements RpcClient {
 
     public RpcClientImpl(Configuration configuration, String clusterId, SocketAddress localAddress,
-      MetricsConnection metrics) {
+      MetricsConnection metrics, Map<String, byte[]> attributes) {
     }
 
     @Override
@@ -131,6 +134,12 @@ public class TestRpcBasedRegistryHedgedReads {
     @Override
     public void callMethod(MethodDescriptor method, RpcController controller, Message request,
       Message responsePrototype, RpcCallback<Message> done) {
+      if (method.getService().equals(ConnectionRegistryService.getDescriptor())) {
+        // this is for setting up the rpc client
+        done.run(
+          GetConnectionRegistryResponse.newBuilder().setClusterId(RESP.getClusterId()).build());
+        return;
+      }
       if (!method.getName().equals("GetClusterId")) {
         // On RPC failures, MasterRegistry internally runs getMasters() RPC to keep the master list
         // fresh. We do not want to intercept those RPCs here and double count.
@@ -154,9 +163,9 @@ public class TestRpcBasedRegistryHedgedReads {
   private AbstractRpcBasedConnectionRegistry createRegistry(int hedged) throws IOException {
     Configuration conf = UTIL.getConfiguration();
     conf.setInt(HEDGED_REQS_FANOUT_CONFIG_NAME, hedged);
-    return new AbstractRpcBasedConnectionRegistry(conf, HEDGED_REQS_FANOUT_CONFIG_NAME,
-      INITIAL_DELAY_SECS_CONFIG_NAME, REFRESH_INTERVAL_SECS_CONFIG_NAME,
-      MIN_REFRESH_INTERVAL_SECS_CONFIG_NAME) {
+    return new AbstractRpcBasedConnectionRegistry(conf, User.getCurrent(),
+      HEDGED_REQS_FANOUT_CONFIG_NAME, INITIAL_DELAY_SECS_CONFIG_NAME,
+      REFRESH_INTERVAL_SECS_CONFIG_NAME, MIN_REFRESH_INTERVAL_SECS_CONFIG_NAME) {
 
       @Override
       protected Set<ServerName> getBootstrapNodes(Configuration conf) throws IOException {
@@ -168,7 +177,8 @@ public class TestRpcBasedRegistryHedgedReads {
         return CompletableFuture.completedFuture(BOOTSTRAP_NODES);
       }
 
-      @Override public String getConnectionString() {
+      @Override
+      public String getConnectionString() {
         return "unimplemented";
       }
     };

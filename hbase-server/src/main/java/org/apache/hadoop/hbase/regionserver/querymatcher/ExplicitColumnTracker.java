@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,13 +19,12 @@ package org.apache.hadoop.hbase.regionserver.querymatcher;
 
 import java.io.IOException;
 import java.util.NavigableSet;
-
-import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.PrivateCellUtil;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.regionserver.querymatcher.ScanQueryMatcher.MatchCode;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * This class is used for the tracking and enforcement of columns and numbers of versions during the
@@ -68,13 +67,13 @@ public class ExplicitColumnTracker implements ColumnTracker {
 
   /**
    * Default constructor.
-   * @param columns columns specified user in query
-   * @param minVersions minimum number of versions to keep
-   * @param maxVersions maximum versions to return per column
+   * @param columns           columns specified user in query
+   * @param minVersions       minimum number of versions to keep
+   * @param maxVersions       maximum versions to return per column
    * @param oldestUnexpiredTS the oldest timestamp we are interested in, based on TTL
    */
   public ExplicitColumnTracker(NavigableSet<byte[]> columns, int minVersions, int maxVersions,
-      long oldestUnexpiredTS) {
+    long oldestUnexpiredTS) {
     this.maxVersions = maxVersions;
     this.minVersions = minVersions;
     this.oldestStamp = oldestUnexpiredTS;
@@ -103,7 +102,7 @@ public class ExplicitColumnTracker implements ColumnTracker {
    * {@inheritDoc}
    */
   @Override
-  public ScanQueryMatcher.MatchCode checkColumn(Cell cell, byte type) {
+  public ScanQueryMatcher.MatchCode checkColumn(ExtendedCell cell, byte type) {
     // delete markers should never be passed to an
     // *Explicit*ColumnTracker
     assert !PrivateCellUtil.isDelete(type);
@@ -153,8 +152,8 @@ public class ExplicitColumnTracker implements ColumnTracker {
   }
 
   @Override
-  public ScanQueryMatcher.MatchCode checkVersions(Cell cell, long timestamp, byte type,
-      boolean ignoreCount) throws IOException {
+  public ScanQueryMatcher.MatchCode checkVersions(ExtendedCell cell, long timestamp, byte type,
+    boolean ignoreCount) throws IOException {
     assert !PrivateCellUtil.isDelete(type);
     if (ignoreCount) {
       return ScanQueryMatcher.MatchCode.INCLUDE;
@@ -211,7 +210,7 @@ public class ExplicitColumnTracker implements ColumnTracker {
   }
 
   @Override
-  public void doneWithColumn(Cell cell) {
+  public void doneWithColumn(ExtendedCell cell) {
     while (this.column != null) {
       int compare = CellUtil.compareQualifiers(cell, column.getBuffer(), column.getOffset(),
         column.getLength());
@@ -233,7 +232,7 @@ public class ExplicitColumnTracker implements ColumnTracker {
   }
 
   @Override
-  public MatchCode getNextRowOrNextColumn(Cell cell) {
+  public MatchCode getNextRowOrNextColumn(ExtendedCell cell) {
     doneWithColumn(cell);
 
     if (getColumnHint() == null) {

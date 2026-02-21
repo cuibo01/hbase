@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,11 +18,10 @@
 package org.apache.hadoop.hbase.regionserver.querymatcher;
 
 import java.io.IOException;
-
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.PrivateCellUtil;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.regionserver.ScanInfo;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Query matcher for major compaction.
@@ -31,13 +30,13 @@ import org.apache.hadoop.hbase.regionserver.ScanInfo;
 public class MajorCompactionScanQueryMatcher extends DropDeletesCompactionScanQueryMatcher {
 
   public MajorCompactionScanQueryMatcher(ScanInfo scanInfo, DeleteTracker deletes,
-      ColumnTracker columns, long readPointToUse, long earliestPutTs, long oldestUnexpiredTS,
-      long now) {
+    ColumnTracker columns, long readPointToUse, long earliestPutTs, long oldestUnexpiredTS,
+    long now) {
     super(scanInfo, deletes, columns, readPointToUse, earliestPutTs, oldestUnexpiredTS, now);
   }
 
   @Override
-  public MatchCode match(Cell cell) throws IOException {
+  public MatchCode match(ExtendedCell cell) throws IOException {
     MatchCode returnCode = preCheck(cell);
     if (returnCode != null) {
       return returnCode;

@@ -23,13 +23,14 @@ import java.util.Map;
 import java.util.Set;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.conf.ConfigurationObserver;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Private
-public class ReplicationPeerImpl implements ReplicationPeer {
+public class ReplicationPeerImpl implements ReplicationPeer, ConfigurationObserver {
 
-  private final Configuration conf;
+  private volatile Configuration conf;
 
   private final String id;
 
@@ -51,13 +52,13 @@ public class ReplicationPeerImpl implements ReplicationPeer {
   /**
    * Constructor that takes all the objects required to communicate with the specified peer, except
    * for the region server addresses.
-   * @param conf configuration object to this peer
-   * @param id string representation of this peer's identifier
+   * @param conf       configuration object to this peer
+   * @param id         string representation of this peer's identifier
    * @param peerConfig configuration for the replication peer
    */
   public ReplicationPeerImpl(Configuration conf, String id, ReplicationPeerConfig peerConfig,
-      boolean peerState, SyncReplicationState syncReplicationState,
-      SyncReplicationState newSyncReplicationState) {
+    boolean peerState, SyncReplicationState syncReplicationState,
+    SyncReplicationState newSyncReplicationState) {
     this.conf = conf;
     this.id = id;
     setPeerState(peerState);
@@ -150,5 +151,10 @@ public class ReplicationPeerImpl implements ReplicationPeer {
   @Override
   public void registerPeerConfigListener(ReplicationPeerConfigListener listener) {
     this.peerConfigListeners.add(listener);
+  }
+
+  @Override
+  public void onConfigurationChange(Configuration conf) {
+    this.conf = conf;
   }
 }

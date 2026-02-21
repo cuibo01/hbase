@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.master.replication;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.client.TableDescriptor;
@@ -27,6 +28,7 @@ import org.apache.hadoop.hbase.master.TableStateManager;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.procedure.ProcedurePrepareLatch;
 import org.apache.hadoop.hbase.master.procedure.ReopenTableRegionsProcedure;
+import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureSuspendedException;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
@@ -60,7 +62,7 @@ public abstract class ModifyPeerProcedure extends AbstractPeerProcedure<PeerModi
    * all checks passes then the procedure can not be rolled back any more.
    */
   protected abstract void prePeerModification(MasterProcedureEnv env)
-      throws IOException, ReplicationException, InterruptedException;
+    throws IOException, ReplicationException, ProcedureSuspendedException;
 
   protected abstract void updatePeerStorage(MasterProcedureEnv env) throws ReplicationException;
 
@@ -74,7 +76,7 @@ public abstract class ModifyPeerProcedure extends AbstractPeerProcedure<PeerModi
    * update the peer storage.
    */
   protected abstract void postPeerModification(MasterProcedureEnv env)
-      throws IOException, ReplicationException;
+    throws IOException, ReplicationException, ProcedureSuspendedException;
 
   protected void releaseLatch(MasterProcedureEnv env) {
     ProcedurePrepareLatch.releaseLatch(latch, this);
@@ -105,7 +107,7 @@ public abstract class ModifyPeerProcedure extends AbstractPeerProcedure<PeerModi
   }
 
   protected void updateLastPushedSequenceIdForSerialPeer(MasterProcedureEnv env)
-      throws IOException, ReplicationException {
+    throws IOException, ReplicationException {
     throw new UnsupportedOperationException();
   }
 
@@ -143,8 +145,7 @@ public abstract class ModifyPeerProcedure extends AbstractPeerProcedure<PeerModi
       if (!peerConfig.needToReplicate(tn)) {
         continue;
       }
-      if (oldPeerConfig != null && oldPeerConfig.isSerial() &&
-        oldPeerConfig.needToReplicate(tn)) {
+      if (oldPeerConfig != null && oldPeerConfig.isSerial() && oldPeerConfig.needToReplicate(tn)) {
         continue;
       }
       if (needReopen(tsm, tn)) {
@@ -153,16 +154,41 @@ public abstract class ModifyPeerProcedure extends AbstractPeerProcedure<PeerModi
     }
   }
 
+  private boolean shouldFailForMigrating(MasterProcedureEnv env) throws IOException {
+    long parentProcId = getParentProcId();
+    if (
+      parentProcId != Procedure.NO_PROC_ID && env.getMasterServices().getMasterProcedureExecutor()
+        .getProcedure(parentProcId) instanceof MigrateReplicationQueueFromZkToTableProcedure
+    ) {
+      // this is scheduled by MigrateReplicationQueueFromZkToTableProcedure, should not fail it
+      return false;
+    }
+    return env.getMasterServices().getProcedures().stream()
+      .filter(p -> p instanceof MigrateReplicationQueueFromZkToTableProcedure)
+      .anyMatch(p -> !p.isFinished());
+  }
+
   @Override
   protected Flow executeFromState(MasterProcedureEnv env, PeerModificationState state)
-      throws ProcedureSuspendedException, InterruptedException {
+    throws ProcedureSuspendedException, InterruptedException {
     switch (state) {
       case PRE_PEER_MODIFICATION:
         try {
+          if (shouldFailForMigrating(env)) {
+            LOG.info("There is a pending {}, give up execution of {}",
+              MigrateReplicationQueueFromZkToTableProcedure.class.getSimpleName(),
+              getClass().getName());
+            setFailure("master-" + getPeerOperationType().name().toLowerCase() + "-peer",
+              new DoNotRetryIOException("There is a pending "
+                + MigrateReplicationQueueFromZkToTableProcedure.class.getSimpleName()));
+            releaseLatch(env);
+            return Flow.NO_MORE_STATE;
+          }
+          checkPeerModificationEnabled(env);
           prePeerModification(env);
         } catch (IOException e) {
-          LOG.warn("{} failed to call pre CP hook or the pre check is failed for peer {}, " +
-            "mark the procedure as failure and give up", getClass().getName(), peerId, e);
+          LOG.warn("{} failed to call pre CP hook or the pre check is failed for peer {}, "
+            + "mark the procedure as failure and give up", getClass().getName(), peerId, e);
           setFailure("master-" + getPeerOperationType().name().toLowerCase() + "-peer", e);
           releaseLatch(env);
           return Flow.NO_MORE_STATE;
@@ -209,7 +235,8 @@ public abstract class ModifyPeerProcedure extends AbstractPeerProcedure<PeerModi
               getClass().getName(), peerId, backoff / 1000, e));
         }
         resetRetry();
-        setNextState(enablePeerBeforeFinish() ? PeerModificationState.SERIAL_PEER_SET_PEER_ENABLED
+        setNextState(enablePeerBeforeFinish()
+          ? PeerModificationState.SERIAL_PEER_SET_PEER_ENABLED
           : PeerModificationState.POST_PEER_MODIFICATION);
         return Flow.HAS_MORE_STATE;
       case SERIAL_PEER_SET_PEER_ENABLED:
@@ -236,8 +263,8 @@ public abstract class ModifyPeerProcedure extends AbstractPeerProcedure<PeerModi
               "{} failed to call postPeerModification for peer {},  sleep {} secs",
               getClass().getName(), peerId, backoff / 1000, e));
         } catch (IOException e) {
-          LOG.warn("{} failed to call post CP hook for peer {}, " +
-            "ignore since the procedure has already done", getClass().getName(), peerId, e);
+          LOG.warn("{} failed to call post CP hook for peer {}, "
+            + "ignore since the procedure has already done", getClass().getName(), peerId, e);
         }
         releaseLatch(env);
         return Flow.NO_MORE_STATE;

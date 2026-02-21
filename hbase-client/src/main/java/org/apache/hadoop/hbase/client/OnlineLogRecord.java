@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,9 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.client;
 
+import java.util.Map;
+import java.util.Optional;
 import org.apache.commons.lang3.builder.EqualsBuilder;
 import org.apache.commons.lang3.builder.HashCodeBuilder;
 import org.apache.commons.lang3.builder.ToStringBuilder;
@@ -30,6 +30,8 @@ import org.apache.hbase.thirdparty.com.google.gson.Gson;
 import org.apache.hbase.thirdparty.com.google.gson.JsonObject;
 import org.apache.hbase.thirdparty.com.google.gson.JsonSerializer;
 
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+
 /**
  * Slow/Large Log payload for hbase-client, to be used by Admin API get_slow_responses and
  * get_large_responses
@@ -40,10 +42,9 @@ final public class OnlineLogRecord extends LogEntry {
 
   // used to convert object to pretty printed format
   // used by toJsonPrettyPrint()
-  private static final Gson GSON = GsonUtil.createGson()
-    .setPrettyPrinting()
-    .registerTypeAdapter(OnlineLogRecord.class, (JsonSerializer<OnlineLogRecord>)
-      (slowLogPayload, type, jsonSerializationContext) -> {
+  private static final Gson GSON =
+    GsonUtil.createGson().setPrettyPrinting().registerTypeAdapter(OnlineLogRecord.class,
+      (JsonSerializer<OnlineLogRecord>) (slowLogPayload, type, jsonSerializationContext) -> {
         Gson gson = new Gson();
         JsonObject jsonObj = (JsonObject) gson.toJsonTree(slowLogPayload);
         if (slowLogPayload.getMultiGetsCount() == 0) {
@@ -55,6 +56,23 @@ final public class OnlineLogRecord extends LogEntry {
         if (slowLogPayload.getMultiServiceCalls() == 0) {
           jsonObj.remove("multiServiceCalls");
         }
+        if (slowLogPayload.getRequestAttributes().isEmpty()) {
+          jsonObj.remove("requestAttributes");
+        } else {
+          jsonObj.add("requestAttributes", gson
+            .toJsonTree(ProtobufUtil.deserializeAttributes(slowLogPayload.getRequestAttributes())));
+        }
+        if (slowLogPayload.getConnectionAttributes().isEmpty()) {
+          jsonObj.remove("connectionAttributes");
+        } else {
+          jsonObj.add("connectionAttributes", gson.toJsonTree(
+            ProtobufUtil.deserializeAttributes(slowLogPayload.getConnectionAttributes())));
+        }
+        if (slowLogPayload.getScan().isPresent()) {
+          jsonObj.add("scan", gson.toJsonTree(slowLogPayload.getScan().get().toMap()));
+        } else {
+          jsonObj.remove("scan");
+        }
         return jsonObj;
       }).create();
 
@@ -62,6 +80,8 @@ final public class OnlineLogRecord extends LogEntry {
   private final int processingTime;
   private final int queueTime;
   private final long responseSize;
+  private final long blockBytesScanned;
+  private final long fsReadTime;
   private final String clientAddress;
   private final String serverClass;
   private final String methodName;
@@ -74,6 +94,9 @@ final public class OnlineLogRecord extends LogEntry {
   private final int multiGetsCount;
   private final int multiMutationsCount;
   private final int multiServiceCalls;
+  private final Optional<Scan> scan;
+  private final Map<String, byte[]> requestAttributes;
+  private final Map<String, byte[]> connectionAttributes;
 
   public long getStartTime() {
     return startTime;
@@ -89,6 +112,17 @@ final public class OnlineLogRecord extends LogEntry {
 
   public long getResponseSize() {
     return responseSize;
+  }
+
+  /**
+   * Return the amount of block bytes scanned to retrieve the response cells.
+   */
+  public long getBlockBytesScanned() {
+    return blockBytesScanned;
+  }
+
+  public long getFsReadTime() {
+    return fsReadTime;
   }
 
   public String getClientAddress() {
@@ -131,15 +165,36 @@ final public class OnlineLogRecord extends LogEntry {
     return multiServiceCalls;
   }
 
-  private OnlineLogRecord(final long startTime, final int processingTime, final int queueTime,
-      final long responseSize, final String clientAddress, final String serverClass,
-      final String methodName, final String callDetails, final String param,
-      final String regionName, final String userName, final int multiGetsCount,
-      final int multiMutationsCount, final int multiServiceCalls) {
+  /**
+   * If {@value org.apache.hadoop.hbase.HConstants#SLOW_LOG_SCAN_PAYLOAD_ENABLED} is enabled then
+   * this value may be present and should represent the Scan that produced the given
+   * {@link OnlineLogRecord}
+   */
+  public Optional<Scan> getScan() {
+    return scan;
+  }
+
+  public Map<String, byte[]> getRequestAttributes() {
+    return requestAttributes;
+  }
+
+  public Map<String, byte[]> getConnectionAttributes() {
+    return connectionAttributes;
+  }
+
+  OnlineLogRecord(final long startTime, final int processingTime, final int queueTime,
+    final long responseSize, final long blockBytesScanned, final long fsReadTime,
+    final String clientAddress, final String serverClass, final String methodName,
+    final String callDetails, final String param, final String regionName, final String userName,
+    final int multiGetsCount, final int multiMutationsCount, final int multiServiceCalls,
+    final Scan scan, final Map<String, byte[]> requestAttributes,
+    final Map<String, byte[]> connectionAttributes) {
     this.startTime = startTime;
     this.processingTime = processingTime;
     this.queueTime = queueTime;
     this.responseSize = responseSize;
+    this.blockBytesScanned = blockBytesScanned;
+    this.fsReadTime = fsReadTime;
     this.clientAddress = clientAddress;
     this.serverClass = serverClass;
     this.methodName = methodName;
@@ -150,6 +205,9 @@ final public class OnlineLogRecord extends LogEntry {
     this.multiGetsCount = multiGetsCount;
     this.multiMutationsCount = multiMutationsCount;
     this.multiServiceCalls = multiServiceCalls;
+    this.scan = Optional.ofNullable(scan);
+    this.requestAttributes = requestAttributes;
+    this.connectionAttributes = connectionAttributes;
   }
 
   public static class OnlineLogRecordBuilder {
@@ -157,6 +215,8 @@ final public class OnlineLogRecord extends LogEntry {
     private int processingTime;
     private int queueTime;
     private long responseSize;
+    private long blockBytesScanned;
+    private long fsReadTime;
     private String clientAddress;
     private String serverClass;
     private String methodName;
@@ -167,6 +227,9 @@ final public class OnlineLogRecord extends LogEntry {
     private int multiGetsCount;
     private int multiMutationsCount;
     private int multiServiceCalls;
+    private Scan scan = null;
+    private Map<String, byte[]> requestAttributes;
+    private Map<String, byte[]> connectionAttributes;
 
     public OnlineLogRecordBuilder setStartTime(long startTime) {
       this.startTime = startTime;
@@ -185,6 +248,19 @@ final public class OnlineLogRecord extends LogEntry {
 
     public OnlineLogRecordBuilder setResponseSize(long responseSize) {
       this.responseSize = responseSize;
+      return this;
+    }
+
+    /**
+     * Sets the amount of block bytes scanned to retrieve the response cells.
+     */
+    public OnlineLogRecordBuilder setBlockBytesScanned(long blockBytesScanned) {
+      this.blockBytesScanned = blockBytesScanned;
+      return this;
+    }
+
+    public OnlineLogRecordBuilder setFsReadTime(long fsReadTime) {
+      this.fsReadTime = fsReadTime;
       return this;
     }
 
@@ -238,10 +314,27 @@ final public class OnlineLogRecord extends LogEntry {
       return this;
     }
 
+    public OnlineLogRecordBuilder setScan(Scan scan) {
+      this.scan = scan;
+      return this;
+    }
+
+    public OnlineLogRecordBuilder setRequestAttributes(Map<String, byte[]> requestAttributes) {
+      this.requestAttributes = requestAttributes;
+      return this;
+    }
+
+    public OnlineLogRecordBuilder
+      setConnectionAttributes(Map<String, byte[]> connectionAttributes) {
+      this.connectionAttributes = connectionAttributes;
+      return this;
+    }
+
     public OnlineLogRecord build() {
       return new OnlineLogRecord(startTime, processingTime, queueTime, responseSize,
-        clientAddress, serverClass, methodName, callDetails, param, regionName,
-        userName, multiGetsCount, multiMutationsCount, multiServiceCalls);
+        blockBytesScanned, fsReadTime, clientAddress, serverClass, methodName, callDetails, param,
+        regionName, userName, multiGetsCount, multiMutationsCount, multiServiceCalls, scan,
+        requestAttributes, connectionAttributes);
     }
   }
 
@@ -257,42 +350,26 @@ final public class OnlineLogRecord extends LogEntry {
 
     OnlineLogRecord that = (OnlineLogRecord) o;
 
-    return new EqualsBuilder()
-      .append(startTime, that.startTime)
-      .append(processingTime, that.processingTime)
-      .append(queueTime, that.queueTime)
-      .append(responseSize, that.responseSize)
+    return new EqualsBuilder().append(startTime, that.startTime)
+      .append(processingTime, that.processingTime).append(queueTime, that.queueTime)
+      .append(responseSize, that.responseSize).append(blockBytesScanned, that.blockBytesScanned)
       .append(multiGetsCount, that.multiGetsCount)
       .append(multiMutationsCount, that.multiMutationsCount)
-      .append(multiServiceCalls, that.multiServiceCalls)
-      .append(clientAddress, that.clientAddress)
-      .append(serverClass, that.serverClass)
-      .append(methodName, that.methodName)
-      .append(callDetails, that.callDetails)
-      .append(param, that.param)
-      .append(regionName, that.regionName)
-      .append(userName, that.userName)
-      .isEquals();
+      .append(multiServiceCalls, that.multiServiceCalls).append(clientAddress, that.clientAddress)
+      .append(serverClass, that.serverClass).append(methodName, that.methodName)
+      .append(callDetails, that.callDetails).append(param, that.param)
+      .append(regionName, that.regionName).append(userName, that.userName).append(scan, that.scan)
+      .append(requestAttributes, that.requestAttributes)
+      .append(connectionAttributes, that.connectionAttributes).isEquals();
   }
 
   @Override
   public int hashCode() {
-    return new HashCodeBuilder(17, 37)
-      .append(startTime)
-      .append(processingTime)
-      .append(queueTime)
-      .append(responseSize)
-      .append(clientAddress)
-      .append(serverClass)
-      .append(methodName)
-      .append(callDetails)
-      .append(param)
-      .append(regionName)
-      .append(userName)
-      .append(multiGetsCount)
-      .append(multiMutationsCount)
-      .append(multiServiceCalls)
-      .toHashCode();
+    return new HashCodeBuilder(17, 37).append(startTime).append(processingTime).append(queueTime)
+      .append(responseSize).append(blockBytesScanned).append(clientAddress).append(serverClass)
+      .append(methodName).append(callDetails).append(param).append(regionName).append(userName)
+      .append(multiGetsCount).append(multiMutationsCount).append(multiServiceCalls).append(scan)
+      .append(requestAttributes).append(connectionAttributes).toHashCode();
   }
 
   @Override
@@ -302,22 +379,16 @@ final public class OnlineLogRecord extends LogEntry {
 
   @Override
   public String toString() {
-    return new ToStringBuilder(this)
-      .append("startTime", startTime)
-      .append("processingTime", processingTime)
-      .append("queueTime", queueTime)
-      .append("responseSize", responseSize)
-      .append("clientAddress", clientAddress)
-      .append("serverClass", serverClass)
-      .append("methodName", methodName)
-      .append("callDetails", callDetails)
-      .append("param", param)
-      .append("regionName", regionName)
-      .append("userName", userName)
-      .append("multiGetsCount", multiGetsCount)
-      .append("multiMutationsCount", multiMutationsCount)
-      .append("multiServiceCalls", multiServiceCalls)
-      .toString();
+    return new ToStringBuilder(this).append("startTime", startTime)
+      .append("processingTime", processingTime).append("queueTime", queueTime)
+      .append("responseSize", responseSize).append("blockBytesScanned", blockBytesScanned)
+      .append("clientAddress", clientAddress).append("serverClass", serverClass)
+      .append("methodName", methodName).append("callDetails", callDetails).append("param", param)
+      .append("regionName", regionName).append("userName", userName)
+      .append("multiGetsCount", multiGetsCount).append("multiMutationsCount", multiMutationsCount)
+      .append("multiServiceCalls", multiServiceCalls).append("scan", scan)
+      .append("requestAttributes", requestAttributes)
+      .append("connectionAttributes", connectionAttributes).toString();
   }
 
 }

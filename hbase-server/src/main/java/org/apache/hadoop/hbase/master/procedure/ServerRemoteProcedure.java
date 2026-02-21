@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,7 +18,6 @@
 package org.apache.hadoop.hbase.master.procedure;
 
 import java.io.IOException;
-
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.procedure2.FailedRemoteDispatchException;
 import org.apache.hadoop.hbase.procedure2.Procedure;
@@ -31,81 +30,81 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos;
+
 @InterfaceAudience.Private
 /**
  * The base class for Procedures that run {@link java.util.concurrent.Callable}s on a (remote)
- * RegionServer; e.g. asking a RegionServer to split a WAL file as a sub-procedure of
- * the ServerCrashProcedure recovery process.
- *
- * <p>To implement a new Procedure type, extend this class and override remoteCallBuild() and
+ * RegionServer; e.g. asking a RegionServer to split a WAL file as a sub-procedure of the
+ * ServerCrashProcedure recovery process.
+ * <p>
+ * To implement a new Procedure type, extend this class and override remoteCallBuild() and
  * complete(). The dispatch and callback will be handled for you here, internally.
- *
- * <p>The Procedure works as follows. It uses {@link RSProcedureDispatcher}, the same system
- * used dispatching Region OPEN and CLOSE RPCs, to pass a Callable to a RegionServer. Examples
- * include {@link org.apache.hadoop.hbase.regionserver.SplitWALCallable} and
+ * <p>
+ * The Procedure works as follows. It uses {@link RSProcedureDispatcher}, the same system used
+ * dispatching Region OPEN and CLOSE RPCs, to pass a Callable to a RegionServer. Examples include
+ * {@link org.apache.hadoop.hbase.regionserver.SplitWALCallable} and
  * {@link org.apache.hadoop.hbase.replication.regionserver.RefreshPeerCallable}. Rather than
- * assign/unassign, the Master calls #executeProcedures against the remote RegionServer wrapping
- * a Callable in a {@link ExecuteProceduresRequest}. Upon successful dispatch,
- * the Procedure then suspends itself on the Master-side and relinqushes its executor worker.
- * On receipt, the RegionServer submits the Callable to its executor service. When the Callable
- * completes, it adds itself to a queue on the RegionServer side for processing by a background
- * thread, the {@link RemoteProcedureResultReporter}. It picks up the completed Callable from the
- * queue and RPCs the master at #reportProcedureDone with the procedure id and whether success or
- * failure. The master calls complete() setting success or failure state and then reschedules the
- * suspended Procedure so it can finish.
- *
- * <p>Here are some details on operation:
- * <p>If adding the operation to the dispatcher fails, addOperationToNode will throw
- * FailedRemoteDispatchException, and this Procedure will return 'null'. The Procedure Executor
- * will then mark this procedure as 'complete' (though we failed to dispatch our task). In this
- * case, the upper layer of this procedure must have a way to check if this Procedure really
- * succeeded or not and have appropriate handling.
- *
- * <p>If sending the operation to remote RS failed, dispatcher will call remoteCallFailed() to
- * handle this which calls remoteOperationDone with the exception. If the targetServer crashed but
- * this procedure has no response, than dispatcher will call remoteOperationFailed() which also
- * calls remoteOperationDone with the exception. If the operation is successful, then
- * remoteOperationCompleted will be called and actually calls the remoteOperationDone without
- * exception.
- *
- * In remoteOperationDone, we'll check if the procedure is already get wake up by others. Then
- * developer could implement complete() based on their own purpose.
- *
- * But basic logic is that if operation succeed, set succ to true and do the clean work.
- *
- * If operation failed and require to resend it to the same server, leave the succ as false.
- *
- * If operation failed and require to resend it to another server, set succ to true and upper layer
+ * assign/unassign, the Master calls #executeProcedures against the remote RegionServer wrapping a
+ * Callable in a {@link ExecuteProceduresRequest}. Upon successful dispatch, the Procedure then
+ * suspends itself on the Master-side and relinqushes its executor worker. On receipt, the
+ * RegionServer submits the Callable to its executor service. When the Callable completes, it adds
+ * itself to a queue on the RegionServer side for processing by a background thread, the
+ * {@link RemoteProcedureResultReporter}. It picks up the completed Callable from the queue and RPCs
+ * the master at #reportProcedureDone with the procedure id and whether success or failure. The
+ * master calls complete() setting success or failure state and then reschedules the suspended
+ * Procedure so it can finish.
+ * <p>
+ * Here are some details on operation:
+ * <p>
+ * If adding the operation to the dispatcher fails, addOperationToNode will throw
+ * FailedRemoteDispatchException, and this Procedure will return 'null'. The Procedure Executor will
+ * then mark this procedure as 'complete' (though we failed to dispatch our task). In this case, the
+ * upper layer of this procedure must have a way to check if this Procedure really succeeded or not
+ * and have appropriate handling.
+ * <p>
+ * If sending the operation to remote RS failed, dispatcher will call remoteCallFailed() to handle
+ * this which calls remoteOperationDone with the exception. If the targetServer crashed but this
+ * procedure has no response or if we receive failed response, then dispatcher will call
+ * remoteOperationFailed() which also calls remoteOperationDone with the exception. If the operation
+ * is successful, then remoteOperationCompleted will be called and actually calls the
+ * remoteOperationDone without exception. In remoteOperationDone, we'll check if the procedure is
+ * already get wake up by others. Then developer could implement complete() based on their own
+ * purpose. But basic logic is that if operation succeed, set succ to true and do the clean work. If
+ * operation failed and require to resend it to the same server, leave the succ as false. If
+ * operation failed and require to resend it to another server, set succ to true and upper layer
  * should be able to find out this operation not work and send a operation to another server.
  */
 public abstract class ServerRemoteProcedure extends Procedure<MasterProcedureEnv>
-    implements RemoteProcedureDispatcher.RemoteProcedure<MasterProcedureEnv, ServerName> {
+  implements RemoteProcedureDispatcher.RemoteProcedure<MasterProcedureEnv, ServerName> {
   protected static final Logger LOG = LoggerFactory.getLogger(ServerRemoteProcedure.class);
   protected ProcedureEvent<?> event;
   protected ServerName targetServer;
-  protected boolean dispatched;
-  protected boolean succ;
+  // after remoteProcedureDone we require error field to decide the next state
+  protected Throwable remoteError;
+  protected MasterProcedureProtos.ServerRemoteProcedureState state =
+    MasterProcedureProtos.ServerRemoteProcedureState.SERVER_REMOTE_PROCEDURE_DISPATCH;
 
-  protected abstract void complete(MasterProcedureEnv env, Throwable error);
+  protected abstract boolean complete(MasterProcedureEnv env, Throwable error);
 
   @Override
   protected synchronized Procedure<MasterProcedureEnv>[] execute(MasterProcedureEnv env)
-      throws ProcedureYieldException, ProcedureSuspendedException, InterruptedException {
-    if (dispatched) {
-      if (succ) {
+    throws ProcedureYieldException, ProcedureSuspendedException, InterruptedException {
+    if (
+      state != MasterProcedureProtos.ServerRemoteProcedureState.SERVER_REMOTE_PROCEDURE_DISPATCH
+    ) {
+      if (complete(env, this.remoteError)) {
         return null;
       }
-      dispatched = false;
+      state = MasterProcedureProtos.ServerRemoteProcedureState.SERVER_REMOTE_PROCEDURE_DISPATCH;
     }
     try {
       env.getRemoteDispatcher().addOperationToNode(targetServer, this);
     } catch (FailedRemoteDispatchException frde) {
       LOG.warn("Can not send remote operation {} to {}, this operation will "
-          + "be retried to send to another server",
-        this.getProcId(), targetServer);
+        + "be retried to send to another server", this.getProcId(), targetServer);
       return null;
     }
-    dispatched = true;
     event = new ProcedureEvent<>(this);
     event.suspendIfNotReady(this);
     throw new ProcedureSuspendedException();
@@ -118,18 +117,22 @@ public abstract class ServerRemoteProcedure extends Procedure<MasterProcedureEnv
 
   @Override
   public synchronized void remoteCallFailed(MasterProcedureEnv env, ServerName serverName,
-      IOException exception) {
+    IOException exception) {
+    state = MasterProcedureProtos.ServerRemoteProcedureState.SERVER_REMOTE_PROCEDURE_DISPATCH_FAIL;
     remoteOperationDone(env, exception);
   }
 
   @Override
-  public synchronized void remoteOperationCompleted(MasterProcedureEnv env) {
+  public synchronized void remoteOperationCompleted(MasterProcedureEnv env,
+    byte[] remoteResultData) {
+    state = MasterProcedureProtos.ServerRemoteProcedureState.SERVER_REMOTE_PROCEDURE_REPORT_SUCCEED;
     remoteOperationDone(env, null);
   }
 
   @Override
   public synchronized void remoteOperationFailed(MasterProcedureEnv env,
-      RemoteProcedureException error) {
+    RemoteProcedureException error) {
+    state = MasterProcedureProtos.ServerRemoteProcedureState.SERVER_REMOTE_PROCEDURE_REPORT_FAILED;
     remoteOperationDone(env, error);
   }
 
@@ -140,10 +143,12 @@ public abstract class ServerRemoteProcedure extends Procedure<MasterProcedureEnv
     }
     if (event == null) {
       LOG.warn("procedure event for {} is null, maybe the procedure is created when recovery",
-          getProcId());
+        getProcId());
       return;
     }
-    complete(env, error);
+    this.remoteError = error;
+    // below persistence is added so that if report goes to last active master, it throws exception
+    env.getMasterServices().getMasterProcedureExecutor().getStore().update(this);
     event.wake(env.getProcedureScheduler());
     event = null;
   }

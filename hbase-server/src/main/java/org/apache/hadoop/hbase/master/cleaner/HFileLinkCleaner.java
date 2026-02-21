@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -33,12 +33,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * HFileLink cleaner that determines if a hfile should be deleted.
- * HFiles can be deleted only if there're no links to them.
- *
- * When a HFileLink is created a back reference file is created in:
- *      /hbase/archive/table/region/cf/.links-hfile/ref-region.ref-table
- * To check if the hfile can be deleted the back references folder must be empty.
+ * HFileLink cleaner that determines if a hfile should be deleted. HFiles can be deleted only if
+ * there're no links to them. When a HFileLink is created a back reference file is created in:
+ * /hbase/archive/table/region/cf/.links-hfile/ref-region.ref-table To check if the hfile can be
+ * deleted the back references folder must be empty.
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.CONFIG)
 public class HFileLinkCleaner extends BaseHFileCleanerDelegate {
@@ -68,8 +66,9 @@ public class HFileLinkCleaner extends BaseHFileCleanerDelegate {
         try {
           // Also check if the HFile is in the HBASE_TEMP_DIRECTORY; this is where the referenced
           // file gets created when cloning a snapshot.
-          hfilePath = HFileLink.getHFileFromBackReference(new Path(
-            CommonFSUtils.getRootDir(getConf()), HConstants.HBASE_TEMP_DIRECTORY), filePath);
+          hfilePath = HFileLink.getHFileFromBackReference(
+            new Path(CommonFSUtils.getRootDir(getConf()), HConstants.HBASE_TEMP_DIRECTORY),
+            filePath);
           if (fs.exists(hfilePath)) {
             return false;
           }
@@ -78,8 +77,8 @@ public class HFileLinkCleaner extends BaseHFileCleanerDelegate {
           if (fs.exists(hfilePath)) {
             return false;
           }
-          hfilePath = HFileLink.getHFileFromBackReference(CommonFSUtils.getRootDir(getConf()),
-            filePath);
+          hfilePath =
+            HFileLink.getHFileFromBackReference(CommonFSUtils.getRootDir(getConf()), filePath);
           return !fs.exists(hfilePath);
         } catch (IOException e) {
           if (LOG.isDebugEnabled()) {
@@ -91,15 +90,27 @@ public class HFileLinkCleaner extends BaseHFileCleanerDelegate {
       }
 
       // HFile is deletable only if has no links
-      Path backRefDir = null;
+      Path backRefDir = HFileLink.getBackReferencesDir(parentDir, filePath.getName());
       try {
-        backRefDir = HFileLink.getBackReferencesDir(parentDir, filePath.getName());
-        return CommonFSUtils.listStatus(fs, backRefDir) == null;
+        FileStatus[] fileStatuses = CommonFSUtils.listStatus(fs, backRefDir);
+        // for empty reference directory, retain the logic to be deletable
+        if (fileStatuses == null) {
+          return true;
+        }
+        // reuse the found back reference files, check if the forward reference exists.
+        // with this optimization, the chore could save one round compute time if we're visiting
+        // the archive HFile earlier than the HFile Link
+        for (FileStatus fileStatus : fileStatuses) {
+          if (!isFileDeletable(fileStatus)) {
+            return false;
+          }
+        }
+        // all the found back reference files are clear, we can delete it.
+        return true;
       } catch (IOException e) {
         if (LOG.isDebugEnabled()) {
-          LOG.debug(
-            "Couldn't get the references, not deleting file, just in case. filePath=" +
-              filePath + ", backRefDir=" + backRefDir);
+          LOG.debug("Couldn't get the references, not deleting file, just in case. filePath="
+            + filePath + ", backRefDir=" + backRefDir);
         }
         return false;
       }
@@ -119,8 +130,8 @@ public class HFileLinkCleaner extends BaseHFileCleanerDelegate {
     } catch (IOException e) {
       if (LOG.isDebugEnabled()) {
         LOG.debug("Couldn't instantiate the file system, not deleting file, just in case. "
-            + FileSystem.FS_DEFAULT_NAME_KEY + "="
-            + getConf().get(FileSystem.FS_DEFAULT_NAME_KEY, FileSystem.DEFAULT_FS));
+          + FileSystem.FS_DEFAULT_NAME_KEY + "="
+          + getConf().get(FileSystem.FS_DEFAULT_NAME_KEY, FileSystem.DEFAULT_FS));
       }
     } finally {
       lock.writeLock().unlock();

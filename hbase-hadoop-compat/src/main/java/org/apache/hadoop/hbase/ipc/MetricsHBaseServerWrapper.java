@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,9 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.ipc;
 
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Private
@@ -28,6 +27,8 @@ public interface MetricsHBaseServerWrapper {
   int getGeneralQueueLength();
 
   int getReplicationQueueLength();
+
+  int getBulkLoadQueueLength();
 
   int getPriorityQueueLength();
 
@@ -42,6 +43,8 @@ public interface MetricsHBaseServerWrapper {
   int getActivePriorityRpcHandlerCount();
 
   int getActiveReplicationRpcHandlerCount();
+
+  int getActiveBulkLoadRpcHandlerCount();
 
   int getActiveMetaPriorityRpcHandlerCount();
 
@@ -62,4 +65,10 @@ public interface MetricsHBaseServerWrapper {
   int getActiveScanRpcHandlerCount();
 
   long getNettyDmUsage();
+
+  /**
+   * These two metrics are calculated together, so we want to return them in one call
+   * @return pair containing total (first) and max (second) pending outbound bytes.
+   */
+  Pair<Long, Long> getTotalAndMaxNettyOutboundBytes();
 }

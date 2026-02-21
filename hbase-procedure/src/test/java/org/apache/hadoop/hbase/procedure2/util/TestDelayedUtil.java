@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,23 +17,18 @@
  */
 package org.apache.hadoop.hbase.procedure2.util;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Category({MasterTests.class, SmallTests.class})
+@Tag(MasterTests.TAG)
+@Tag(SmallTests.TAG)
 public class TestDelayedUtil {
-
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestDelayedUtil.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestDelayedUtil.class);
 
@@ -50,9 +45,8 @@ public class TestDelayedUtil {
     ZeroDelayContainer<Object> o1cb = new ZeroDelayContainer<>(o1);
     ZeroDelayContainer<Object> o2c = new ZeroDelayContainer<>(o2);
 
-    ZeroDelayContainer[] items = new ZeroDelayContainer[] {
-      lnull, l10a, l10b, l15, onull, o1ca, o1cb, o2c,
-    };
+    ZeroDelayContainer[] items =
+      new ZeroDelayContainer[] { lnull, l10a, l10b, l15, onull, o1ca, o1cb, o2c, };
 
     assertContainersEquals(lnull, items, lnull, onull);
     assertContainersEquals(l10a, items, l10a, l10b);
@@ -65,7 +59,7 @@ public class TestDelayedUtil {
   }
 
   private void assertContainersEquals(final ZeroDelayContainer src,
-      final ZeroDelayContainer[] items, final ZeroDelayContainer... matches) {
+    final ZeroDelayContainer[] items, final ZeroDelayContainer... matches) {
     for (int i = 0; i < items.length; ++i) {
       boolean shouldMatch = false;
       for (int j = 0; j < matches.length; ++j) {
@@ -75,8 +69,8 @@ public class TestDelayedUtil {
         }
       }
       boolean isMatching = src.equals(items[i]);
-      assertEquals(src.getObject() + " unexpectedly match " + items[i].getObject(),
-        shouldMatch, isMatching);
+      assertEquals(shouldMatch, isMatching,
+        src.getObject() + " unexpectedly match " + items[i].getObject());
     }
   }
 

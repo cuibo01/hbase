@@ -1,5 +1,5 @@
-<?xml version="1.0"?>
-<project xmlns="https://maven.apache.org/POM/4.0.0" xmlns:xsi="https://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <!--
   /**
    * Licensed to the Apache Software Foundation (ASF) under one
@@ -21,34 +21,14 @@
   -->
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <artifactId>hbase-build-configuration</artifactId>
     <groupId>org.apache.hbase</groupId>
-    <version>3.0.0-alpha-3-SNAPSHOT</version>
+    <artifactId>hbase-build-configuration</artifactId>
+    <version>${revision}</version>
     <relativePath>../hbase-build-configuration</relativePath>
   </parent>
   <artifactId>hbase-backup</artifactId>
   <name>Apache HBase - Backup</name>
   <description>Backup for HBase</description>
-  <build>
-    <plugins>
-      <plugin>
-        <!--Make it so assembly:single does nothing in here-->
-        <artifactId>maven-assembly-plugin</artifactId>
-        <configuration>
-          <skipAssembly>true</skipAssembly>
-        </configuration>
-      </plugin>
-      <!-- Make a jar and put the sources in the jar -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-source-plugin</artifactId>
-      </plugin>
-      <plugin>
-        <groupId>net.revelc.code</groupId>
-        <artifactId>warbucks-maven-plugin</artifactId>
-      </plugin>
-    </plugins>
-  </build>
   <dependencies>
     <!-- Intra-project dependencies -->
     <dependency>
@@ -61,6 +41,11 @@
       <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-logging</artifactId>
       <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>javax.ws.rs</groupId>
+      <artifactId>javax.ws.rs-api</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -120,7 +105,17 @@
         </exclusion>
       </exclusions>
     </dependency>
+    <!-- Required by tests using MiniMRCluster -->
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcpkix-jdk18on</artifactId>
+      <scope>test</scope>
+    </dependency>
     <!-- General dependencies -->
+    <dependency>
+      <groupId>com.github.stephenc.findbugs</groupId>
+      <artifactId>findbugs-annotations</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-lang3</artifactId>
@@ -168,17 +163,49 @@
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-engine</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-params</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.vintage</groupId>
+      <artifactId>junit-vintage-engine</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <!--Make it so assembly:single does nothing in here-->
+        <artifactId>maven-assembly-plugin</artifactId>
+        <configuration>
+          <skipAssembly>true</skipAssembly>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>net.revelc.code</groupId>
+        <artifactId>warbucks-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
   <profiles>
     <!-- Profile for building against Hadoop 3.0.0. Activate by default -->
     <profile>
       <id>hadoop-3.0</id>
       <activation>
-        <property><name>!hadoop.profile</name></property>
+        <property>
+          <name>!hadoop.profile</name>
+        </property>
       </activation>
       <dependencies>
         <dependency>
@@ -213,8 +240,7 @@
               <artifactId>lifecycle-mapping</artifactId>
               <configuration>
                 <lifecycleMappingMetadata>
-                  <pluginExecutions>
-                  </pluginExecutions>
+                  <pluginExecutions/>
                 </lifecycleMappingMetadata>
               </configuration>
             </plugin>

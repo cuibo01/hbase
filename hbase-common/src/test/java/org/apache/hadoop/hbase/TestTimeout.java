@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -28,7 +28,7 @@ public class TestTimeout {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestTimeout.class);
+    HBaseClassTestRule.forClass(TestTimeout.class);
 
   @Test
   public void run1() throws InterruptedException {
@@ -36,21 +36,24 @@ public class TestTimeout {
   }
 
   /**
-   * Enable to check if timeout works.
-   * Can't enable as it waits 30seconds and expected doesn't do Exception catching
+   * Enable to check if timeout works. Can't enable as it waits 30seconds and expected doesn't do
+   * Exception catching
    */
   @Ignore
   @Test
   public void infiniteLoop() {
     // Launch a background non-daemon thread.
     Thread t = new Thread("HangingThread") {
+      @Override
       public void run() {
-        synchronized(this) {
-          while (true) {}
+        synchronized (this) {
+          while (true) {
+          }
         }
       }
     };
     t.start();
-    while (true) {}
+    while (true) {
+    }
   }
 }

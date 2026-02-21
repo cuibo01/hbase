@@ -27,22 +27,29 @@ public class CheckAndMutateResult {
   private final boolean success;
   private final Result result;
 
+  private QueryMetrics metrics = null;
+
   public CheckAndMutateResult(boolean success, Result result) {
     this.success = success;
     this.result = result;
   }
 
-  /**
-   * @return Whether the CheckAndMutate operation is successful or not
-   */
+  /** Returns Whether the CheckAndMutate operation is successful or not */
   public boolean isSuccess() {
     return success;
   }
 
-  /**
-   * @return It is used only for CheckAndMutate operations with Increment/Append. Otherwise null
-   */
+  /** Returns It is used only for CheckAndMutate operations with Increment/Append. Otherwise null */
   public Result getResult() {
     return result;
+  }
+
+  public CheckAndMutateResult setMetrics(QueryMetrics metrics) {
+    this.metrics = metrics;
+    return this;
+  }
+
+  public QueryMetrics getMetrics() {
+    return metrics;
   }
 }

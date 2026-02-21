@@ -35,7 +35,7 @@
 usage="Usage: hbase-daemon.sh [--config <conf-dir>]\
  [--autostart-window-size <window size in hours>]\
  [--autostart-window-retry-limit <retry count limit for autostart>]\
- (start|stop|restart|autostart|autorestart|foreground_start) <hbase-command> \
+ (start|stop|restart|autostart|autorestart|foreground_start|status) <hbase-command> \
  <args...>"
 
 # if no args specified, show usage
@@ -78,37 +78,49 @@ hbase_rotate_log ()
     fi
 }
 
-cleanAfterRun() {
-  if [ -f ${HBASE_PID} ]; then
-    # If the process is still running time to tear it down.
-    kill -9 `cat ${HBASE_PID}` > /dev/null 2>&1
-    rm -f ${HBASE_PID} > /dev/null 2>&1
+function sighup_handler
+{
+  # pass through SIGHUP if we can
+  if [ -f "${HBASE_PID}" ] ; then
+    kill -s HUP "$(cat "${HBASE_PID}")"
   fi
+}
 
-  if [ -f ${HBASE_ZNODE_FILE} ]; then
-    if [ "$command" = "master" ]; then
-      HBASE_OPTS="$HBASE_OPTS $HBASE_MASTER_OPTS" $bin/hbase master clear > /dev/null 2>&1
+function sigterm_handler
+{
+  if [ -f "${HBASE_PID}" ]; then
+    kill -s TERM "$(cat "${HBASE_PID}")"
+    waitForProcessEnd "$(cat "${HBASE_PID}")" "${command}"
+  fi
+  cleanAfterRun
+}
+
+cleanAfterRun() {
+  rm -f "${HBASE_PID}" > /dev/null 2>&1
+  if [ -f "${HBASE_ZNODE_FILE}" ]; then
+    if [ "${command}" = "master" ]; then
+      HBASE_OPTS="$HBASE_OPTS $HBASE_MASTER_OPTS" "${bin}/hbase" master clear > /dev/null 2>&1
     else
-      #call ZK to delete the node
-      ZNODE=`cat ${HBASE_ZNODE_FILE}`
-      HBASE_OPTS="$HBASE_OPTS $HBASE_REGIONSERVER_OPTS" $bin/hbase zkcli delete ${ZNODE} > /dev/null 2>&1
+      # call ZK to delete the node
+      ZNODE="$(cat "${HBASE_ZNODE_FILE}")"
+      HBASE_OPTS="$HBASE_OPTS $HBASE_REGIONSERVER_OPTS" "${bin}/hbase" zkcli delete "${ZNODE}" > /dev/null 2>&1
     fi
-    rm ${HBASE_ZNODE_FILE}
+    rm -f "${HBASE_ZNODE_FILE}" > /dev/null 2>&1
   fi
 }
 
 check_before_start(){
-    #ckeck if the process is not running
+    # check if the process is not running
     mkdir -p "$HBASE_PID_DIR"
     if [ -f $HBASE_PID ]; then
-      if kill -0 `cat $HBASE_PID` > /dev/null 2>&1; then
-        echo $command running as process `cat $HBASE_PID`.  Stop it first.
+      if is_process_alive "$(cat "$HBASE_PID")" "$HBASE_PROC_KEYWORD"; then
+        echo "$command running as process $(cat "$HBASE_PID"). Stop it first."
         exit 1
       fi
     fi
 }
 
-wait_until_done ()
+wait_until_done()
 {
     p=$1
     cnt=${HBASE_SLAVE_TIMEOUT:-300}
@@ -155,34 +167,27 @@ JAVA=$JAVA_HOME/bin/java
 export HBASE_LOG_PREFIX=hbase-$HBASE_IDENT_STRING-$command-$HOSTNAME
 export HBASE_LOGFILE=$HBASE_LOG_PREFIX.log
 
-if [ -z "${HBASE_ROOT_LOGGER_LEVEL}" ]; then
-export HBASE_ROOT_LOGGER_LEVEL=${HBASE_ROOT_LOGGER_LEVEL:-"INFO"}
+if [ -z "${HBASE_ROOT_LOGGER}" ]; then
+export HBASE_ROOT_LOGGER=${HBASE_ROOT_LOGGER:-"INFO,RFA"}
 fi
 
-if [ -z "${HBASE_ROOT_LOGGER_APPENDER}" ]; then
-export HBASE_ROOT_LOGGER_APPENDER=${HBASE_ROOT_LOGGER_APPENDER:-"RFA"}
-fi
-
-if [ -z "${HBASE_SECURITY_LOGGER_LEVEL}" ]; then
-export HBASE_SECURITY_LOGGER_LEVEL=${HBASE_SECURITY_LOGGER_LEVEL:-"INFO"}
-fi
-
-if [ -z "${HBASE_SECURITY_LOGGER_APPENDER}" ]; then
-export HBASE_SECURITY_LOGGER_APPENDER=${HBASE_SECURITY_LOGGER_APPENDER:-"RFAS"}
+if [ -z "${HBASE_SECURITY_LOGGER}" ]; then
+export HBASE_SECURITY_LOGGER=${HBASE_SECURITY_LOGGER:-"INFO,RFAS"}
 fi
 
 HBASE_LOGOUT=${HBASE_LOGOUT:-"$HBASE_LOG_DIR/$HBASE_LOG_PREFIX.out"}
 HBASE_LOGGC=${HBASE_LOGGC:-"$HBASE_LOG_DIR/$HBASE_LOG_PREFIX.gc"}
 HBASE_LOGLOG=${HBASE_LOGLOG:-"${HBASE_LOG_DIR}/${HBASE_LOGFILE}"}
 HBASE_PID=$HBASE_PID_DIR/hbase-$HBASE_IDENT_STRING-$command.pid
+HBASE_PROC_KEYWORD="proc_$command"
 export HBASE_ZNODE_FILE=$HBASE_PID_DIR/hbase-$HBASE_IDENT_STRING-$command.znode
 export HBASE_AUTOSTART_FILE=$HBASE_PID_DIR/hbase-$HBASE_IDENT_STRING-$command.autostart
 
 if [ -n "$SERVER_GC_OPTS" ]; then
-  export SERVER_GC_OPTS=${SERVER_GC_OPTS/"-Xloggc:<FILE-PATH>"/"-Xloggc:${HBASE_LOGGC}"}
+  export SERVER_GC_OPTS=${SERVER_GC_OPTS/"<FILE-PATH>"/"${HBASE_LOGGC}"}
 fi
 if [ -n "$CLIENT_GC_OPTS" ]; then
-  export CLIENT_GC_OPTS=${CLIENT_GC_OPTS/"-Xloggc:<FILE-PATH>"/"-Xloggc:${HBASE_LOGGC}"}
+  export CLIENT_GC_OPTS=${CLIENT_GC_OPTS/"<FILE-PATH>"/"${HBASE_LOGGC}"}
 fi
 
 # Set default scheduling priority
@@ -233,7 +238,9 @@ case $startStop in
   ;;
 
 (foreground_start)
-    trap cleanAfterRun SIGHUP SIGINT SIGTERM EXIT
+    trap sighup_handler HUP
+    trap sigterm_handler INT TERM EXIT
+
     if [ "$HBASE_NO_REDIRECT_LOG" != "" ]; then
         # NO REDIRECT
         echo "`date` Starting $command on `hostname`"
@@ -268,7 +275,7 @@ case $startStop in
     while true
     do
       hbase_rotate_log $HBASE_LOGGC
-      if [ -f $HBASE_PID ] &&  kill -0 "$(cat "$HBASE_PID")" > /dev/null 2>&1 ; then
+      if [ -f $HBASE_PID ] &&  is_process_alive "$(cat "$HBASE_PID")" "$HBASE_PROC_KEYWORD"; then
         wait "$(cat "$HBASE_PID")"
       else
         #if the file does not exist it means that it was not stopped properly by the stop command
@@ -335,28 +342,31 @@ case $startStop in
   ;;
 
 (stop)
-    echo running $command, logging to $HBASE_LOGOUT
+    echo "stopping $command, logging to $HBASE_LOGOUT"
     rm -f "$HBASE_AUTOSTART_FILE"
     if [ -f $HBASE_PID ]; then
-      pidToKill=`cat $HBASE_PID`
-      # kill -0 == see if the PID exists
-      if kill -0 $pidToKill > /dev/null 2>&1; then
-        echo -n stopping $command
+      pidToKill=$(cat "$HBASE_PID")
+      if is_process_alive "$pidToKill" "$HBASE_PROC_KEYWORD"; then
+        echo -n "stopping $command"
         echo "`date` Terminating $command" >> $HBASE_LOGLOG
         kill $pidToKill > /dev/null 2>&1
         waitForProcessEnd $pidToKill $command
       else
         retval=$?
-        echo no $command to stop because kill -0 of pid $pidToKill failed with status $retval
+        if [ $retval -eq 1 ]; then
+          echo "no $command to stop because process $pidToKill is not alive"
+        else
+          echo "no $command to stop because process $pidToKill is not $command"
+        fi
       fi
     else
-      echo no $command to stop because no pid file $HBASE_PID
+      echo "no $command to stop because no pid file $HBASE_PID"
     fi
     rm -f $HBASE_PID
   ;;
 
 (restart)
-    echo running $command, logging to $HBASE_LOGOUT
+    echo "running $command, logging to $HBASE_LOGOUT"
     # stop the command
     $thiscmd --config "${HBASE_CONF_DIR}" stop $command $args &
     wait_until_done $!
@@ -368,6 +378,19 @@ case $startStop in
     # start the command
     $thiscmd --config "${HBASE_CONF_DIR}" start $command $args &
     wait_until_done $!
+  ;;
+
+(status)
+    if [ -f $HBASE_PID ]; then
+      pid=$(cat "$HBASE_PID")
+      if is_process_alive "$pid" "$HBASE_PROC_KEYWORD"; then
+        echo "$command is running as PID $pid"
+        exit 0
+      fi
+    fi
+
+    echo "$command is not running"
+    exit 1
   ;;
 
 (*)

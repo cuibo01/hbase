@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -38,9 +38,13 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.KeeperException.Code;
 import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.client.ZKClientConfig;
 import org.apache.zookeeper.data.Stat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.io.netty.util.HashedWheelTimer;
+import org.apache.hbase.thirdparty.io.netty.util.TimerTask;
 
 /**
  * A very simple read only zookeeper implementation without watcher support.
@@ -55,7 +59,7 @@ public final class ReadOnlyZKClient implements Closeable {
   private static final int DEFAULT_RECOVERY_RETRY = 30;
 
   public static final String RECOVERY_RETRY_INTERVAL_MILLIS =
-      "zookeeper.recovery.retry.intervalmill";
+    "zookeeper.recovery.retry.intervalmill";
 
   private static final int DEFAULT_RECOVERY_RETRY_INTERVAL_MILLIS = 1000;
 
@@ -74,6 +78,10 @@ public final class ReadOnlyZKClient implements Closeable {
   private final int retryIntervalMs;
 
   private final int keepAliveTimeMs;
+
+  private HashedWheelTimer retryTimer;
+
+  private final ZKClientConfig zkClientConfig;
 
   private static abstract class Task implements Delayed {
 
@@ -123,7 +131,7 @@ public final class ReadOnlyZKClient implements Closeable {
     return String.format("0x%08x", System.identityHashCode(this));
   }
 
-  public ReadOnlyZKClient(Configuration conf) {
+  public ReadOnlyZKClient(Configuration conf, HashedWheelTimer retryTimer) {
     // We might use a different ZK for client access
     String clientZkQuorumServers = ZKConfig.getClientZKQuorumServersString(conf);
     if (clientZkQuorumServers != null) {
@@ -134,12 +142,15 @@ public final class ReadOnlyZKClient implements Closeable {
     this.sessionTimeoutMs = conf.getInt(ZK_SESSION_TIMEOUT, DEFAULT_ZK_SESSION_TIMEOUT);
     this.maxRetries = conf.getInt(RECOVERY_RETRY, DEFAULT_RECOVERY_RETRY);
     this.retryIntervalMs =
-        conf.getInt(RECOVERY_RETRY_INTERVAL_MILLIS, DEFAULT_RECOVERY_RETRY_INTERVAL_MILLIS);
+      conf.getInt(RECOVERY_RETRY_INTERVAL_MILLIS, DEFAULT_RECOVERY_RETRY_INTERVAL_MILLIS);
     this.keepAliveTimeMs = conf.getInt(KEEPALIVE_MILLIS, DEFAULT_KEEPALIVE_MILLIS);
+    this.zkClientConfig = ZKConfig.getZKClientConfig(conf);
+    this.retryTimer = retryTimer;
     LOG.debug(
-      "Connect {} to {} with session timeout={}ms, retries {}, " +
-        "retry interval {}ms, keepAlive={}ms",
-      getId(), connectString, sessionTimeoutMs, maxRetries, retryIntervalMs, keepAliveTimeMs);
+      "Connect {} to {} with session timeout={}ms, retries={}, "
+        + "retry interval={}ms, keepAlive={}ms, zk client config={}",
+      getId(), connectString, sessionTimeoutMs, maxRetries, retryIntervalMs, keepAliveTimeMs,
+      zkClientConfig);
     Threads.setDaemonThreadRunning(new Thread(this::run),
       "ReadOnlyZKClient-" + connectString + "@" + getId());
   }
@@ -183,6 +194,8 @@ public final class ReadOnlyZKClient implements Closeable {
               try {
                 zk.close();
               } catch (InterruptedException e) {
+                // Restore interrupt status
+                Thread.currentThread().interrupt();
               }
             }
             if (ZKTask.this.delay(retryIntervalMs, maxRetries)) {
@@ -251,6 +264,23 @@ public final class ReadOnlyZKClient implements Closeable {
     }
   }
 
+  private static TimerTask getTimerTask(final long timeoutMs, final CompletableFuture<?> future,
+    final String api) {
+    return timeout -> {
+      if (!future.isDone()) {
+        future.completeExceptionally(new DoNotRetryIOException(
+          "Zookeeper " + api + " could not be completed in " + timeoutMs + " ms"));
+      }
+    };
+  }
+
+  public CompletableFuture<byte[]> get(final String path, final long timeoutMs) {
+    CompletableFuture<byte[]> future = get(path);
+    TimerTask timerTask = getTimerTask(timeoutMs, future, "GET");
+    retryTimer.newTimeout(timerTask, timeoutMs + 1, TimeUnit.MILLISECONDS);
+    return future;
+  }
+
   public CompletableFuture<byte[]> get(String path) {
     if (closed.get()) {
       return FutureUtils.failedFuture(new DoNotRetryIOException("Client already closed"));
@@ -260,10 +290,17 @@ public final class ReadOnlyZKClient implements Closeable {
 
       @Override
       protected void doExec(ZooKeeper zk) {
-        zk.getData(path, false,
-            (rc, path, ctx, data, stat) -> onComplete(zk, rc, data, true), null);
+        zk.getData(path, false, (rc, path, ctx, data, stat) -> onComplete(zk, rc, data, true),
+          null);
       }
     });
+    return future;
+  }
+
+  public CompletableFuture<Stat> exists(String path, long timeoutMs) {
+    CompletableFuture<Stat> future = exists(path);
+    TimerTask timerTask = getTimerTask(timeoutMs, future, "EXISTS");
+    retryTimer.newTimeout(timerTask, timeoutMs + 1, TimeUnit.MILLISECONDS);
     return future;
   }
 
@@ -279,6 +316,13 @@ public final class ReadOnlyZKClient implements Closeable {
         zk.exists(path, false, (rc, path, ctx, stat) -> onComplete(zk, rc, stat, false), null);
       }
     });
+    return future;
+  }
+
+  public CompletableFuture<List<String>> list(String path, long timeoutMs) {
+    CompletableFuture<List<String>> future = list(path);
+    TimerTask timerTask = getTimerTask(timeoutMs, future, "LIST");
+    retryTimer.newTimeout(timerTask, timeoutMs + 1, TimeUnit.MILLISECONDS);
     return future;
   }
 
@@ -303,6 +347,8 @@ public final class ReadOnlyZKClient implements Closeable {
       try {
         zookeeper.close();
       } catch (InterruptedException e) {
+        // Restore interrupt status
+        Thread.currentThread().interrupt();
       }
       zookeeper = null;
     }
@@ -311,7 +357,8 @@ public final class ReadOnlyZKClient implements Closeable {
   private ZooKeeper getZk() throws IOException {
     // may be closed when session expired
     if (zookeeper == null || !zookeeper.getState().isAlive()) {
-      zookeeper = new ZooKeeper(connectString, sessionTimeoutMs, e -> {});
+      zookeeper = new ZooKeeper(connectString, sessionTimeoutMs, e -> {
+      }, zkClientConfig);
     }
     return zookeeper;
   }

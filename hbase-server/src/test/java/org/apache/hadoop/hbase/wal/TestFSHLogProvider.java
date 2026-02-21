@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -60,12 +60,12 @@ import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Category({RegionServerTests.class, MediumTests.class})
+@Category({ RegionServerTests.class, MediumTests.class })
 public class TestFSHLogProvider {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestFSHLogProvider.class);
+    HBaseClassTestRule.forClass(TestFSHLogProvider.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestFSHLogProvider.class);
 
@@ -96,12 +96,9 @@ public class TestFSHLogProvider {
     TEST_UTIL.getConfiguration().setInt("dfs.client.socket-timeout", 5000);
 
     // faster failover with cluster.shutdown();fs.close() idiom
-    TEST_UTIL.getConfiguration()
-        .setInt("hbase.ipc.client.connect.max.retries", 1);
-    TEST_UTIL.getConfiguration().setInt(
-        "dfs.client.block.recovery.retries", 1);
-    TEST_UTIL.getConfiguration().setInt(
-      "hbase.ipc.client.connection.maxidletime", 500);
+    TEST_UTIL.getConfiguration().setInt("hbase.ipc.client.connect.max.retries", 1);
+    TEST_UTIL.getConfiguration().setInt("dfs.client.block.recovery.retries", 1);
+    TEST_UTIL.getConfiguration().setInt("hbase.ipc.client.connection.maxidletime", 500);
     TEST_UTIL.startMiniDFSCluster(3);
 
     // Set up a working space for our tests.
@@ -115,15 +112,11 @@ public class TestFSHLogProvider {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  static String getName() {
-    return "TestDefaultWALProvider";
-  }
-
   @Test
   public void testGetServerNameFromWALDirectoryName() throws IOException {
     ServerName sn = ServerName.valueOf("hn", 450, 1398);
-    String hl = CommonFSUtils.getRootDir(conf) + "/" +
-        AbstractFSWALProvider.getWALDirectoryName(sn.toString());
+    String hl = CommonFSUtils.getRootDir(conf) + "/"
+      + AbstractFSWALProvider.getWALDirectoryName(sn.toString());
 
     // Must not throw exception
     assertNull(AbstractFSWALProvider.getServerNameFromWALDirectoryName(conf, null));
@@ -137,22 +130,21 @@ public class TestFSHLogProvider {
 
     final String wals = "/WALs/";
     ServerName parsed = AbstractFSWALProvider.getServerNameFromWALDirectoryName(conf,
-      CommonFSUtils.getRootDir(conf).toUri().toString() + wals + sn +
-      "/localhost%2C32984%2C1343316388997.1343316390417");
-    assertEquals("standard",  sn, parsed);
+      CommonFSUtils.getRootDir(conf).toUri().toString() + wals + sn
+        + "/localhost%2C32984%2C1343316388997.1343316390417");
+    assertEquals("standard", sn, parsed);
 
     parsed = AbstractFSWALProvider.getServerNameFromWALDirectoryName(conf, hl + "/qdf");
     assertEquals("subdir", sn, parsed);
 
     parsed = AbstractFSWALProvider.getServerNameFromWALDirectoryName(conf,
-      CommonFSUtils.getRootDir(conf).toUri().toString() + wals + sn +
-      "-splitting/localhost%3A57020.1340474893931");
+      CommonFSUtils.getRootDir(conf).toUri().toString() + wals + sn
+        + "-splitting/localhost%3A57020.1340474893931");
     assertEquals("split", sn, parsed);
   }
 
-
   private void addEdits(WAL log, RegionInfo hri, TableDescriptor htd, int times,
-      NavigableMap<byte[], Integer> scopes) throws IOException {
+    NavigableMap<byte[], Integer> scopes) throws IOException {
     final byte[] row = Bytes.toBytes("row");
     for (int i = 0; i < times; i++) {
       long timestamp = EnvironmentEdgeManager.currentTime();
@@ -166,32 +158,34 @@ public class TestFSHLogProvider {
 
   /**
    * used by TestDefaultWALProviderWithHLogKey
-   * @param scopes
    */
-  WALKeyImpl getWalKey(final byte[] info, final TableName tableName, final long timestamp,
-      NavigableMap<byte[], Integer> scopes) {
+  private WALKeyImpl getWalKey(final byte[] info, final TableName tableName, final long timestamp,
+    NavigableMap<byte[], Integer> scopes) {
     return new WALKeyImpl(info, tableName, timestamp, mvcc, scopes);
   }
 
   /**
    * helper method to simulate region flush for a WAL.
-   * @param wal
-   * @param regionEncodedName
    */
-  protected void flushRegion(WAL wal, byte[] regionEncodedName, Set<byte[]> flushedFamilyNames) {
+  private void flushRegion(WAL wal, byte[] regionEncodedName, Set<byte[]> flushedFamilyNames) {
     wal.startCacheFlush(regionEncodedName, flushedFamilyNames);
     wal.completeCacheFlush(regionEncodedName, HConstants.NO_SEQNUM);
   }
 
-  @Test
-  public void testLogCleaning() throws Exception {
-    LOG.info(currentTest.getMethodName());
+  // now we will close asynchronously and will not archive a wal file unless it is fully closed, so
+  // sometimes we need to wait a bit before asserting, especially when you want to test the removal
+  // of numRolledLogFiles
+  private void waitNumRolledLogFiles(WAL wal, int expected) {
+    TEST_UTIL.waitFor(5000, () -> AbstractFSWALProvider.getNumRolledLogFiles(wal) == expected);
+  }
+
+  private void testLogCleaning(WALFactory wals) throws IOException {
     TableDescriptor htd =
-        TableDescriptorBuilder.newBuilder(TableName.valueOf(currentTest.getMethodName()))
-            .setColumnFamily(ColumnFamilyDescriptorBuilder.of("row")).build();
+      TableDescriptorBuilder.newBuilder(TableName.valueOf(currentTest.getMethodName()))
+        .setColumnFamily(ColumnFamilyDescriptorBuilder.of("row")).build();
     TableDescriptor htd2 =
-        TableDescriptorBuilder.newBuilder(TableName.valueOf(currentTest.getMethodName() + "2"))
-            .setColumnFamily(ColumnFamilyDescriptorBuilder.of("row")).build();
+      TableDescriptorBuilder.newBuilder(TableName.valueOf(currentTest.getMethodName() + "2"))
+        .setColumnFamily(ColumnFamilyDescriptorBuilder.of("row")).build();
     NavigableMap<byte[], Integer> scopes1 = new TreeMap<>(Bytes.BYTES_COMPARATOR);
     for (byte[] fam : htd.getColumnFamilyNames()) {
       scopes1.put(fam, 0);
@@ -200,79 +194,68 @@ public class TestFSHLogProvider {
     for (byte[] fam : htd2.getColumnFamilyNames()) {
       scopes2.put(fam, 0);
     }
+    RegionInfo hri = RegionInfoBuilder.newBuilder(htd.getTableName()).build();
+    RegionInfo hri2 = RegionInfoBuilder.newBuilder(htd2.getTableName()).build();
+    // we want to mix edits from regions, so pick our own identifier.
+    WAL log = wals.getWAL(null);
+
+    // Add a single edit and make sure that rolling won't remove the file
+    // Before HBASE-3198 it used to delete it
+    addEdits(log, hri, htd, 1, scopes1);
+    log.rollWriter();
+    waitNumRolledLogFiles(log, 1);
+
+    // See if there's anything wrong with more than 1 edit
+    addEdits(log, hri, htd, 2, scopes1);
+    log.rollWriter();
+    assertEquals(2, FSHLogProvider.getNumRolledLogFiles(log));
+
+    // Now mix edits from 2 regions, still no flushing
+    addEdits(log, hri, htd, 1, scopes1);
+    addEdits(log, hri2, htd2, 1, scopes2);
+    addEdits(log, hri, htd, 1, scopes1);
+    addEdits(log, hri2, htd2, 1, scopes2);
+    log.rollWriter();
+    waitNumRolledLogFiles(log, 3);
+
+    // Flush the first region, we expect to see the first two files getting
+    // archived. We need to append something or writer won't be rolled.
+    addEdits(log, hri2, htd2, 1, scopes2);
+    log.startCacheFlush(hri.getEncodedNameAsBytes(), htd.getColumnFamilyNames());
+    log.completeCacheFlush(hri.getEncodedNameAsBytes(), HConstants.NO_SEQNUM);
+    log.rollWriter();
+    waitNumRolledLogFiles(log, 2);
+
+    // Flush the second region, which removes all the remaining output files
+    // since the oldest was completely flushed and the two others only contain
+    // flush information
+    addEdits(log, hri2, htd2, 1, scopes2);
+    log.startCacheFlush(hri2.getEncodedNameAsBytes(), htd2.getColumnFamilyNames());
+    log.completeCacheFlush(hri2.getEncodedNameAsBytes(), HConstants.NO_SEQNUM);
+    log.rollWriter();
+    waitNumRolledLogFiles(log, 0);
+  }
+
+  @Test
+  public void testLogCleaning() throws Exception {
+    LOG.info(currentTest.getMethodName());
     Configuration localConf = new Configuration(conf);
     localConf.set(WALFactory.WAL_PROVIDER, FSHLogProvider.class.getName());
     WALFactory wals = new WALFactory(localConf, currentTest.getMethodName());
     try {
-      RegionInfo hri = RegionInfoBuilder.newBuilder(htd.getTableName()).build();
-      RegionInfo hri2 = RegionInfoBuilder.newBuilder(htd2.getTableName()).build();
-      // we want to mix edits from regions, so pick our own identifier.
-      WAL log = wals.getWAL(null);
-
-      // Add a single edit and make sure that rolling won't remove the file
-      // Before HBASE-3198 it used to delete it
-      addEdits(log, hri, htd, 1, scopes1);
-      log.rollWriter();
-      assertEquals(1, AbstractFSWALProvider.getNumRolledLogFiles(log));
-
-      // See if there's anything wrong with more than 1 edit
-      addEdits(log, hri, htd, 2, scopes1);
-      log.rollWriter();
-      assertEquals(2, FSHLogProvider.getNumRolledLogFiles(log));
-
-      // Now mix edits from 2 regions, still no flushing
-      addEdits(log, hri, htd, 1, scopes1);
-      addEdits(log, hri2, htd2, 1, scopes2);
-      addEdits(log, hri, htd, 1, scopes1);
-      addEdits(log, hri2, htd2, 1, scopes2);
-      log.rollWriter();
-      assertEquals(3, AbstractFSWALProvider.getNumRolledLogFiles(log));
-
-      // Flush the first region, we expect to see the first two files getting
-      // archived. We need to append something or writer won't be rolled.
-      addEdits(log, hri2, htd2, 1, scopes2);
-      log.startCacheFlush(hri.getEncodedNameAsBytes(), htd.getColumnFamilyNames());
-      log.completeCacheFlush(hri.getEncodedNameAsBytes(), HConstants.NO_SEQNUM);
-      log.rollWriter();
-      int count = AbstractFSWALProvider.getNumRolledLogFiles(log);
-      assertEquals(2, count);
-
-      // Flush the second region, which removes all the remaining output files
-      // since the oldest was completely flushed and the two others only contain
-      // flush information
-      addEdits(log, hri2, htd2, 1, scopes2);
-      log.startCacheFlush(hri2.getEncodedNameAsBytes(), htd2.getColumnFamilyNames());
-      log.completeCacheFlush(hri2.getEncodedNameAsBytes(), HConstants.NO_SEQNUM);
-      log.rollWriter();
-      assertEquals(0, AbstractFSWALProvider.getNumRolledLogFiles(log));
+      testLogCleaning(wals);
     } finally {
-      if (wals != null) {
-        wals.close();
-      }
+      wals.close();
     }
   }
 
-  /**
-   * Tests wal archiving by adding data, doing flushing/rolling and checking we archive old logs
-   * and also don't archive "live logs" (that is, a log with un-flushed entries).
-   * <p>
-   * This is what it does:
-   * It creates two regions, and does a series of inserts along with log rolling.
-   * Whenever a WAL is rolled, HLogBase checks previous wals for archiving. A wal is eligible for
-   * archiving if for all the regions which have entries in that wal file, have flushed - past
-   * their maximum sequence id in that wal file.
-   * <p>
-   * @throws IOException
-   */
-  @Test
-  public void testWALArchiving() throws IOException {
-    LOG.debug(currentTest.getMethodName());
+  private void testWALArchiving(WALFactory wals) throws IOException {
     TableDescriptor table1 =
-        TableDescriptorBuilder.newBuilder(TableName.valueOf(currentTest.getMethodName() + "1"))
-            .setColumnFamily(ColumnFamilyDescriptorBuilder.of("row")).build();
+      TableDescriptorBuilder.newBuilder(TableName.valueOf(currentTest.getMethodName() + "1"))
+        .setColumnFamily(ColumnFamilyDescriptorBuilder.of("row")).build();
     TableDescriptor table2 =
-        TableDescriptorBuilder.newBuilder(TableName.valueOf(currentTest.getMethodName() + "2"))
-            .setColumnFamily(ColumnFamilyDescriptorBuilder.of("row")).build();
+      TableDescriptorBuilder.newBuilder(TableName.valueOf(currentTest.getMethodName() + "2"))
+        .setColumnFamily(ColumnFamilyDescriptorBuilder.of("row")).build();
     NavigableMap<byte[], Integer> scopes1 = new TreeMap<>(Bytes.BYTES_COMPARATOR);
     for (byte[] fam : table1.getColumnFamilyNames()) {
       scopes1.put(fam, 0);
@@ -281,73 +264,74 @@ public class TestFSHLogProvider {
     for (byte[] fam : table2.getColumnFamilyNames()) {
       scopes2.put(fam, 0);
     }
+    WAL wal = wals.getWAL(null);
+    assertEquals(0, AbstractFSWALProvider.getNumRolledLogFiles(wal));
+    RegionInfo hri1 = RegionInfoBuilder.newBuilder(table1.getTableName()).build();
+    RegionInfo hri2 = RegionInfoBuilder.newBuilder(table2.getTableName()).build();
+    // variables to mock region sequenceIds.
+    // start with the testing logic: insert a waledit, and roll writer
+    addEdits(wal, hri1, table1, 1, scopes1);
+    wal.rollWriter();
+    // assert that the wal is rolled
+    waitNumRolledLogFiles(wal, 1);
+    // add edits in the second wal file, and roll writer.
+    addEdits(wal, hri1, table1, 1, scopes1);
+    wal.rollWriter();
+    // assert that the wal is rolled
+    waitNumRolledLogFiles(wal, 2);
+    // add a waledit to table1, and flush the region.
+    addEdits(wal, hri1, table1, 3, scopes1);
+    flushRegion(wal, hri1.getEncodedNameAsBytes(), table1.getColumnFamilyNames());
+    // roll log; all old logs should be archived.
+    wal.rollWriter();
+    waitNumRolledLogFiles(wal, 0);
+    // add an edit to table2, and roll writer
+    addEdits(wal, hri2, table2, 1, scopes2);
+    wal.rollWriter();
+    waitNumRolledLogFiles(wal, 1);
+    // add edits for table1, and roll writer
+    addEdits(wal, hri1, table1, 2, scopes1);
+    wal.rollWriter();
+    waitNumRolledLogFiles(wal, 2);
+    // add edits for table2, and flush hri1.
+    addEdits(wal, hri2, table2, 2, scopes2);
+    flushRegion(wal, hri1.getEncodedNameAsBytes(), table2.getColumnFamilyNames());
+    // the log : region-sequenceId map is
+    // log1: region2 (unflushed)
+    // log2: region1 (flushed)
+    // log3: region2 (unflushed)
+    // roll the writer; log2 should be archived.
+    wal.rollWriter();
+    waitNumRolledLogFiles(wal, 2);
+    // flush region2, and all logs should be archived.
+    addEdits(wal, hri2, table2, 2, scopes2);
+    flushRegion(wal, hri2.getEncodedNameAsBytes(), table2.getColumnFamilyNames());
+    wal.rollWriter();
+    waitNumRolledLogFiles(wal, 0);
+  }
+
+  /**
+   * Tests wal archiving by adding data, doing flushing/rolling and checking we archive old logs and
+   * also don't archive "live logs" (that is, a log with un-flushed entries).
+   * <p>
+   * This is what it does: It creates two regions, and does a series of inserts along with log
+   * rolling. Whenever a WAL is rolled, HLogBase checks previous wals for archiving. A wal is
+   * eligible for archiving if for all the regions which have entries in that wal file, have flushed
+   * - past their maximum sequence id in that wal file.
+   * <p>
+   */
+  @Test
+  public void testWALArchiving() throws IOException {
+    LOG.debug(currentTest.getMethodName());
+
     Configuration localConf = new Configuration(conf);
     localConf.set(WALFactory.WAL_PROVIDER, FSHLogProvider.class.getName());
     WALFactory wals = new WALFactory(localConf, currentTest.getMethodName());
     try {
-      WAL wal = wals.getWAL(null);
-      assertEquals(0, AbstractFSWALProvider.getNumRolledLogFiles(wal));
-      RegionInfo hri1 = RegionInfoBuilder.newBuilder(table1.getTableName()).build();
-      RegionInfo hri2 = RegionInfoBuilder.newBuilder(table2.getTableName()).build();
-      // variables to mock region sequenceIds.
-      // start with the testing logic: insert a waledit, and roll writer
-      addEdits(wal, hri1, table1, 1, scopes1);
-      wal.rollWriter();
-      // assert that the wal is rolled
-      assertEquals(1, AbstractFSWALProvider.getNumRolledLogFiles(wal));
-      // add edits in the second wal file, and roll writer.
-      addEdits(wal, hri1, table1, 1, scopes1);
-      wal.rollWriter();
-      // assert that the wal is rolled
-      assertEquals(2, AbstractFSWALProvider.getNumRolledLogFiles(wal));
-      // add a waledit to table1, and flush the region.
-      addEdits(wal, hri1, table1, 3, scopes1);
-      flushRegion(wal, hri1.getEncodedNameAsBytes(), table1.getColumnFamilyNames());
-      // roll log; all old logs should be archived.
-      wal.rollWriter();
-      assertEquals(0, AbstractFSWALProvider.getNumRolledLogFiles(wal));
-      // add an edit to table2, and roll writer
-      addEdits(wal, hri2, table2, 1, scopes2);
-      wal.rollWriter();
-      assertEquals(1, AbstractFSWALProvider.getNumRolledLogFiles(wal));
-      // add edits for table1, and roll writer
-      addEdits(wal, hri1, table1, 2, scopes1);
-      wal.rollWriter();
-      assertEquals(2, AbstractFSWALProvider.getNumRolledLogFiles(wal));
-      // add edits for table2, and flush hri1.
-      addEdits(wal, hri2, table2, 2, scopes2);
-      flushRegion(wal, hri1.getEncodedNameAsBytes(), table2.getColumnFamilyNames());
-      // the log : region-sequenceId map is
-      // log1: region2 (unflushed)
-      // log2: region1 (flushed)
-      // log3: region2 (unflushed)
-      // roll the writer; log2 should be archived.
-      wal.rollWriter();
-      assertEquals(2, AbstractFSWALProvider.getNumRolledLogFiles(wal));
-      // flush region2, and all logs should be archived.
-      addEdits(wal, hri2, table2, 2, scopes2);
-      flushRegion(wal, hri2.getEncodedNameAsBytes(), table2.getColumnFamilyNames());
-      wal.rollWriter();
-      assertEquals(0, AbstractFSWALProvider.getNumRolledLogFiles(wal));
+      testWALArchiving(wals);
     } finally {
-      if (wals != null) {
-        wals.close();
-      }
+      wals.close();
     }
-  }
-
-  /**
-   * Write to a log file with three concurrent threads and verifying all data is written.
-   * @throws Exception
-   */
-  @Test
-  public void testConcurrentWrites() throws Exception {
-    // Run the WPE tool with three threads writing 3000 edits each concurrently.
-    // When done, verify that all edits were written.
-    int errCode = WALPerformanceEvaluation.
-      innerMain(new Configuration(TEST_UTIL.getConfiguration()),
-        new String [] {"-threads", "3", "-verify", "-noclosefs", "-iterations", "3000"});
-    assertEquals(0, errCode);
   }
 
   /**
@@ -364,11 +348,11 @@ public class TestFSHLogProvider {
         seen.add(wals.getWAL(null)));
       for (int i = 0; i < 1000; i++) {
         assertFalse(
-          "default wal provider is only supposed to return a single wal, which should " +
-            "compare as .equals itself.",
+          "default wal provider is only supposed to return a single wal, which should "
+            + "compare as .equals itself.",
           seen.add(wals.getWAL(RegionInfoBuilder
-              .newBuilder(TableName.valueOf("Table-" + ThreadLocalRandom.current().nextInt()))
-              .build())));
+            .newBuilder(TableName.valueOf("Table-" + ThreadLocalRandom.current().nextInt()))
+            .build())));
       }
     } finally {
       wals.close();

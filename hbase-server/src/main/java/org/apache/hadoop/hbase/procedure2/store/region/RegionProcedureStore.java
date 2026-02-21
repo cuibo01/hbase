@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -29,7 +29,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import org.apache.commons.lang3.mutable.MutableLong;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -41,8 +40,6 @@ import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.ipc.RpcCall;
-import org.apache.hadoop.hbase.ipc.RpcServer;
 import org.apache.hadoop.hbase.log.HBaseMarkers;
 import org.apache.hadoop.hbase.master.assignment.AssignProcedure;
 import org.apache.hadoop.hbase.master.assignment.MoveRegionProcedure;
@@ -71,7 +68,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos;
  * A procedure store which uses the master local store to store all the procedures.
  * <p/>
  * We use proc:d column to store the serialized protobuf format procedure, and when deleting we will
- * first fill the info:proc column with an empty byte array, and then actually delete them in the
+ * first fill the proc:d column with an empty byte array, and then actually delete them in the
  * {@link #cleanup()} method. This is because that we need to retain the max procedure id, so we can
  * not directly delete a procedure row as we do not know if it is the one with the max procedure id.
  */
@@ -144,22 +141,24 @@ public class RegionProcedureStore extends ProcedureStoreBase {
     for (Class<?> clazz : UNSUPPORTED_PROCEDURES) {
       List<Procedure<?>> procs = procsByType.get(clazz);
       if (procs != null) {
-        LOG.error("Unsupported procedure type {} found, please rollback your master to the old" +
-          " version to finish them, and then try to upgrade again." +
-          " See https://hbase.apache.org/book.html#upgrade2.2 for more details." +
-          " The full procedure list: {}", clazz, procs);
+        LOG.error("Unsupported procedure type {} found, please rollback your master to the old"
+          + " version to finish them, and then try to upgrade again."
+          + " See https://hbase.apache.org/book.html#upgrade2.2 for more details."
+          + " The full procedure list: {}", clazz, procs);
         throw new HBaseIOException("Unsupported procedure type " + clazz + " found");
       }
     }
     // A special check for SCP, as we do not support RecoverMetaProcedure any more so we need to
     // make sure that no one will try to schedule it but SCP does have a state which will schedule
     // it.
-    if (procsByType.getOrDefault(ServerCrashProcedure.class, Collections.emptyList()).stream()
-      .map(p -> (ServerCrashProcedure) p).anyMatch(ServerCrashProcedure::isInRecoverMetaState)) {
-      LOG.error("At least one ServerCrashProcedure is going to schedule a RecoverMetaProcedure," +
-        " which is not supported any more. Please rollback your master to the old version to" +
-        " finish them, and then try to upgrade again." +
-        " See https://hbase.apache.org/book.html#upgrade2.2 for more details.");
+    if (
+      procsByType.getOrDefault(ServerCrashProcedure.class, Collections.emptyList()).stream()
+        .map(p -> (ServerCrashProcedure) p).anyMatch(ServerCrashProcedure::isInRecoverMetaState)
+    ) {
+      LOG.error("At least one ServerCrashProcedure is going to schedule a RecoverMetaProcedure,"
+        + " which is not supported any more. Please rollback your master to the old version to"
+        + " finish them, and then try to upgrade again."
+        + " See https://hbase.apache.org/book.html#upgrade2.2 for more details.");
       throw new HBaseIOException("Unsupported procedure state found for ServerCrashProcedure");
     }
   }
@@ -205,9 +204,9 @@ public class RegionProcedureStore extends ProcedureStoreBase {
           corruptedCount++;
         }
         if (corruptedCount > 0) {
-          throw new IOException("There are " + corruptedCount + " corrupted procedures when" +
-            " migrating from the old WAL based store to the new region based store, please" +
-            " fix them before upgrading again.");
+          throw new IOException("There are " + corruptedCount + " corrupted procedures when"
+            + " migrating from the old WAL based store to the new region based store, please"
+            + " fix them before upgrading again.");
         }
       }
     });
@@ -302,20 +301,6 @@ public class RegionProcedureStore extends ProcedureStoreBase {
     rowsToLock.add(row);
   }
 
-  /**
-   * Insert procedure may be called by master's rpc call. There are some check about the rpc call
-   * when mutate region. Here unset the current rpc call and set it back in finally block. See
-   * HBASE-23895 for more details.
-   */
-  private void runWithoutRpcCall(Runnable runnable) {
-    Optional<RpcCall> rpcCall = RpcServer.unsetCurrentCall();
-    try {
-      runnable.run();
-    } finally {
-      rpcCall.ifPresent(RpcServer::setCurrentCall);
-    }
-  }
-
   @Override
   public void insert(Procedure<?> proc, Procedure<?>[] subProcs) {
     if (subProcs == null || subProcs.length == 0) {
@@ -325,50 +310,44 @@ public class RegionProcedureStore extends ProcedureStoreBase {
     }
     List<Mutation> mutations = new ArrayList<>(subProcs.length + 1);
     List<byte[]> rowsToLock = new ArrayList<>(subProcs.length + 1);
-    runWithoutRpcCall(() -> {
-      try {
-        serializePut(proc, mutations, rowsToLock);
-        for (Procedure<?> subProc : subProcs) {
-          serializePut(subProc, mutations, rowsToLock);
-        }
-        region.update(r -> r.mutateRowsWithLocks(mutations, rowsToLock, NO_NONCE, NO_NONCE));
-      } catch (IOException e) {
-        LOG.error(HBaseMarkers.FATAL, "Failed to insert proc {}, sub procs {}", proc,
-          Arrays.toString(subProcs), e);
-        throw new UncheckedIOException(e);
+    try {
+      serializePut(proc, mutations, rowsToLock);
+      for (Procedure<?> subProc : subProcs) {
+        serializePut(subProc, mutations, rowsToLock);
       }
-    });
+      region.update(r -> r.mutateRowsWithLocks(mutations, rowsToLock, NO_NONCE, NO_NONCE));
+    } catch (IOException e) {
+      LOG.error(HBaseMarkers.FATAL, "Failed to insert proc {}, sub procs {}", proc,
+        Arrays.toString(subProcs), e);
+      throw new UncheckedIOException(e);
+    }
   }
 
   @Override
   public void insert(Procedure<?>[] procs) {
     List<Mutation> mutations = new ArrayList<>(procs.length);
     List<byte[]> rowsToLock = new ArrayList<>(procs.length);
-    runWithoutRpcCall(() -> {
-      try {
-        for (Procedure<?> proc : procs) {
-          serializePut(proc, mutations, rowsToLock);
-        }
-        region.update(r -> r.mutateRowsWithLocks(mutations, rowsToLock, NO_NONCE, NO_NONCE));
-      } catch (IOException e) {
-        LOG.error(HBaseMarkers.FATAL, "Failed to insert procs {}", Arrays.toString(procs), e);
-        throw new UncheckedIOException(e);
+    try {
+      for (Procedure<?> proc : procs) {
+        serializePut(proc, mutations, rowsToLock);
       }
-    });
+      region.update(r -> r.mutateRowsWithLocks(mutations, rowsToLock, NO_NONCE, NO_NONCE));
+    } catch (IOException e) {
+      LOG.error(HBaseMarkers.FATAL, "Failed to insert procs {}", Arrays.toString(procs), e);
+      throw new UncheckedIOException(e);
+    }
   }
 
   @Override
   public void update(Procedure<?> proc) {
-    runWithoutRpcCall(() -> {
-      try {
-        ProcedureProtos.Procedure proto = ProcedureUtil.convertToProtoProcedure(proc);
-        region.update(r -> r.put(new Put(Bytes.toBytes(proc.getProcId())).addColumn(PROC_FAMILY,
-          PROC_QUALIFIER, proto.toByteArray())));
-      } catch (IOException e) {
-        LOG.error(HBaseMarkers.FATAL, "Failed to update proc {}", proc, e);
-        throw new UncheckedIOException(e);
-      }
-    });
+    try {
+      ProcedureProtos.Procedure proto = ProcedureUtil.convertToProtoProcedure(proc);
+      region.update(r -> r.put(new Put(Bytes.toBytes(proc.getProcId())).addColumn(PROC_FAMILY,
+        PROC_QUALIFIER, proto.toByteArray())));
+    } catch (IOException e) {
+      LOG.error(HBaseMarkers.FATAL, "Failed to update proc {}", proc, e);
+      throw new UncheckedIOException(e);
+    }
   }
 
   @Override

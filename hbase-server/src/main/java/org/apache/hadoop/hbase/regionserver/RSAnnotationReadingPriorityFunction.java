@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -35,6 +35,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CompactRegi
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.FlushRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetRegionInfoRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetStoreFileRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos.BulkLoadHFileRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos.GetRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos.MutateRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos.ScanRequest;
@@ -45,13 +46,17 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos.RequestHeader
  * Priority function specifically for the region server.
  */
 @InterfaceAudience.Private
-class RSAnnotationReadingPriorityFunction extends AnnotationReadingPriorityFunction<RSRpcServices> {
+public class RSAnnotationReadingPriorityFunction
+  extends AnnotationReadingPriorityFunction<RSRpcServices> {
 
   private static final Logger LOG =
     LoggerFactory.getLogger(RSAnnotationReadingPriorityFunction.class);
 
   /** Used to control the scan delay, currently sqrt(numNextCall * weight) */
   public static final String SCAN_VTIME_WEIGHT_CONF_KEY = "hbase.ipc.server.scan.vtime.weight";
+
+  // QOS for internal meta read requests
+  public static final int INTERNAL_READ_QOS = 250;
 
   @SuppressWarnings("unchecked")
   private final Class<? extends Message>[] knownArgumentClasses =
@@ -96,6 +101,10 @@ class RSAnnotationReadingPriorityFunction extends AnnotationReadingPriorityFunct
     if (header.hasPriority()) {
       return header.getPriority();
     }
+    if (param instanceof BulkLoadHFileRequest) {
+      return HConstants.BULKLOAD_QOS;
+    }
+
     String cls = param.getClass().getName();
     Class<? extends Message> rpcArgClass = argumentToClassMap.get(cls);
     RegionSpecifier regionSpecifier = null;

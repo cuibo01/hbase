@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.client;
 
 import static org.apache.hadoop.hbase.util.FutureUtils.addListener;
 
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import org.apache.hadoop.hbase.exceptions.ClientExceptionsUtil;
 import org.apache.hadoop.hbase.ipc.HBaseRpcController;
@@ -44,17 +45,19 @@ public class AsyncMasterRequestRpcRetryingCaller<T> extends AsyncRpcRetryingCall
   private final Callable<T> callable;
 
   public AsyncMasterRequestRpcRetryingCaller(Timer retryTimer, AsyncConnectionImpl conn,
-      Callable<T> callable, int priority, long pauseNs, long pauseForCQTBENs, int maxRetries,
-      long operationTimeoutNs, long rpcTimeoutNs, int startLogErrorsCnt) {
-    super(retryTimer, conn, priority, pauseNs, pauseForCQTBENs, maxRetries, operationTimeoutNs,
-      rpcTimeoutNs, startLogErrorsCnt);
+    Callable<T> callable, int priority, long pauseNs, long pauseNsForServerOverloaded,
+    int maxRetries, long operationTimeoutNs, long rpcTimeoutNs, int startLogErrorsCnt) {
+    super(retryTimer, conn, priority, pauseNs, pauseNsForServerOverloaded, maxRetries,
+      operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt, Collections.emptyMap());
     this.callable = callable;
   }
 
   private void clearMasterStubCacheOnError(MasterService.Interface stub, Throwable error) {
     // ServerNotRunningYetException may because it is the backup master.
-    if (ClientExceptionsUtil.isConnectionException(error) ||
-      error instanceof ServerNotRunningYetException) {
+    if (
+      ClientExceptionsUtil.isConnectionException(error)
+        || error instanceof ServerNotRunningYetException
+    ) {
       conn.clearMasterStubCache(stub);
     }
   }
@@ -71,7 +74,7 @@ public class AsyncMasterRequestRpcRetryingCaller<T> extends AsyncRpcRetryingCall
       addListener(callable.call(controller, stub), (result, error2) -> {
         if (error2 != null) {
           onError(error2, () -> "Call to master failed",
-            err -> clearMasterStubCacheOnError(stub, error2));
+            err -> clearMasterStubCacheOnError(stub, err));
           return;
         }
         future.complete(result);

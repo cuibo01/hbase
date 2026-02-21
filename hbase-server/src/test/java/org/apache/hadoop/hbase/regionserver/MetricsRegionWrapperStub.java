@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver;
 
 import java.util.HashMap;
@@ -81,6 +80,11 @@ public class MetricsRegionWrapperStub implements MetricsRegionWrapper {
   @Override
   public long getStoreFileSize() {
     return 104;
+  }
+
+  @Override
+  public float getCurrentRegionCacheRatio() {
+    return 0;
   }
 
   @Override
@@ -198,5 +202,10 @@ public class MetricsRegionWrapperStub implements MetricsRegionWrapper {
     Map<String, Long> map = new HashMap<>();
     map.put("info", 0L);
     return map;
+  }
+
+  @Override
+  public String getTableDescriptorHash() {
+    return "testhash123abc";
   }
 }

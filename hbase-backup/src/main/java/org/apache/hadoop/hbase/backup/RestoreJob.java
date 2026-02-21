@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,11 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.backup;
 
 import java.io.IOException;
-
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.TableName;
@@ -32,14 +30,20 @@ import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Private
 public interface RestoreJob extends Configurable {
+
+  String KEEP_ORIGINAL_SPLITS_KEY = "hbase.backup.restorejob.keep.original.splits";
+  String BACKUP_ROOT_PATH_KEY = "hbase.backup.root.path";
+  boolean KEEP_ORIGINAL_SPLITS_DEFAULT = false;
+
   /**
    * Run restore operation
-   * @param dirPaths path array of WAL log directories
-   * @param fromTables from tables
-   * @param toTables to tables
+   * @param dirPaths          path array of WAL log directories
+   * @param fromTables        from tables
+   * @param restoreRootDir    output file system
+   * @param toTables          to tables
    * @param fullBackupRestore full backup restore
    * @throws IOException if running the job fails
    */
-  void run(Path[] dirPaths, TableName[] fromTables, TableName[] toTables,
-      boolean fullBackupRestore) throws IOException;
+  void run(Path[] dirPaths, TableName[] fromTables, Path restoreRootDir, TableName[] toTables,
+    boolean fullBackupRestore) throws IOException;
 }

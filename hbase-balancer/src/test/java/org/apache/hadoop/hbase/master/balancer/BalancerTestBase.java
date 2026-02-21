@@ -17,12 +17,14 @@
  */
 package org.apache.hadoop.hbase.master.balancer;
 
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
@@ -44,99 +46,85 @@ import org.apache.hadoop.hbase.master.RackManager;
 import org.apache.hadoop.hbase.master.RegionPlan;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.net.DNSToSwitchMapping;
-import org.junit.Assert;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Class used to be the base of unit tests on load balancers. It gives helper
- * methods to create maps of {@link ServerName} to lists of {@link RegionInfo}
- * and to check list of region plans.
- *
+ * Class used to be the base of unit tests on load balancers. It gives helper methods to create maps
+ * of {@link ServerName} to lists of {@link RegionInfo} and to check list of region plans.
  */
 public class BalancerTestBase {
   private static final Logger LOG = LoggerFactory.getLogger(BalancerTestBase.class);
   static int regionId = 0;
   protected static Configuration conf;
 
-  protected int[] largeCluster = new int[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 56 };
+  protected int[] largeCluster = new int[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 56 };
 
   // int[testnum][servernumber] -> numregions
-  protected int[][] clusterStateMocks = new int[][]{
-      // 1 node
-      new int[]{0},
-      new int[]{1},
-      new int[]{10},
-      // 2 node
-      new int[]{0, 0},
-      new int[]{2, 0},
-      new int[]{2, 1},
-      new int[]{2, 2},
-      new int[]{2, 3},
-      new int[]{2, 4},
-      new int[]{1, 1},
-      new int[]{0, 1},
-      new int[]{10, 1},
-      new int[]{514, 1432},
-      new int[]{48, 53},
-      // 3 node
-      new int[]{0, 1, 2},
-      new int[]{1, 2, 3},
-      new int[]{0, 2, 2},
-      new int[]{0, 3, 0},
-      new int[]{0, 4, 0},
-      new int[]{20, 20, 0},
-      // 4 node
-      new int[]{0, 1, 2, 3},
-      new int[]{4, 0, 0, 0},
-      new int[]{5, 0, 0, 0},
-      new int[]{6, 6, 0, 0},
-      new int[]{6, 2, 0, 0},
-      new int[]{6, 1, 0, 0},
-      new int[]{6, 0, 0, 0},
-      new int[]{4, 4, 4, 7},
-      new int[]{4, 4, 4, 8},
-      new int[]{0, 0, 0, 7},
-      // 5 node
-      new int[]{1, 1, 1, 1, 4},
-      // 6 nodes
-      new int[]{1500, 500, 500, 500, 10, 0},
-      new int[]{1500, 500, 500, 500, 500, 0},
-      // more nodes
-      new int[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
-      new int[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 10},
-      new int[]{6, 6, 5, 6, 6, 6, 6, 6, 6, 1},
-      new int[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 54},
-      new int[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 55},
-      new int[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 56},
-      new int[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 16},
-      new int[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 8},
-      new int[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 9},
-      new int[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 10},
-      new int[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 123},
-      new int[]{1, 1, 1, 1, 1, 1, 1, 1, 1, 155},
-      new int[]{10, 7, 12, 8, 11, 10, 9, 14},
-      new int[]{13, 14, 6, 10, 10, 10, 8, 10},
-      new int[]{130, 14, 60, 10, 100, 10, 80, 10},
-      new int[]{130, 140, 60, 100, 100, 100, 80, 100},
-      new int[]{0, 5 , 5, 5, 5},
-      largeCluster,
+  protected int[][] clusterStateMocks = new int[][] {
+    // 1 node
+    new int[] { 0 }, new int[] { 1 }, new int[] { 10 },
+    // 2 node
+    new int[] { 0, 0 }, new int[] { 2, 0 }, new int[] { 2, 1 }, new int[] { 2, 2 },
+    new int[] { 2, 3 }, new int[] { 2, 4 }, new int[] { 1, 1 }, new int[] { 0, 1 },
+    new int[] { 10, 1 }, new int[] { 514, 1432 }, new int[] { 48, 53 },
+    // 3 node
+    new int[] { 0, 1, 2 }, new int[] { 1, 2, 3 }, new int[] { 0, 2, 2 }, new int[] { 0, 3, 0 },
+    new int[] { 0, 4, 0 }, new int[] { 20, 20, 0 },
+    // 4 node
+    new int[] { 0, 1, 2, 3 }, new int[] { 4, 0, 0, 0 }, new int[] { 5, 0, 0, 0 },
+    new int[] { 6, 6, 0, 0 }, new int[] { 6, 2, 0, 0 }, new int[] { 6, 1, 0, 0 },
+    new int[] { 6, 0, 0, 0 }, new int[] { 4, 4, 4, 7 }, new int[] { 4, 4, 4, 8 },
+    new int[] { 0, 0, 0, 7 },
+    // 5 node
+    new int[] { 1, 1, 1, 1, 4 },
+    // 6 nodes
+    new int[] { 1500, 500, 500, 500, 10, 0 }, new int[] { 1500, 500, 500, 500, 500, 0 },
+    // more nodes
+    new int[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 },
+    new int[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 10 }, new int[] { 6, 6, 5, 6, 6, 6, 6, 6, 6, 1 },
+    new int[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 54 }, new int[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 55 },
+    new int[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 56 }, new int[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 16 },
+    new int[] { 1, 1, 1, 1, 1, 1, 1, 1, 1, 8 }, new int[] { 1, 1, 1, 1, 1, 1, 1, 1, 1, 9 },
+    new int[] { 1, 1, 1, 1, 1, 1, 1, 1, 1, 10 }, new int[] { 1, 1, 1, 1, 1, 1, 1, 1, 1, 123 },
+    new int[] { 1, 1, 1, 1, 1, 1, 1, 1, 1, 155 }, new int[] { 10, 7, 12, 8, 11, 10, 9, 14 },
+    new int[] { 13, 14, 6, 10, 10, 10, 8, 10 }, new int[] { 130, 14, 60, 10, 100, 10, 80, 10 },
+    new int[] { 130, 140, 60, 100, 100, 100, 80, 100 }, new int[] { 0, 5, 5, 5, 5 }, largeCluster,
 
   };
 
+  // int[testnum][servernumber] -> numregions
+  protected int[][] clusterStateMocksWithNoSlop = new int[][] {
+    // 1 node
+    new int[] { 0 }, new int[] { 1 }, new int[] { 10 },
+    // 2 node
+    new int[] { 0, 0 }, new int[] { 2, 1 }, new int[] { 2, 2 }, new int[] { 2, 3 },
+    new int[] { 1, 1 }, new int[] { 80, 120 }, new int[] { 1428, 1432 },
+    // more nodes
+    new int[] { 100, 90, 120, 90, 110, 100, 90, 120 }, };
+
+  // int[testnum][servernumber] -> numregions
+  protected int[][] clusterStateMocksWithSlop = new int[][] {
+    // 2 node
+    new int[] { 1, 4 }, new int[] { 10, 20 }, new int[] { 80, 123 },
+    // more nodes
+    new int[] { 100, 100, 100, 100, 100, 100, 100, 100, 100, 200 },
+    new int[] { 10, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+      5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+      5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+      5, 5, 5, 5, 5, 5, 5, 5, 5, 5 }, };
 
   // This class is introduced because IP to rack resolution can be lengthy.
   public static class MockMapping implements DNSToSwitchMapping {
@@ -158,8 +146,7 @@ public class BalancerTestBase {
   }
 
   /**
-   * Invariant is that all servers have between floor(avg) and ceiling(avg)
-   * number of regions.
+   * Invariant is that all servers have between floor(avg) and ceiling(avg) number of regions.
    */
   public void assertClusterAsBalanced(List<ServerAndLoad> servers) {
     int numServers = servers.size();
@@ -184,17 +171,16 @@ public class BalancerTestBase {
     int max = numRegions % numServers == 0 ? min : min + 1;
 
     for (ServerAndLoad server : servers) {
-      assertTrue("All servers should have a positive load. " + server, server.getLoad() >= 0);
-      assertTrue("All servers should have load no more than " + max + ". " + server,
-          server.getLoad() <= max);
-      assertTrue("All servers should have load no less than " + min + ". " + server,
-          server.getLoad() >= min);
+      assertTrue(server.getLoad() >= 0, "All servers should have a positive load. " + server);
+      assertTrue(server.getLoad() <= max,
+        "All servers should have load no more than " + max + ". " + server);
+      assertTrue(server.getLoad() >= min,
+        "All servers should have load no less than " + min + ". " + server);
     }
   }
 
   /**
-   * Invariant is that all servers have between acceptable range
-   * number of regions.
+   * Invariant is that all servers have between acceptable range number of regions.
    */
   public boolean assertClusterOverallAsBalanced(List<ServerAndLoad> servers, int tablenum) {
     int numServers = servers.size();
@@ -220,10 +206,12 @@ public class BalancerTestBase {
 
     for (ServerAndLoad server : servers) {
       // The '5' in below is arbitrary.
-      if (server.getLoad() < 0 || server.getLoad() > max + (tablenum/2 + 5)  ||
-          server.getLoad() < (min - tablenum/2 - 5)) {
-        LOG.warn("server={}, load={}, max={}, tablenum={}, min={}",
-          server.getServerName(), server.getLoad(), max, tablenum, min);
+      if (
+        server.getLoad() < 0 || server.getLoad() > max + (tablenum / 2 + 5)
+          || server.getLoad() < (min - tablenum / 2 - 5)
+      ) {
+        LOG.warn("server={}, load={}, max={}, tablenum={}, min={}", server.getServerName(),
+          server.getLoad(), max, tablenum, min);
         return false;
       }
     }
@@ -233,7 +221,8 @@ public class BalancerTestBase {
   /**
    * Checks whether region replicas are not hosted on the same host.
    */
-  public void assertRegionReplicaPlacement(Map<ServerName, List<RegionInfo>> serverMap, RackManager rackManager) {
+  public void assertRegionReplicaPlacement(Map<ServerName, List<RegionInfo>> serverMap,
+    RackManager rackManager) {
     TreeMap<String, Set<RegionInfo>> regionsPerHost = new TreeMap<>();
     TreeMap<String, Set<RegionInfo>> regionsPerRack = new TreeMap<>();
 
@@ -248,7 +237,7 @@ public class BalancerTestBase {
       for (RegionInfo info : entry.getValue()) {
         RegionInfo primaryInfo = RegionReplicaUtil.getRegionInfoForDefaultReplica(info);
         if (!infos.add(primaryInfo)) {
-          Assert.fail("Two or more region replicas are hosted on the same host after balance");
+          fail("Two or more region replicas are hosted on the same host after balance");
         }
       }
     }
@@ -268,7 +257,7 @@ public class BalancerTestBase {
       for (RegionInfo info : entry.getValue()) {
         RegionInfo primaryInfo = RegionReplicaUtil.getRegionInfoForDefaultReplica(info);
         if (!infos.add(primaryInfo)) {
-          Assert.fail("Two or more region replicas are hosted on the same rack after balance");
+          fail("Two or more region replicas are hosted on the same rack after balance");
         }
       }
     }
@@ -284,7 +273,7 @@ public class BalancerTestBase {
     int max = (int) Math.ceil(average);
     int min = (int) Math.floor(average);
     return "[srvr=" + numServers + " rgns=" + totalRegions + " avg=" + average + " max=" + max
-        + " min=" + min + "]";
+      + " min=" + min + "]";
   }
 
   protected List<ServerAndLoad> convertToList(final Map<ServerName, List<RegionInfo>> servers) {
@@ -296,6 +285,9 @@ public class BalancerTestBase {
   }
 
   protected String printMock(List<ServerAndLoad> balancedCluster) {
+    if (balancedCluster == null) {
+      return "null";
+    }
     NavigableSet<ServerAndLoad> sorted = new TreeSet<>(balancedCluster);
     ServerAndLoad[] arr = sorted.toArray(new ServerAndLoad[sorted.size()]);
     StringBuilder sb = new StringBuilder(sorted.size() * 4 + 4);
@@ -313,8 +305,8 @@ public class BalancerTestBase {
   }
 
   /**
-   * This assumes the RegionPlan HSI instances are the same ones in the map, so
-   * actually no need to even pass in the map, but I think it's clearer.
+   * This assumes the RegionPlan HSI instances are the same ones in the map, so actually no need to
+   * even pass in the map, but I think it's clearer.
    * @return a list of all added {@link ServerAndLoad} values.
    */
   protected List<ServerAndLoad> reconcile(List<ServerAndLoad> list, List<RegionPlan> plans,
@@ -342,13 +334,29 @@ public class BalancerTestBase {
     return result;
   }
 
-  protected void updateLoad(final Map<ServerName, ServerAndLoad> map,
-                            final ServerName sn,
-                            final int diff) {
+  protected void updateLoad(final Map<ServerName, ServerAndLoad> map, final ServerName sn,
+    final int diff) {
     ServerAndLoad sal = map.get(sn);
     if (sal == null) sal = new ServerAndLoad(sn, 0);
     sal = new ServerAndLoad(sn, sal.getLoad() + diff);
     map.put(sn, sal);
+  }
+
+  protected TreeMap<ServerName, List<RegionInfo>> mockClusterServers(int[][] mockCluster) {
+    // dimension1: table, dimension2: regions per server
+    int numTables = mockCluster.length;
+    TreeMap<ServerName, List<RegionInfo>> servers = new TreeMap<>();
+    for (int i = 0; i < numTables; i++) {
+      TableName tableName = TableName.valueOf("table" + i);
+      for (int j = 0; j < mockCluster[i].length; j++) {
+        ServerName serverName = ServerName.valueOf("server" + j, 1000, -1);
+        int numRegions = mockCluster[i][j];
+        List<RegionInfo> regions = createRegions(numRegions, tableName);
+        servers.putIfAbsent(serverName, new ArrayList<>());
+        servers.get(serverName).addAll(regions);
+      }
+    }
+    return servers;
   }
 
   protected TreeMap<ServerName, List<RegionInfo>> mockClusterServers(int[] mockCluster) {
@@ -356,13 +364,26 @@ public class BalancerTestBase {
   }
 
   protected BalancerClusterState mockCluster(int[] mockCluster) {
-    return new BalancerClusterState(
-      mockClusterServers(mockCluster, -1), null, null, null);
+    return new BalancerClusterState(mockClusterServers(mockCluster, -1), null, null, null);
   }
 
-  protected TreeMap<ServerName, List<RegionInfo>> mockClusterServers(int[] mockCluster, int numTables) {
+  protected TreeMap<ServerName, List<RegionInfo>> mockClusterServers(int[] mockCluster,
+    int numTables) {
     int numServers = mockCluster.length;
     TreeMap<ServerName, List<RegionInfo>> servers = new TreeMap<>();
+    for (int i = 0; i < numServers; i++) {
+      int numRegions = mockCluster[i];
+      ServerAndLoad sal = randomServer(0);
+      List<RegionInfo> regions = randomRegions(numRegions, numTables);
+      servers.put(sal.getServerName(), regions);
+    }
+    return servers;
+  }
+
+  protected Map<ServerName, List<RegionInfo>> mockClusterServersUnsorted(int[] mockCluster,
+    int numTables) {
+    int numServers = mockCluster.length;
+    Map<ServerName, List<RegionInfo>> servers = new LinkedHashMap<>();
     for (int i = 0; i < numServers; i++) {
       int numRegions = mockCluster[i];
       ServerAndLoad sal = randomServer(0);
@@ -384,12 +405,13 @@ public class BalancerTestBase {
     return servers;
   }
 
-  protected HashMap<TableName, TreeMap<ServerName, List<RegionInfo>>> mockClusterServersWithTables(Map<ServerName, List<RegionInfo>> clusterServers) {
+  protected HashMap<TableName, TreeMap<ServerName, List<RegionInfo>>>
+    mockClusterServersWithTables(Map<ServerName, List<RegionInfo>> clusterServers) {
     HashMap<TableName, TreeMap<ServerName, List<RegionInfo>>> result = new HashMap<>();
     for (Map.Entry<ServerName, List<RegionInfo>> entry : clusterServers.entrySet()) {
       ServerName sal = entry.getKey();
       List<RegionInfo> regions = entry.getValue();
-      for (RegionInfo hri : regions){
+      for (RegionInfo hri : regions) {
         TreeMap<ServerName, List<RegionInfo>> servers = result.get(hri.getTable());
         if (servers == null) {
           servers = new TreeMap<>();
@@ -403,8 +425,8 @@ public class BalancerTestBase {
         hrilist.add(hri);
       }
     }
-    for(Map.Entry<TableName, TreeMap<ServerName, List<RegionInfo>>> entry : result.entrySet()){
-      for(ServerName srn : clusterServers.keySet()){
+    for (Map.Entry<TableName, TreeMap<ServerName, List<RegionInfo>>> entry : result.entrySet()) {
+      for (ServerName srn : clusterServers.keySet()) {
         if (!entry.getValue().containsKey(srn)) entry.getValue().put(srn, new ArrayList<>());
       }
     }
@@ -420,18 +442,14 @@ public class BalancerTestBase {
   protected List<RegionInfo> createRegions(int numRegions, TableName tableName) {
     List<RegionInfo> regions = new ArrayList<>(numRegions);
     byte[] start = new byte[16];
+    Bytes.random(start);
     byte[] end = new byte[16];
-    Random rand = ThreadLocalRandom.current();
-    rand.nextBytes(start);
-    rand.nextBytes(end);
+    Bytes.random(end);
     for (int i = 0; i < numRegions; i++) {
       Bytes.putInt(start, 0, numRegions << 1);
       Bytes.putInt(end, 0, (numRegions << 1) + 1);
-      RegionInfo hri = RegionInfoBuilder.newBuilder(tableName)
-        .setStartKey(start)
-        .setEndKey(end)
-        .setSplit(false)
-        .build();
+      RegionInfo hri = RegionInfoBuilder.newBuilder(tableName).setStartKey(start).setEndKey(end)
+        .setSplit(false).build();
       regions.add(hri);
     }
     return regions;
@@ -440,10 +458,9 @@ public class BalancerTestBase {
   protected List<RegionInfo> randomRegions(int numRegions, int numTables) {
     List<RegionInfo> regions = new ArrayList<>(numRegions);
     byte[] start = new byte[16];
+    Bytes.random(start);
     byte[] end = new byte[16];
-    Random rand = ThreadLocalRandom.current();
-    rand.nextBytes(start);
-    rand.nextBytes(end);
+    Bytes.random(end);
     for (int i = 0; i < numRegions; i++) {
       if (!regionQueue.isEmpty()) {
         regions.add(regionQueue.poll());
@@ -451,14 +468,10 @@ public class BalancerTestBase {
       }
       Bytes.putInt(start, 0, numRegions << 1);
       Bytes.putInt(end, 0, (numRegions << 1) + 1);
-      TableName tableName =
-          TableName.valueOf("table" + (numTables > 0 ? rand.nextInt(numTables) : i));
-      RegionInfo hri = RegionInfoBuilder.newBuilder(tableName)
-          .setStartKey(start)
-          .setEndKey(end)
-          .setSplit(false)
-          .setRegionId(regionId++)
-          .build();
+      TableName tableName = TableName
+        .valueOf("table" + (numTables > 0 ? ThreadLocalRandom.current().nextInt(numTables) : i));
+      RegionInfo hri = RegionInfoBuilder.newBuilder(tableName).setStartKey(start).setEndKey(end)
+        .setSplit(false).setRegionId(regionId++).build();
       regions.add(hri);
     }
     return regions;
@@ -467,20 +480,15 @@ public class BalancerTestBase {
   protected List<RegionInfo> uniformRegions(int numRegions) {
     List<RegionInfo> regions = new ArrayList<>(numRegions);
     byte[] start = new byte[16];
+    Bytes.random(start);
     byte[] end = new byte[16];
-    Random rand = ThreadLocalRandom.current();
-    rand.nextBytes(start);
-    rand.nextBytes(end);
+    Bytes.random(end);
     for (int i = 0; i < numRegions; i++) {
       Bytes.putInt(start, 0, numRegions << 1);
       Bytes.putInt(end, 0, (numRegions << 1) + 1);
-      TableName tableName =
-              TableName.valueOf("table" + i);
-      RegionInfo hri = RegionInfoBuilder.newBuilder(tableName)
-          .setStartKey(start)
-          .setEndKey(end)
-          .setSplit(false)
-          .build();
+      TableName tableName = TableName.valueOf("table" + i);
+      RegionInfo hri = RegionInfoBuilder.newBuilder(tableName).setStartKey(start).setEndKey(end)
+        .setSplit(false).build();
       regions.add(hri);
     }
     return regions;

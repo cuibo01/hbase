@@ -357,25 +357,6 @@ The number of consecutive WAL close errors we will allow
 `2`
 
 
-[[hbase.regionserver.hlog.reader.impl]]
-*`hbase.regionserver.hlog.reader.impl`*::
-+
-.Description
-The WAL file reader implementation.
-+
-.Default
-`org.apache.hadoop.hbase.regionserver.wal.ProtobufLogReader`
-
-
-[[hbase.regionserver.hlog.writer.impl]]
-*`hbase.regionserver.hlog.writer.impl`*::
-+
-.Description
-The WAL file writer implementation.
-+
-.Default
-`org.apache.hadoop.hbase.regionserver.wal.ProtobufLogWriter`
-
 [[hbase.regionserver.global.memstore.size]]
 *`hbase.regionserver.global.memstore.size`*::
 +
@@ -743,6 +724,16 @@ Client scanner lease period in milliseconds.
 .Default
 `2`
 
+[[hbase.client.connection.metacache.invalidate-interval.ms]]
+*`hbase.client.connection.metacache.invalidate-interval.ms`*::
++
+.Description
+Interval in milliseconds of checking and invalidating meta cache when table
+      disabled or dropped, when set to zero means disable checking, suggest set it to 24h
+      or a higher value, because disable/delete table usually not very frequently.
++
+.Default
+`0`
 
 [[hbase.bulkload.retries.number]]
 *`hbase.bulkload.retries.number`*::
@@ -775,6 +766,17 @@ bring about performance side effect.
 +
 .Description
 Period at which the region balancer runs in the Master.
++
+.Default
+`300000`
+
+
+[[hbase.master.oldwals.dir.updater.period]]
+*`hbase.master.oldwals.dir.updater.period`*::
++
+.Description
+Period at which the oldWALs directory size calculator/updater will run in the Master.
+
 +
 .Default
 `300000`
@@ -1425,6 +1427,7 @@ The policy configuration file used by RPC servers to make
 List of users or groups (comma-separated), who are allowed
     full privileges, regardless of stored ACLs, across the cluster.
     Only used when HBase security is enabled.
+    Group names should be prefixed with "@".
 +
 .Default
 ``

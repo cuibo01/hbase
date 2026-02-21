@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,19 +18,21 @@
 package org.apache.hadoop.hbase.regionserver;
 
 import java.io.IOException;
+import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.TreeMap;
-
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellBuilderFactory;
 import org.apache.hadoop.hbase.CellBuilderType;
+import org.apache.hadoop.hbase.ExtendedCell;
+import org.apache.hadoop.hbase.ExtendedCellBuilderFactory;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HDFSBlocksDistribution;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTracker;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.DNS;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -52,19 +54,31 @@ public class MockHStoreFile extends HStoreFile {
   long modificationTime;
   boolean compactedAway;
 
-  MockHStoreFile(HBaseTestingUtil testUtil, Path testPath,
-      long length, long ageInDisk, boolean isRef, long sequenceid) throws IOException {
-    super(testUtil.getTestFileSystem(), testPath, testUtil.getConfiguration(),
-        new CacheConfig(testUtil.getConfiguration()), BloomType.NONE, true);
+  MockHStoreFile(HBaseTestingUtil testUtil, Path testPath, long length, long ageInDisk,
+    boolean isRef, long sequenceid, StoreFileInfo storeFileInfo) throws IOException {
+    super(storeFileInfo, BloomType.NONE, new CacheConfig(testUtil.getConfiguration()));
+    setMockHStoreFileVals(length, isRef, ageInDisk, sequenceid, isMajor, testUtil);
+  }
+
+  private void setMockHStoreFileVals(long length, boolean isRef, long ageInDisk, long sequenceid,
+    boolean isMajor, HBaseTestingUtil testUtil) throws UnknownHostException {
     this.length = length;
     this.isRef = isRef;
     this.ageInDisk = ageInDisk;
     this.sequenceid = sequenceid;
     this.isMajor = false;
     hdfsBlocksDistribution = new HDFSBlocksDistribution();
-    hdfsBlocksDistribution.addHostsAndBlockWeight(new String[]
-      { DNS.getHostname(testUtil.getConfiguration(), DNS.ServerType.REGIONSERVER) }, 1);
+    hdfsBlocksDistribution.addHostsAndBlockWeight(
+      new String[] { DNS.getHostname(testUtil.getConfiguration(), DNS.ServerType.REGIONSERVER) },
+      1);
     modificationTime = EnvironmentEdgeManager.currentTime();
+  }
+
+  MockHStoreFile(HBaseTestingUtil testUtil, Path testPath, long length, long ageInDisk,
+    boolean isRef, long sequenceid, StoreFileTracker tracker) throws IOException {
+    super(testUtil.getTestFileSystem(), testPath, testUtil.getConfiguration(),
+      new CacheConfig(testUtil.getConfiguration()), BloomType.NONE, true, tracker);
+    setMockHStoreFileVals(length, isRef, ageInDisk, sequenceid, isMajor, testUtil);
   }
 
   void setLength(long newLen) {
@@ -114,14 +128,16 @@ public class MockHStoreFile extends HStoreFile {
 
   @Override
   public OptionalLong getMinimumTimestamp() {
-    return timeRangeTracker == null ? OptionalLong.empty()
-        : OptionalLong.of(timeRangeTracker.getMin());
+    return timeRangeTracker == null
+      ? OptionalLong.empty()
+      : OptionalLong.of(timeRangeTracker.getMin());
   }
 
   @Override
   public OptionalLong getMaximumTimestamp() {
-    return timeRangeTracker == null ? OptionalLong.empty()
-        : OptionalLong.of(timeRangeTracker.getMax());
+    return timeRangeTracker == null
+      ? OptionalLong.empty()
+      : OptionalLong.of(timeRangeTracker.getMax());
   }
 
   @Override
@@ -150,15 +166,15 @@ public class MockHStoreFile extends HStoreFile {
 
   @Override
   public StoreFileScanner getPreadScanner(boolean cacheBlocks, long readPt, long scannerOrder,
-      boolean canOptimizeForNonNullColumn) {
+    boolean canOptimizeForNonNullColumn) {
     return getReader().getStoreFileScanner(cacheBlocks, true, false, readPt, scannerOrder,
       canOptimizeForNonNullColumn);
   }
 
   @Override
   public StoreFileScanner getStreamScanner(boolean canUseDropBehind, boolean cacheBlocks,
-      boolean isCompaction, long readPt, long scannerOrder, boolean canOptimizeForNonNullColumn)
-      throws IOException {
+    boolean isCompaction, long readPt, long scannerOrder, boolean canOptimizeForNonNullColumn)
+    throws IOException {
     return getReader().getStoreFileScanner(cacheBlocks, false, isCompaction, readPt, scannerOrder,
       canOptimizeForNonNullColumn);
   }
@@ -176,7 +192,7 @@ public class MockHStoreFile extends HStoreFile {
 
       @Override
       public long getMaxTimestamp() {
-        return timeRange == null? Long.MAX_VALUE: timeRangeTracker.getMax();
+        return timeRange == null ? Long.MAX_VALUE : timeRangeTracker.getMax();
       }
 
       @Override
@@ -190,10 +206,10 @@ public class MockHStoreFile extends HStoreFile {
       }
 
       @Override
-      public Optional<Cell> getLastKey() {
+      public Optional<ExtendedCell> getLastKey() {
         if (splitPoint != null) {
-          return Optional.of(CellBuilderFactory.create(CellBuilderType.DEEP_COPY)
-              .setType(Cell.Type.Put)
+          return Optional
+            .of(ExtendedCellBuilderFactory.create(CellBuilderType.DEEP_COPY).setType(Cell.Type.Put)
               .setRow(Arrays.copyOf(splitPoint, splitPoint.length + 1)).build());
         } else {
           return Optional.empty();
@@ -201,21 +217,20 @@ public class MockHStoreFile extends HStoreFile {
       }
 
       @Override
-      public Optional<Cell> midKey() throws IOException {
+      public Optional<ExtendedCell> midKey() throws IOException {
         if (splitPoint != null) {
-          return Optional.of(CellBuilderFactory.create(CellBuilderType.DEEP_COPY)
-              .setType(Cell.Type.Put).setRow(splitPoint).build());
+          return Optional.of(ExtendedCellBuilderFactory.create(CellBuilderType.DEEP_COPY)
+            .setType(Cell.Type.Put).setRow(splitPoint).build());
         } else {
           return Optional.empty();
         }
       }
 
       @Override
-      public Optional<Cell> getFirstKey() {
+      public Optional<ExtendedCell> getFirstKey() {
         if (splitPoint != null) {
-          return Optional.of(CellBuilderFactory.create(CellBuilderType.DEEP_COPY)
-              .setType(Cell.Type.Put).setRow(splitPoint, 0, splitPoint.length - 1)
-              .build());
+          return Optional.of(ExtendedCellBuilderFactory.create(CellBuilderType.DEEP_COPY)
+            .setType(Cell.Type.Put).setRow(splitPoint, 0, splitPoint.length - 1).build());
         } else {
           return Optional.empty();
         }

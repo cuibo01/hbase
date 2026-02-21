@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,10 +25,10 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyBoolean;
-import static org.mockito.Matchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -38,9 +38,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.TreeMap;
-
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.regionserver.BloomType;
@@ -78,7 +77,7 @@ public class TestCompactor {
 
   // StoreFile.Writer has private ctor and is unwieldy, so this has to be convoluted.
   public static class StoreFileWritersCapture
-      implements Answer<StoreFileWriter>, StripeMultiFileWriter.WriterFactory {
+    implements Answer<StoreFileWriter>, StripeMultiFileWriter.WriterFactory {
     public static class Writer {
       public ArrayList<KeyValue> kvs = new ArrayList<>();
       public TreeMap<byte[], byte[]> data = new TreeMap<>(Bytes.BYTES_COMPARATOR);
@@ -203,8 +202,11 @@ public class TestCompactor {
     }
 
     @Override
-    public boolean next(List<Cell> result, ScannerContext scannerContext) throws IOException {
-      if (kvs.isEmpty()) return false;
+    public boolean next(List<? super ExtendedCell> result, ScannerContext scannerContext)
+      throws IOException {
+      if (kvs.isEmpty()) {
+        return false;
+      }
       result.add(kvs.remove(0));
       return !kvs.isEmpty();
     }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparatorImpl;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
@@ -73,7 +74,7 @@ public class TestAvoidCellReferencesIntoShippedBlocks {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestAvoidCellReferencesIntoShippedBlocks.class);
+    HBaseClassTestRule.forClass(TestAvoidCellReferencesIntoShippedBlocks.class);
 
   protected final static HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   static byte[][] ROWS = new byte[2][];
@@ -138,7 +139,7 @@ public class TestAvoidCellReferencesIntoShippedBlocks {
       RegionLocator locator = TEST_UTIL.getConnection().getRegionLocator(tableName);
       String regionName = locator.getAllRegionLocations().get(0).getRegion().getEncodedName();
       HRegion region =
-          (HRegion) TEST_UTIL.getRSForFirstRegionInTable(tableName).getRegion(regionName);
+        (HRegion) TEST_UTIL.getRSForFirstRegionInTable(tableName).getRegion(regionName);
       HStore store = region.getStores().iterator().next();
       CacheConfig cacheConf = store.getCacheConfig();
       cacheConf.setCacheDataOnWrite(true);
@@ -226,7 +227,7 @@ public class TestAvoidCellReferencesIntoShippedBlocks {
     public void run() {
       Scan s = new Scan().withStartRow(ROW4).withStopRow(ROW5).setCaching(1);
       try {
-        while(!doScan.get()) {
+        while (!doScan.get()) {
           try {
             // Sleep till you start scan
             Thread.sleep(1);
@@ -261,9 +262,9 @@ public class TestAvoidCellReferencesIntoShippedBlocks {
     }
 
     @Override
-    public InternalScanner preCompact(ObserverContext<RegionCoprocessorEnvironment> c, Store store,
-        InternalScanner scanner, ScanType scanType, CompactionLifeCycleTracker tracker,
-        CompactionRequest request) throws IOException {
+    public InternalScanner preCompact(ObserverContext<? extends RegionCoprocessorEnvironment> c,
+      Store store, InternalScanner scanner, ScanType scanType, CompactionLifeCycleTracker tracker,
+      CompactionRequest request) throws IOException {
       return new CompactorInternalScanner(scanner);
     }
   }
@@ -275,9 +276,11 @@ public class TestAvoidCellReferencesIntoShippedBlocks {
     }
 
     @Override
-    public boolean next(List<Cell> result, ScannerContext scannerContext) throws IOException {
+    public boolean next(List<? super ExtendedCell> result, ScannerContext scannerContext)
+      throws IOException {
       boolean next = scanner.next(result, scannerContext);
-      for (Cell cell : result) {
+      for (Iterator<? super ExtendedCell> iter = result.iterator(); iter.hasNext();) {
+        Cell cell = (Cell) iter.next();
         if (CellComparatorImpl.COMPARATOR.compareRows(cell, ROW2, 0, ROW2.length) == 0) {
           try {
             // hold the compaction
@@ -300,8 +303,8 @@ public class TestAvoidCellReferencesIntoShippedBlocks {
       // get the block cache and region
       RegionLocator locator = TEST_UTIL.getConnection().getRegionLocator(tableName);
       String regionName = locator.getAllRegionLocations().get(0).getRegion().getEncodedName();
-      HRegion region = (HRegion) TEST_UTIL.getRSForFirstRegionInTable(tableName)
-          .getRegion(regionName);
+      HRegion region =
+        (HRegion) TEST_UTIL.getRSForFirstRegionInTable(tableName).getRegion(regionName);
       HStore store = region.getStores().iterator().next();
       CacheConfig cacheConf = store.getCacheConfig();
       cacheConf.setCacheDataOnWrite(true);

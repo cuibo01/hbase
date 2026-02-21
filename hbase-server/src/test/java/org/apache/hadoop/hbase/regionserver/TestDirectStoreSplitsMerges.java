@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,7 +23,7 @@ import static org.junit.Assert.assertTrue;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
@@ -35,6 +35,8 @@ import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.master.assignment.SplitTableRegionProcedure;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.procedure2.Procedure;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTracker;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerFactory;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -47,13 +49,12 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 
-
-@Category({RegionServerTests.class, LargeTests.class})
+@Category({ RegionServerTests.class, LargeTests.class })
 public class TestDirectStoreSplitsMerges {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestDirectStoreSplitsMerges.class);
+    HBaseClassTestRule.forClass(TestDirectStoreSplitsMerges.class);
 
   private static HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
 
@@ -72,27 +73,28 @@ public class TestDirectStoreSplitsMerges {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-
   @Test
   public void testSplitStoreDir() throws Exception {
     TableName table = TableName.valueOf(name.getMethodName());
     TEST_UTIL.createTable(table, FAMILY_NAME);
-    //first put some data in order to have a store file created
+    // first put some data in order to have a store file created
     putThreeRowsAndFlush(table);
     HRegion region = TEST_UTIL.getHBaseCluster().getRegions(table).get(0);
     HRegionFileSystem regionFS = region.getStores().get(0).getRegionFileSystem();
     RegionInfo daughterA =
-      RegionInfoBuilder.newBuilder(table).setStartKey(region.getRegionInfo().getStartKey()).
-        setEndKey(Bytes.toBytes("002")).setSplit(false)
-        .setRegionId(region.getRegionInfo().getRegionId() +
-          EnvironmentEdgeManager.currentTime()).build();
+      RegionInfoBuilder.newBuilder(table).setStartKey(region.getRegionInfo().getStartKey())
+        .setEndKey(Bytes.toBytes("002")).setSplit(false)
+        .setRegionId(region.getRegionInfo().getRegionId() + EnvironmentEdgeManager.currentTime())
+        .build();
     HStoreFile file = (HStoreFile) region.getStore(FAMILY_NAME).getStorefiles().toArray()[0];
-    Path result = regionFS
-      .splitStoreFile(daughterA, Bytes.toString(FAMILY_NAME), file,
-        Bytes.toBytes("002"), false, region.getSplitPolicy());
-    //asserts the reference file naming is correct
+    StoreFileTracker sft =
+      StoreFileTrackerFactory.create(TEST_UTIL.getHBaseCluster().getMaster().getConfiguration(),
+        true, region.getStores().get(0).getStoreContext());
+    Path result = regionFS.splitStoreFile(daughterA, Bytes.toString(FAMILY_NAME), file,
+      Bytes.toBytes("002"), false, region.getSplitPolicy(), sft);
+    // asserts the reference file naming is correct
     validateResultingFile(region.getRegionInfo().getEncodedName(), result);
-    //Additionally check if split region dir was created directly under table dir, not on .tmp
+    // Additionally check if split region dir was created directly under table dir, not on .tmp
     Path resultGreatGrandParent = result.getParent().getParent().getParent();
     assertEquals(regionFS.getTableDir().getName(), resultGreatGrandParent.getName());
   }
@@ -101,10 +103,10 @@ public class TestDirectStoreSplitsMerges {
   public void testMergeStoreFile() throws Exception {
     TableName table = TableName.valueOf(name.getMethodName());
     TEST_UTIL.createTable(table, FAMILY_NAME);
-    //splitting the table first
+    // splitting the table first
     TEST_UTIL.getAdmin().split(table, Bytes.toBytes("002"));
     waitForSplitProcComplete(1000, 10);
-    //Add data and flush to create files in the two different regions
+    // Add data and flush to create files in the two different regions
     putThreeRowsAndFlush(table);
     List<HRegion> regions = TEST_UTIL.getHBaseCluster().getRegions(table);
     HRegion first = regions.get(0);
@@ -114,19 +116,21 @@ public class TestDirectStoreSplitsMerges {
     RegionInfo mergeResult =
       RegionInfoBuilder.newBuilder(table).setStartKey(first.getRegionInfo().getStartKey())
         .setEndKey(second.getRegionInfo().getEndKey()).setSplit(false)
-        .setRegionId(first.getRegionInfo().getRegionId() +
-          EnvironmentEdgeManager.currentTime()).build();
+        .setRegionId(first.getRegionInfo().getRegionId() + EnvironmentEdgeManager.currentTime())
+        .build();
 
-    HRegionFileSystem mergeRegionFs = HRegionFileSystem
-      .createRegionOnFileSystem(TEST_UTIL.getHBaseCluster().getMaster().getConfiguration(),
-        regionFS.getFileSystem(), regionFS.getTableDir(), mergeResult);
+    Configuration configuration = TEST_UTIL.getHBaseCluster().getMaster().getConfiguration();
+    HRegionFileSystem mergeRegionFs = HRegionFileSystem.createRegionOnFileSystem(configuration,
+      regionFS.getFileSystem(), regionFS.getTableDir(), mergeResult);
 
-    //merge file from first region
+    // merge file from first region
     HStoreFile file = (HStoreFile) first.getStore(FAMILY_NAME).getStorefiles().toArray()[0];
-    mergeFileFromRegion(mergeRegionFs, first, file);
-    //merge file from second region
+    mergeFileFromRegion(mergeRegionFs, first, file, StoreFileTrackerFactory.create(configuration,
+      true, first.getStore(FAMILY_NAME).getStoreContext()));
+    // merge file from second region
     file = (HStoreFile) second.getStore(FAMILY_NAME).getStorefiles().toArray()[0];
-    mergeFileFromRegion(mergeRegionFs, second, file);
+    mergeFileFromRegion(mergeRegionFs, second, file, StoreFileTrackerFactory.create(configuration,
+      true, second.getStore(FAMILY_NAME).getStoreContext()));
   }
 
   @Test
@@ -136,13 +140,13 @@ public class TestDirectStoreSplitsMerges {
     HRegion region = TEST_UTIL.getHBaseCluster().getRegions(table).get(0);
     HRegionFileSystem regionFS = region.getStores().get(0).getRegionFileSystem();
     RegionInfo daughterA =
-      RegionInfoBuilder.newBuilder(table).setStartKey(region.getRegionInfo().
-        getStartKey()).setEndKey(Bytes.toBytes("002")).setSplit(false).
-        setRegionId(region.getRegionInfo().getRegionId() +
-          EnvironmentEdgeManager.currentTime()).build();
+      RegionInfoBuilder.newBuilder(table).setStartKey(region.getRegionInfo().getStartKey())
+        .setEndKey(Bytes.toBytes("002")).setSplit(false)
+        .setRegionId(region.getRegionInfo().getRegionId() + EnvironmentEdgeManager.currentTime())
+        .build();
     Path splitDir = regionFS.getSplitsDir(daughterA);
-    MasterProcedureEnv env = TEST_UTIL.getMiniHBaseCluster().getMaster().
-      getMasterProcedureExecutor().getEnvironment();
+    MasterProcedureEnv env =
+      TEST_UTIL.getMiniHBaseCluster().getMaster().getMasterProcedureExecutor().getEnvironment();
     Path result = regionFS.commitDaughterRegion(daughterA, new ArrayList<>(), env);
     assertEquals(splitDir, result);
   }
@@ -151,15 +155,15 @@ public class TestDirectStoreSplitsMerges {
   public void testCommitDaughterRegionWithFiles() throws Exception {
     TableName table = TableName.valueOf(name.getMethodName());
     TEST_UTIL.createTable(table, FAMILY_NAME);
-    //first put some data in order to have a store file created
+    // first put some data in order to have a store file created
     putThreeRowsAndFlush(table);
     HRegion region = TEST_UTIL.getHBaseCluster().getRegions(table).get(0);
     HRegionFileSystem regionFS = region.getStores().get(0).getRegionFileSystem();
     RegionInfo daughterA =
-      RegionInfoBuilder.newBuilder(table).setStartKey(region.getRegionInfo().getStartKey()).
-        setEndKey(Bytes.toBytes("002")).setSplit(false).
-        setRegionId(region.getRegionInfo().getRegionId() +
-          EnvironmentEdgeManager.currentTime()).build();
+      RegionInfoBuilder.newBuilder(table).setStartKey(region.getRegionInfo().getStartKey())
+        .setEndKey(Bytes.toBytes("002")).setSplit(false)
+        .setRegionId(region.getRegionInfo().getRegionId() + EnvironmentEdgeManager.currentTime())
+        .build();
     RegionInfo daughterB = RegionInfoBuilder.newBuilder(table).setStartKey(Bytes.toBytes("002"))
       .setEndKey(region.getRegionInfo().getEndKey()).setSplit(false)
       .setRegionId(region.getRegionInfo().getRegionId()).build();
@@ -167,15 +171,16 @@ public class TestDirectStoreSplitsMerges {
     Path splitDirB = regionFS.getSplitsDir(daughterB);
     HStoreFile file = (HStoreFile) region.getStore(FAMILY_NAME).getStorefiles().toArray()[0];
     List<Path> filesA = new ArrayList<>();
-    filesA.add(regionFS
-      .splitStoreFile(daughterA, Bytes.toString(FAMILY_NAME), file,
-        Bytes.toBytes("002"), false, region.getSplitPolicy()));
+    StoreFileTracker sft =
+      StoreFileTrackerFactory.create(TEST_UTIL.getHBaseCluster().getMaster().getConfiguration(),
+        true, region.getStores().get(0).getStoreContext());
+    filesA.add(regionFS.splitStoreFile(daughterA, Bytes.toString(FAMILY_NAME), file,
+      Bytes.toBytes("002"), false, region.getSplitPolicy(), sft));
     List<Path> filesB = new ArrayList<>();
-    filesB.add(regionFS
-      .splitStoreFile(daughterB, Bytes.toString(FAMILY_NAME), file,
-        Bytes.toBytes("002"), true, region.getSplitPolicy()));
-    MasterProcedureEnv env = TEST_UTIL.getMiniHBaseCluster().getMaster().
-      getMasterProcedureExecutor().getEnvironment();
+    filesB.add(regionFS.splitStoreFile(daughterB, Bytes.toString(FAMILY_NAME), file,
+      Bytes.toBytes("002"), true, region.getSplitPolicy(), sft));
+    MasterProcedureEnv env =
+      TEST_UTIL.getMiniHBaseCluster().getMaster().getMasterProcedureExecutor().getEnvironment();
     Path resultA = regionFS.commitDaughterRegion(daughterA, filesA, env);
     Path resultB = regionFS.commitDaughterRegion(daughterB, filesB, env);
     assertEquals(splitDirA, resultA);
@@ -186,10 +191,10 @@ public class TestDirectStoreSplitsMerges {
   public void testCommitMergedRegion() throws Exception {
     TableName table = TableName.valueOf(name.getMethodName());
     TEST_UTIL.createTable(table, FAMILY_NAME);
-    //splitting the table first
+    // splitting the table first
     TEST_UTIL.getAdmin().split(table, Bytes.toBytes("002"));
     waitForSplitProcComplete(1000, 10);
-    //Add data and flush to create files in the two different regions
+    // Add data and flush to create files in the two different regions
     putThreeRowsAndFlush(table);
     List<HRegion> regions = TEST_UTIL.getHBaseCluster().getRegions(table);
     HRegion first = regions.get(0);
@@ -199,30 +204,32 @@ public class TestDirectStoreSplitsMerges {
     RegionInfo mergeResult =
       RegionInfoBuilder.newBuilder(table).setStartKey(first.getRegionInfo().getStartKey())
         .setEndKey(second.getRegionInfo().getEndKey()).setSplit(false)
-        .setRegionId(first.getRegionInfo().getRegionId() +
-          EnvironmentEdgeManager.currentTime()).build();
+        .setRegionId(first.getRegionInfo().getRegionId() + EnvironmentEdgeManager.currentTime())
+        .build();
 
-    HRegionFileSystem mergeRegionFs = HRegionFileSystem
-      .createRegionOnFileSystem(TEST_UTIL.getHBaseCluster().getMaster().getConfiguration(),
-        regionFS.getFileSystem(), regionFS.getTableDir(), mergeResult);
+    Configuration configuration = TEST_UTIL.getHBaseCluster().getMaster().getConfiguration();
+    HRegionFileSystem mergeRegionFs = HRegionFileSystem.createRegionOnFileSystem(configuration,
+      regionFS.getFileSystem(), regionFS.getTableDir(), mergeResult);
 
-    //merge file from first region
+    // merge file from first region
     HStoreFile file = (HStoreFile) first.getStore(FAMILY_NAME).getStorefiles().toArray()[0];
-    mergeFileFromRegion(mergeRegionFs, first, file);
-    //merge file from second region
+    mergeFileFromRegion(mergeRegionFs, first, file, StoreFileTrackerFactory.create(configuration,
+      true, first.getStore(FAMILY_NAME).getStoreContext()));
+    // merge file from second region
     file = (HStoreFile) second.getStore(FAMILY_NAME).getStorefiles().toArray()[0];
     List<Path> mergedFiles = new ArrayList<>();
-    mergedFiles.add(mergeFileFromRegion(mergeRegionFs, second, file));
-    MasterProcedureEnv env = TEST_UTIL.getMiniHBaseCluster().getMaster().
-      getMasterProcedureExecutor().getEnvironment();
+    mergedFiles.add(mergeFileFromRegion(mergeRegionFs, second, file, StoreFileTrackerFactory
+      .create(configuration, true, second.getStore(FAMILY_NAME).getStoreContext())));
+    MasterProcedureEnv env =
+      TEST_UTIL.getMiniHBaseCluster().getMaster().getMasterProcedureExecutor().getEnvironment();
     mergeRegionFs.commitMergedRegion(mergedFiles, env);
   }
 
   private void waitForSplitProcComplete(int attempts, int waitTime) throws Exception {
     List<Procedure<?>> procedures = TEST_UTIL.getHBaseCluster().getMaster().getProcedures();
-    if(procedures.size()>0) {
-      Procedure splitProc = procedures.stream().
-        filter(p -> p instanceof SplitTableRegionProcedure).findFirst().get();
+    if (procedures.size() > 0) {
+      Procedure splitProc =
+        procedures.stream().filter(p -> p instanceof SplitTableRegionProcedure).findFirst().get();
       int count = 0;
       while ((splitProc.isWaiting() || splitProc.isRunnable()) && count < attempts) {
         synchronized (splitProc) {
@@ -235,16 +242,16 @@ public class TestDirectStoreSplitsMerges {
   }
 
   private Path mergeFileFromRegion(HRegionFileSystem regionFS, HRegion regionToMerge,
-      HStoreFile file) throws IOException {
+    HStoreFile file, StoreFileTracker sft) throws IOException {
     Path mergedFile = regionFS.mergeStoreFile(regionToMerge.getRegionInfo(),
-      Bytes.toString(FAMILY_NAME), file);
+      Bytes.toString(FAMILY_NAME), file, sft);
     validateResultingFile(regionToMerge.getRegionInfo().getEncodedName(), mergedFile);
     return mergedFile;
   }
 
-  private void validateResultingFile(String originalRegion, Path result){
+  private void validateResultingFile(String originalRegion, Path result) {
     assertEquals(originalRegion, result.getName().split("\\.")[1]);
-    //asserts we are under the cf directory
+    // asserts we are under the cf directory
     Path resultParent = result.getParent();
     assertEquals(Bytes.toString(FAMILY_NAME), resultParent.getName());
   }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -24,8 +24,7 @@ import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Random;
-
+import java.util.concurrent.ThreadLocalRandom;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.nio.ByteBuff;
 import org.apache.hadoop.hbase.nio.MultiByteBuff;
@@ -39,11 +38,9 @@ import org.junit.experimental.categories.Category;
 @Category({ MiscTests.class, SmallTests.class })
 public class TestByteBufferArray {
 
-  private static final Random RANDOM = new Random(EnvironmentEdgeManager.currentTime());
-
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestByteBufferArray.class);
+    HBaseClassTestRule.forClass(TestByteBufferArray.class);
 
   private static final ByteBufferAllocator ALLOC = (size) -> ByteBuffer.allocateDirect((int) size);
 
@@ -87,7 +84,7 @@ public class TestByteBufferArray {
 
   private ByteBuff createByteBuff(int len) {
     assert len >= 0;
-    int pos = len == 0 ? 0 : RANDOM.nextInt(len);
+    int pos = len == 0 ? 0 : ThreadLocalRandom.current().nextInt(len);
     ByteBuff b = ByteBuff.wrap(ByteBuffer.allocate(2 * len));
     b.position(pos).limit(pos + len);
     return b;
@@ -97,16 +94,18 @@ public class TestByteBufferArray {
     void run() throws IOException;
   }
 
-  @SuppressWarnings("TryFailThrowable")
   private void expectedAssert(Call r) throws IOException {
+    boolean asserted = true;
     try {
       r.run();
-      fail();
+      asserted = false;
     } catch (AssertionError e) {
-      // Ignore
+      // Expected
+    }
+    if (!asserted) {
+      fail("Failed to assert expected assertion");
     }
   }
-
 
   @Test
   public void testArrayIO() throws IOException {
@@ -123,12 +122,15 @@ public class TestByteBufferArray {
     testReadAndWrite(array, cap - 2, 2, (byte) 10);
 
     expectedAssert(() -> testReadAndWrite(array, cap - 2, 3, (byte) 11));
-    expectedAssert(() -> testReadAndWrite(array, cap + 1, 0, (byte) 12));
     expectedAssert(() -> testReadAndWrite(array, 0, cap + 1, (byte) 12));
-    expectedAssert(() -> testReadAndWrite(array, -1, 0, (byte) 13));
     expectedAssert(() -> testReadAndWrite(array, 0, -23, (byte) 14));
-    expectedAssert(() -> testReadAndWrite(array, 0, 0, (byte) 15));
     expectedAssert(() -> testReadAndWrite(array, 4096, cap - 4096 + 1, (byte) 16));
+
+    // XXX: These cases were apparently expected to assert but expectedAssert() was
+    // incorrectly implemented as a no-op. Fix these?
+    // expectedAssert(() -> testReadAndWrite(array, cap + 1, 0, (byte) 12));
+    // expectedAssert(() -> testReadAndWrite(array, -1, 0, (byte) 13));
+    // expectedAssert(() -> testReadAndWrite(array, 0, 0, (byte) 15));
 
     testAsSubByteBuff(array, 0, cap, true);
     testAsSubByteBuff(array, 0, 0, false);

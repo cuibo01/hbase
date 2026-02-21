@@ -1,18 +1,25 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
- * agreements. See the NOTICE file distributed with this work for additional information regarding
- * copyright ownership. The ASF licenses this file to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License. You may obtain a
- * copy of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required by applicable
- * law or agreed to in writing, software distributed under the License is distributed on an "AS IS"
- * BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
- * for the specific language governing permissions and limitations under the License.
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.hadoop.hbase.io.encoding;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.io.ByteArrayOutputStream;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -25,7 +32,7 @@ public class RowIndexEncoderV1 {
   private static final Logger LOG = LoggerFactory.getLogger(RowIndexEncoderV1.class);
 
   /** The Cell previously appended. */
-  private Cell lastCell = null;
+  private ExtendedCell lastCell = null;
 
   private DataOutputStream out;
   private NoneEncoder encoder;
@@ -39,7 +46,7 @@ public class RowIndexEncoderV1 {
     this.context = encodingCtx;
   }
 
-  public void write(Cell cell) throws IOException {
+  public void write(ExtendedCell cell) throws IOException {
     // checkRow uses comparator to check we are writing in order.
     int extraBytesForRowIndex = 0;
 
@@ -56,7 +63,7 @@ public class RowIndexEncoderV1 {
     context.getEncodingState().postCellEncode(size, size + extraBytesForRowIndex);
   }
 
-  protected boolean checkRow(final Cell cell) throws IOException {
+  protected boolean checkRow(final ExtendedCell cell) throws IOException {
     boolean isDuplicateRow = false;
     if (cell == null) {
       throw new IOException("Key cannot be null or empty");
@@ -64,8 +71,8 @@ public class RowIndexEncoderV1 {
     if (lastCell != null) {
       int keyComp = this.context.getHFileContext().getCellComparator().compareRows(lastCell, cell);
       if (keyComp > 0) {
-        throw new IOException("Added a key not lexically larger than"
-            + " previous. Current cell = " + cell + ", lastCell = " + lastCell);
+        throw new IOException("Added a key not lexically larger than" + " previous. Current cell = "
+          + cell + ", lastCell = " + lastCell);
       } else if (keyComp == 0) {
         isDuplicateRow = true;
       }
@@ -84,9 +91,8 @@ public class RowIndexEncoderV1 {
     }
     out.writeInt(onDiskDataSize);
     if (LOG.isTraceEnabled()) {
-      LOG.trace("RowNumber: " + rowsOffsetBAOS.size() / 4
-          + ", onDiskDataSize: " + onDiskDataSize + ", totalOnDiskSize: "
-          + (out.size() - startOffset));
+      LOG.trace("RowNumber: " + rowsOffsetBAOS.size() / 4 + ", onDiskDataSize: " + onDiskDataSize
+        + ", totalOnDiskSize: " + (out.size() - startOffset));
     }
   }
 

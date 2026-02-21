@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.master.assignment;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import org.apache.hadoop.conf.Configuration;
@@ -31,12 +32,14 @@ import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.master.RegionPlan;
+import org.apache.hadoop.hbase.master.procedure.RSProcedureDispatcher;
 import org.apache.hadoop.hbase.master.procedure.ServerCrashProcedure;
 import org.apache.hadoop.hbase.master.region.MasterRegion;
 import org.apache.hadoop.hbase.procedure2.ProcedureExecutor;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.FutureUtils;
 import org.apache.zookeeper.KeeperException;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -75,8 +78,14 @@ public class TestRaceBetweenSCPAndTRSP {
     }
 
     @Override
-    void regionOpening(RegionStateNode regionNode) throws IOException {
-      super.regionOpening(regionNode);
+    CompletableFuture<Void> regionOpening(RegionStateNode regionNode) {
+      CompletableFuture<Void> future = super.regionOpening(regionNode);
+      try {
+        // wait until the operation done, then trigger later processing, to make the test more
+        // stable
+        FutureUtils.get(future);
+      } catch (IOException e) {
+      }
       if (regionNode.getRegionInfo().getTable().equals(NAME) && ARRIVE_REGION_OPENING != null) {
         ARRIVE_REGION_OPENING.countDown();
         ARRIVE_REGION_OPENING = null;
@@ -85,6 +94,7 @@ public class TestRaceBetweenSCPAndTRSP {
         } catch (InterruptedException e) {
         }
       }
+      return future;
     }
 
     @Override
@@ -147,16 +157,32 @@ public class TestRaceBetweenSCPAndTRSP {
     Future<byte[]> moveFuture = am.moveAsync(new RegionPlan(region, sn, sn));
     arriveRegionOpening.await();
 
+    // Kill the region server and trigger a SCP
     UTIL.getMiniHBaseCluster().killRegionServer(sn);
+    // Wait until the SCP reaches the getRegionsOnServer call
     arriveGetRegionsOnServer.await();
-    RESUME_REGION_OPENING.countDown();
+    RSProcedureDispatcher remoteDispatcher = UTIL.getMiniHBaseCluster().getMaster()
+      .getMasterProcedureExecutor().getEnvironment().getRemoteDispatcher();
+    // this is necessary for making the UT stable, the problem here is that, in
+    // ServerManager.expireServer, we will submit the SCP and then the SCP will be executed in
+    // another thread(the PEWorker), so when we reach the above getRegionsOnServer call in SCP, it
+    // is still possible that the expireServer call has not been finished so the remote dispatcher
+    // still think it can dispatcher the TRSP, in this way we will be in dead lock as the TRSP will
+    // not schedule a new ORP since it relies on SCP to wake it up after everything is OK. This is
+    // not what we want to test in this UT so we need to wait here to prevent this from happening.
+    // See HBASE-27277 for more detailed analysis.
+    UTIL.waitFor(15000, () -> !remoteDispatcher.hasNode(sn));
 
+    // Resume the TRSP, it should be able to finish
+    RESUME_REGION_OPENING.countDown();
     moveFuture.get();
+
     ProcedureExecutor<?> procExec =
       UTIL.getMiniHBaseCluster().getMaster().getMasterProcedureExecutor();
     long scpProcId =
       procExec.getProcedures().stream().filter(p -> p instanceof ServerCrashProcedure)
         .map(p -> (ServerCrashProcedure) p).findAny().get().getProcId();
+    // Resume the SCP and make sure it can finish too
     RESUME_GET_REGIONS_ON_SERVER.countDown();
     UTIL.waitFor(60000, () -> procExec.isFinished(scpProcId));
   }

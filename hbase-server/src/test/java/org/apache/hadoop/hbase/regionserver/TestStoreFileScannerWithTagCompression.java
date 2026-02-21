@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,12 +22,11 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.ArrayBackedTag;
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.KeyValue;
@@ -38,7 +37,6 @@ import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.HFileContext;
 import org.apache.hadoop.hbase.io.hfile.HFileContextBuilder;
-import org.apache.hadoop.hbase.io.hfile.HFileInfo;
 import org.apache.hadoop.hbase.io.hfile.ReaderContext;
 import org.apache.hadoop.hbase.io.hfile.ReaderContextBuilder;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
@@ -50,18 +48,17 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({RegionServerTests.class, SmallTests.class})
+@Category({ RegionServerTests.class, SmallTests.class })
 public class TestStoreFileScannerWithTagCompression {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestStoreFileScannerWithTagCompression.class);
+    HBaseClassTestRule.forClass(TestStoreFileScannerWithTagCompression.class);
 
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static Configuration conf = TEST_UTIL.getConfiguration();
   private static CacheConfig cacheConf = new CacheConfig(TEST_UTIL.getConfiguration());
-  private static String ROOT_DIR = TEST_UTIL.getDataTestDir(
-      "TestStoreFileScannerWithTagCompression").toString();
+  private static Path ROOT_DIR = TEST_UTIL.getDataTestDir("TestStoreFileScannerWithTagCompression");
   private static FileSystem fs = null;
 
   @BeforeClass
@@ -73,32 +70,35 @@ public class TestStoreFileScannerWithTagCompression {
   @Test
   public void testReseek() throws Exception {
     // write the file
-    Path f = new Path(ROOT_DIR, "testReseek");
+    if (!fs.exists(ROOT_DIR)) {
+      fs.mkdirs(ROOT_DIR);
+    }
+    Path f = StoreFileWriter.getUniqueFile(fs, ROOT_DIR);
     HFileContext meta = new HFileContextBuilder().withBlockSize(8 * 1024).withIncludesTags(true)
-        .withCompressTags(true).withDataBlockEncoding(DataBlockEncoding.PREFIX).build();
+      .withCompressTags(true).withDataBlockEncoding(DataBlockEncoding.PREFIX).build();
     // Make a store file and write data to it.
     StoreFileWriter writer = new StoreFileWriter.Builder(conf, cacheConf, fs).withFilePath(f)
-        .withFileContext(meta).build();
+      .withFileContext(meta).build();
 
     writeStoreFile(writer);
     writer.close();
 
     ReaderContext context = new ReaderContextBuilder().withFileSystemAndPath(fs, f).build();
-    HFileInfo fileInfo = new HFileInfo(context, conf);
-    StoreFileReader reader =
-        new StoreFileReader(context, fileInfo, cacheConf, new AtomicInteger(0), conf);
-    fileInfo.initMetaAndIndex(reader.getHFileReader());
+    StoreFileInfo storeFileInfo = StoreFileInfo.createStoreFileInfoForHFile(conf, fs, f, true);
+    storeFileInfo.initHFileInfo(context);
+    StoreFileReader reader = storeFileInfo.createReader(context, cacheConf);
+    storeFileInfo.getHFileInfo().initMetaAndIndex(reader.getHFileReader());
     StoreFileScanner s = reader.getStoreFileScanner(false, false, false, 0, 0, false);
     try {
       // Now do reseek with empty KV to position to the beginning of the file
       KeyValue k = KeyValueUtil.createFirstOnRow(Bytes.toBytes("k2"));
       s.reseek(k);
-      Cell kv = s.next();
+      ExtendedCell kv = s.next();
       kv = s.next();
       kv = s.next();
       byte[] key5 = Bytes.toBytes("k5");
-      assertTrue(Bytes.equals(key5, 0, key5.length, kv.getRowArray(), kv.getRowOffset(),
-          kv.getRowLength()));
+      assertTrue(
+        Bytes.equals(key5, 0, key5.length, kv.getRowArray(), kv.getRowOffset(), kv.getRowLength()));
       List<Tag> tags = PrivateCellUtil.getTags(kv);
       assertEquals(1, tags.size());
       assertEquals("tag3", Bytes.toString(Tag.cloneValue(tags.get(0))));

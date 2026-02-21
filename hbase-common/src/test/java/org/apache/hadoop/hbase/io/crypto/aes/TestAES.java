@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,13 +19,11 @@ package org.apache.hadoop.hbase.io.crypto.aes;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
 import java.security.AccessController;
-import java.security.NoSuchAlgorithmException;
 import java.security.PrivilegedAction;
 import java.security.Provider;
 import java.security.SecureRandom;
@@ -47,12 +45,11 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({MiscTests.class, SmallTests.class})
+@Category({ MiscTests.class, SmallTests.class })
 public class TestAES {
 
   @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestAES.class);
+  public static final HBaseClassTestRule CLASS_RULE = HBaseClassTestRule.forClass(TestAES.class);
 
   // Validation for AES in CTR mode with a 128 bit key
   // From NIST Special Publication 800-38A
@@ -101,6 +98,7 @@ public class TestAES {
 
   static class TestProvider extends Provider {
     private static final long serialVersionUID = 1L;
+
     public TestProvider() {
       super("TEST", 1.0, "Test provider");
       AccessController.doPrivileged(new PrivilegedAction<Object>() {
@@ -118,12 +116,8 @@ public class TestAES {
     private static final long serialVersionUID = 1L;
     private SecureRandom rng;
 
-    public TestRNG() {
-      try {
-        rng = java.security.SecureRandom.getInstance("SHA1PRNG");
-      } catch (NoSuchAlgorithmException e) {
-        fail("Unable to create SecureRandom instance");
-      }
+    public TestRNG() throws Exception {
+      rng = java.security.SecureRandom.getInstance("SHA1PRNG");
     }
 
     @Override

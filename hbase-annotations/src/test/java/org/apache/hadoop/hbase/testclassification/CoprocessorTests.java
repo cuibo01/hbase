@@ -15,12 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.testclassification;
 
 /**
  * Tag a test as related to coprocessors.
- *
  * @see org.apache.hadoop.hbase.testclassification.ClientTests
  * @see org.apache.hadoop.hbase.testclassification.CoprocessorTests
  * @see org.apache.hadoop.hbase.testclassification.FilterTests
@@ -37,4 +35,5 @@ package org.apache.hadoop.hbase.testclassification;
  * @see org.apache.hadoop.hbase.testclassification.VerySlowMapReduceTests
  */
 public interface CoprocessorTests {
+  public static final String TAG = "org.apache.hadoop.hbase.testclassification.CoprocessorTests";
 }

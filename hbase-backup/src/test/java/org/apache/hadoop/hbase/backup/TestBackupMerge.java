@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,10 +17,13 @@
  */
 package org.apache.hadoop.hbase.backup;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.io.File;
 import java.util.List;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.backup.impl.BackupAdminImpl;
 import org.apache.hadoop.hbase.backup.util.BackupUtils;
@@ -43,12 +46,9 @@ public class TestBackupMerge extends TestBackupBase {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestBackupMerge.class);
+    HBaseClassTestRule.forClass(TestBackupMerge.class);
 
-  private static final Logger LOG =
-      LoggerFactory.getLogger(TestBackupMerge.class);
-
-
+  private static final Logger LOG = LoggerFactory.getLogger(TestBackupMerge.class);
 
   @Test
   public void TestIncBackupMergeRestore() throws Exception {
@@ -58,7 +58,6 @@ public class TestBackupMerge extends TestBackupBase {
 
     List<TableName> tables = Lists.newArrayList(table1, table2);
     // Set custom Merge Job implementation
-
 
     Connection conn = ConnectionFactory.createConnection(conf1);
 
@@ -72,17 +71,17 @@ public class TestBackupMerge extends TestBackupBase {
 
     // #2 - insert some data to table1
     Table t1 = insertIntoTable(conn, table1, famName, 1, ADD_ROWS);
-    LOG.debug("writing " + ADD_ROWS + " rows to " + table1);
+    LOG.debug("writing {} rows to {}", ADD_ROWS, table1);
 
-    Assert.assertEquals(TEST_UTIL.countRows(t1), NB_ROWS_IN_BATCH + ADD_ROWS);
+    Assert.assertEquals(HBaseTestingUtil.countRows(t1), NB_ROWS_IN_BATCH + ADD_ROWS);
     t1.close();
-    LOG.debug("written " + ADD_ROWS + " rows to " + table1);
+    LOG.debug("written {} rows to {}", ADD_ROWS, table1);
 
     Table t2 = insertIntoTable(conn, table2, famName, 1, ADD_ROWS);
 
-    Assert.assertEquals(TEST_UTIL.countRows(t2), NB_ROWS_IN_BATCH + ADD_ROWS);
+    Assert.assertEquals(HBaseTestingUtil.countRows(t2), NB_ROWS_IN_BATCH + ADD_ROWS);
     t2.close();
-    LOG.debug("written " + ADD_ROWS + " rows to " + table2);
+    LOG.debug("written {} rows to {}", ADD_ROWS, table2);
 
     // #3 - incremental backup for multiple tables
     tables = Lists.newArrayList(table1, table2);
@@ -114,18 +113,60 @@ public class TestBackupMerge extends TestBackupBase {
       tablesRestoreIncMultiple, tablesMapIncMultiple, true));
 
     Table hTable = conn.getTable(table1_restore);
-    LOG.debug("After incremental restore: " + hTable.getDescriptor());
-    int countRows = TEST_UTIL.countRows(hTable, famName);
-    LOG.debug("f1 has " + countRows + " rows");
+    LOG.debug("After incremental restore: {}", hTable.getDescriptor());
+    int countRows = HBaseTestingUtil.countRows(hTable, famName);
+    LOG.debug("f1 has {} rows", countRows);
     Assert.assertEquals(NB_ROWS_IN_BATCH + 2 * ADD_ROWS, countRows);
 
     hTable.close();
 
     hTable = conn.getTable(table2_restore);
-    Assert.assertEquals(TEST_UTIL.countRows(hTable), NB_ROWS_IN_BATCH + 2 * ADD_ROWS);
+    Assert.assertEquals(HBaseTestingUtil.countRows(hTable), NB_ROWS_IN_BATCH + 2 * ADD_ROWS);
     hTable.close();
 
     admin.close();
     conn.close();
+  }
+
+  @Test
+  public void testIncBackupMergeRestoreSeparateFs() throws Exception {
+    String originalBackupRoot = BACKUP_ROOT_DIR;
+    // prepare BACKUP_ROOT_DIR on a different filesystem from HBase.
+    String backupTargetDir = TEST_UTIL.getDataTestDir("backupTarget").toString();
+    BACKUP_ROOT_DIR = new File(backupTargetDir).toURI().toString();
+
+    try (Connection conn = ConnectionFactory.createConnection(conf1)) {
+      BackupAdminImpl client = new BackupAdminImpl(conn);
+      List<TableName> tables = Lists.newArrayList(table1, table2);
+
+      BackupRequest request = createBackupRequest(BackupType.FULL, tables, BACKUP_ROOT_DIR, true);
+      String backupIdFull = client.backupTables(request);
+      assertTrue(checkSucceeded(backupIdFull));
+
+      request = createBackupRequest(BackupType.INCREMENTAL, tables, BACKUP_ROOT_DIR, true);
+      String backupIdIncMultiple = client.backupTables(request);
+      assertTrue(checkSucceeded(backupIdIncMultiple));
+
+      request = createBackupRequest(BackupType.INCREMENTAL, tables, BACKUP_ROOT_DIR, true);
+      String backupIdIncMultiple2 = client.backupTables(request);
+      assertTrue(checkSucceeded(backupIdIncMultiple2));
+
+      try (BackupAdmin bAdmin = new BackupAdminImpl(conn)) {
+        String[] backups = new String[] { backupIdIncMultiple, backupIdIncMultiple2 };
+        // this throws java.lang.IllegalArgumentException: Wrong FS prior to HBASE-28539
+        bAdmin.mergeBackups(backups);
+      }
+
+      assertTrue(
+        new File(HBackupFileSystem.getBackupPath(BACKUP_ROOT_DIR, backupIdFull).toUri()).exists());
+      assertFalse(
+        new File(HBackupFileSystem.getBackupPath(BACKUP_ROOT_DIR, backupIdIncMultiple).toUri())
+          .exists());
+      assertTrue(
+        new File(HBackupFileSystem.getBackupPath(BACKUP_ROOT_DIR, backupIdIncMultiple2).toUri())
+          .exists());
+    } finally {
+      BACKUP_ROOT_DIR = originalBackupRoot;
+    }
   }
 }

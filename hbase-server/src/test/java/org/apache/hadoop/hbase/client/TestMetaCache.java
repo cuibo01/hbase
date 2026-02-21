@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,6 +26,9 @@ import static org.junit.Assert.fail;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CallQueueTooBigException;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
@@ -50,6 +53,7 @@ import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.function.ThrowingRunnable;
 
 import org.apache.hbase.thirdparty.com.google.common.io.Closeables;
 import org.apache.hbase.thirdparty.com.google.protobuf.RpcController;
@@ -59,12 +63,12 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos.GetResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
 
-@Category({MediumTests.class, ClientTests.class})
+@Category({ MediumTests.class, ClientTests.class })
 public class TestMetaCache {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMetaCache.class);
+    HBaseClassTestRule.forClass(TestMetaCache.class);
 
   private final static HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static final TableName TABLE_NAME = TableName.valueOf("test_table");
@@ -112,12 +116,114 @@ public class TestMetaCache {
     metrics = asyncConn.getConnectionMetrics().get();
   }
 
+  /**
+   * Test that our cleanOverlappingRegions doesn't incorrectly remove regions from cache. Originally
+   * encountered when using floorEntry rather than lowerEntry.
+   */
+  @Test
+  public void testAddToCacheReverse() throws IOException, InterruptedException {
+    setupConnection(1);
+    TableName tableName = TableName.valueOf("testAddToCache");
+    byte[] family = Bytes.toBytes("CF");
+    TableDescriptor td = TableDescriptorBuilder.newBuilder(tableName)
+      .setColumnFamily(ColumnFamilyDescriptorBuilder.of(family)).build();
+    int maxSplits = 10;
+    List<byte[]> splits =
+      IntStream.range(1, maxSplits).mapToObj(Bytes::toBytes).collect(Collectors.toList());
+
+    TEST_UTIL.getAdmin().createTable(td, splits.toArray(new byte[0][]));
+    TEST_UTIL.waitTableAvailable(tableName);
+    TEST_UTIL.waitUntilNoRegionsInTransition();
+
+    assertEquals(splits.size() + 1, TEST_UTIL.getAdmin().getRegions(tableName).size());
+
+    RegionLocator locatorForTable = conn.getRegionLocator(tableName);
+    for (int i = maxSplits; i >= 0; i--) {
+      locatorForTable.getRegionLocation(Bytes.toBytes(i));
+    }
+
+    for (int i = 0; i < maxSplits; i++) {
+      assertNotNull(locator.getRegionLocationInCache(tableName, Bytes.toBytes(i)));
+    }
+  }
+
+  @Test
+  public void testMergeEmptyWithMetaCache() throws Throwable {
+    TableName tableName = TableName.valueOf("testMergeEmptyWithMetaCache");
+    byte[] family = Bytes.toBytes("CF");
+    TableDescriptor td = TableDescriptorBuilder.newBuilder(tableName)
+      .setColumnFamily(ColumnFamilyDescriptorBuilder.of(family)).build();
+    TEST_UTIL.getAdmin().createTable(td, new byte[][] { Bytes.toBytes(2), Bytes.toBytes(5) });
+    TEST_UTIL.waitTableAvailable(tableName);
+    TEST_UTIL.waitUntilNoRegionsInTransition();
+    RegionInfo regionA = null;
+    RegionInfo regionB = null;
+    RegionInfo regionC = null;
+    for (RegionInfo region : TEST_UTIL.getAdmin().getRegions(tableName)) {
+      if (region.getStartKey().length == 0) {
+        regionA = region;
+      } else if (Bytes.equals(region.getStartKey(), Bytes.toBytes(2))) {
+        regionB = region;
+      } else if (Bytes.equals(region.getStartKey(), Bytes.toBytes(5))) {
+        regionC = region;
+      }
+    }
+
+    assertNotNull(regionA);
+    assertNotNull(regionB);
+    assertNotNull(regionC);
+
+    TEST_UTIL.getConfiguration().setBoolean(MetricsConnection.CLIENT_SIDE_METRICS_ENABLED_KEY,
+      true);
+    try (AsyncConnection asyncConn =
+      ConnectionFactory.createAsyncConnection(TEST_UTIL.getConfiguration()).get()) {
+      AsyncConnectionImpl asyncConnImpl = (AsyncConnectionImpl) asyncConn;
+
+      MetricsConnection asyncMetrics = asyncConnImpl.getConnectionMetrics().get();
+
+      // warm meta cache
+      asyncConn.getRegionLocator(tableName).getAllRegionLocations().get();
+
+      assertEquals(3, TEST_UTIL.getAdmin().getRegions(tableName).size());
+
+      // Merge the 3 regions into one
+      TEST_UTIL.getAdmin().mergeRegionsAsync(
+        new byte[][] { regionA.getRegionName(), regionB.getRegionName(), regionC.getRegionName() },
+        false).get(30, TimeUnit.SECONDS);
+
+      assertEquals(1, TEST_UTIL.getAdmin().getRegions(tableName).size());
+
+      AsyncTable<?> asyncTable = asyncConn.getTable(tableName);
+
+      // This request should cause us to cache the newly merged region.
+      // As part of caching that region, it should clear out any cached merge parent regions which
+      // are overlapped by the new region. That way, subsequent calls below won't fall into the
+      // bug in HBASE-27650. Otherwise, a request for row 6 would always get stuck on cached
+      // regionB and we'd continue to see cache misses below.
+      assertTrue(
+        executeAndGetNewMisses(() -> asyncTable.get(new Get(Bytes.toBytes(6))).get(), asyncMetrics)
+            > 0);
+
+      // We verify no new cache misses here due to above, which proves we've fixed up the cache
+      assertEquals(0, executeAndGetNewMisses(() -> asyncTable.get(new Get(Bytes.toBytes(6))).get(),
+        asyncMetrics));
+    }
+  }
+
+  private long executeAndGetNewMisses(ThrowingRunnable runnable, MetricsConnection metrics)
+    throws Throwable {
+    long lastVal = metrics.getMetaCacheMisses();
+    runnable.run();
+    long curVal = metrics.getMetaCacheMisses();
+    return curVal - lastVal;
+  }
+
   @Test
   public void testPreserveMetaCacheOnException() throws Exception {
     ((FakeRSRpcServices) badRS.getRSRpcServices())
       .setExceptionInjector(new RoundRobinExceptionInjector());
     setupConnection(1);
-    try (Table table = conn.getTable(TABLE_NAME)){
+    try (Table table = conn.getTable(TABLE_NAME)) {
       byte[] row = Bytes.toBytes("row1");
 
       Put put = new Put(row);
@@ -176,8 +282,8 @@ public class TestMetaCache {
     table.put(put);
 
     // obtain the client metrics
-    long preGetRegionClears = metrics.metaCacheNumClearRegion.getCount();
-    long preGetServerClears = metrics.metaCacheNumClearServer.getCount();
+    long preGetRegionClears = metrics.getMetaCacheNumClearRegion().getCount();
+    long preGetServerClears = metrics.getMetaCacheNumClearServer().getCount();
 
     // attempt a get on the test table
     Get get = new Get(row);
@@ -189,8 +295,8 @@ public class TestMetaCache {
     }
 
     // verify that no cache clearing took place
-    long postGetRegionClears = metrics.metaCacheNumClearRegion.getCount();
-    long postGetServerClears = metrics.metaCacheNumClearServer.getCount();
+    long postGetRegionClears = metrics.getMetaCacheNumClearRegion().getCount();
+    long postGetServerClears = metrics.getMetaCacheNumClearServer().getCount();
     assertEquals(preGetRegionClears, postGetRegionClears);
     assertEquals(preGetServerClears, postGetServerClears);
   }
@@ -235,22 +341,22 @@ public class TestMetaCache {
     }
 
     @Override
-    public GetResponse get(final RpcController controller,
-                           final ClientProtos.GetRequest request) throws ServiceException {
+    public GetResponse get(final RpcController controller, final ClientProtos.GetRequest request)
+      throws ServiceException {
       exceptions.throwOnGet(this, request);
       return super.get(controller, request);
     }
 
     @Override
     public ClientProtos.MutateResponse mutate(final RpcController controller,
-        final ClientProtos.MutateRequest request) throws ServiceException {
+      final ClientProtos.MutateRequest request) throws ServiceException {
       exceptions.throwOnMutate(this, request);
       return super.mutate(controller, request);
     }
 
     @Override
     public ClientProtos.ScanResponse scan(final RpcController controller,
-        final ClientProtos.ScanRequest request) throws ServiceException {
+      final ClientProtos.ScanRequest request) throws ServiceException {
       exceptions.throwOnScan(this, request);
       return super.scan(controller, request);
     }
@@ -258,28 +364,27 @@ public class TestMetaCache {
 
   public static abstract class ExceptionInjector {
     protected boolean isTestTable(FakeRSRpcServices rpcServices,
-                                  HBaseProtos.RegionSpecifier regionSpec) throws ServiceException {
+      HBaseProtos.RegionSpecifier regionSpec) throws ServiceException {
       try {
-        return TABLE_NAME.equals(
-            rpcServices.getRegion(regionSpec).getTableDescriptor().getTableName());
+        return TABLE_NAME
+          .equals(rpcServices.getRegion(regionSpec).getTableDescriptor().getTableName());
       } catch (IOException ioe) {
         throw new ServiceException(ioe);
       }
     }
 
     public abstract void throwOnGet(FakeRSRpcServices rpcServices, ClientProtos.GetRequest request)
-        throws ServiceException;
+      throws ServiceException;
 
-    public abstract void throwOnMutate(FakeRSRpcServices rpcServices, ClientProtos.MutateRequest request)
-        throws ServiceException;
+    public abstract void throwOnMutate(FakeRSRpcServices rpcServices,
+      ClientProtos.MutateRequest request) throws ServiceException;
 
-    public abstract void throwOnScan(FakeRSRpcServices rpcServices, ClientProtos.ScanRequest request)
-        throws ServiceException;
+    public abstract void throwOnScan(FakeRSRpcServices rpcServices,
+      ClientProtos.ScanRequest request) throws ServiceException;
   }
 
   /**
-   * Rotates through the possible cache clearing and non-cache clearing exceptions
-   * for requests.
+   * Rotates through the possible cache clearing and non-cache clearing exceptions for requests.
    */
   public static class RoundRobinExceptionInjector extends ExceptionInjector {
     private int numReqs = -1;
@@ -288,19 +393,19 @@ public class TestMetaCache {
 
     @Override
     public void throwOnGet(FakeRSRpcServices rpcServices, ClientProtos.GetRequest request)
-        throws ServiceException {
+      throws ServiceException {
       throwSomeExceptions(rpcServices, request.getRegion());
     }
 
     @Override
     public void throwOnMutate(FakeRSRpcServices rpcServices, ClientProtos.MutateRequest request)
-        throws ServiceException {
+      throws ServiceException {
       throwSomeExceptions(rpcServices, request.getRegion());
     }
 
     @Override
     public void throwOnScan(FakeRSRpcServices rpcServices, ClientProtos.ScanRequest request)
-        throws ServiceException {
+      throws ServiceException {
       if (!request.hasScannerId()) {
         // only handle initial scan requests
         throwSomeExceptions(rpcServices, request.getRegion());
@@ -308,13 +413,11 @@ public class TestMetaCache {
     }
 
     /**
-     * Throw some exceptions. Mostly throw exceptions which do not clear meta cache.
-     * Periodically throw NotSevingRegionException which clears the meta cache.
-     * @throws ServiceException
+     * Throw some exceptions. Mostly throw exceptions which do not clear meta cache. Periodically
+     * throw NotSevingRegionException which clears the meta cache.
      */
     private void throwSomeExceptions(FakeRSRpcServices rpcServices,
-                                     HBaseProtos.RegionSpecifier regionSpec)
-        throws ServiceException {
+      HBaseProtos.RegionSpecifier regionSpec) throws ServiceException {
       if (!isTestTable(rpcServices, regionSpec)) {
         return;
       }
@@ -322,7 +425,7 @@ public class TestMetaCache {
       numReqs++;
       // Succeed every 5 request, throw cache clearing exceptions twice every 5 requests and throw
       // meta cache preserving exceptions otherwise.
-      if (numReqs % 5 ==0) {
+      if (numReqs % 5 == 0) {
         return;
       } else if (numReqs % 5 == 1 || numReqs % 5 == 2) {
         throw new ServiceException(new NotServingRegionException());
@@ -332,8 +435,8 @@ public class TestMetaCache {
       // But, we don't really care here if we throw MultiActionTooLargeException while doing
       // single Gets.
       expCount++;
-      Throwable t = metaCachePreservingExceptions.get(
-          expCount % metaCachePreservingExceptions.size());
+      Throwable t =
+        metaCachePreservingExceptions.get(expCount % metaCachePreservingExceptions.size());
       throw new ServiceException(t);
     }
   }
@@ -344,7 +447,7 @@ public class TestMetaCache {
   public static class CallQueueTooBigExceptionInjector extends ExceptionInjector {
     @Override
     public void throwOnGet(FakeRSRpcServices rpcServices, ClientProtos.GetRequest request)
-        throws ServiceException {
+      throws ServiceException {
       if (isTestTable(rpcServices, request.getRegion())) {
         throw new ServiceException(new CallQueueTooBigException());
       }
@@ -352,12 +455,12 @@ public class TestMetaCache {
 
     @Override
     public void throwOnMutate(FakeRSRpcServices rpcServices, ClientProtos.MutateRequest request)
-        throws ServiceException {
+      throws ServiceException {
     }
 
     @Override
     public void throwOnScan(FakeRSRpcServices rpcServices, ClientProtos.ScanRequest request)
-        throws ServiceException {
+      throws ServiceException {
     }
   }
 }

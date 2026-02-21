@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,17 +20,16 @@ package org.apache.hadoop.hbase.util;
 import static org.apache.hadoop.hbase.regionserver.HStoreFile.LAST_BLOOM_KEY;
 
 import java.io.IOException;
-
-import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.io.hfile.HFile.Writer;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * Handles ROWCOL bloom related context. It can work with both BytebufferdCells
- * and byte[] backed cells
+ * Handles ROWCOL bloom related context. It can work with both BytebufferdCells and byte[] backed
+ * cells
  */
 @InterfaceAudience.Private
 public class RowColBloomContext extends BloomContext {
@@ -42,7 +41,7 @@ public class RowColBloomContext extends BloomContext {
   @Override
   public void addLastBloomKey(Writer writer) throws IOException {
     if (this.getLastCell() != null) {
-      Cell firstOnRow = PrivateCellUtil.createFirstOnRowCol(this.getLastCell());
+      ExtendedCell firstOnRow = PrivateCellUtil.createFirstOnRowCol(this.getLastCell());
       // This copy happens only once when the writer is closed
       byte[] key = PrivateCellUtil.getCellKeySerializedAsKeyValueKey(firstOnRow);
       writer.appendFileInfo(LAST_BLOOM_KEY, key);
@@ -50,7 +49,7 @@ public class RowColBloomContext extends BloomContext {
   }
 
   @Override
-  protected boolean isNewKey(Cell cell) {
+  protected boolean isNewKey(ExtendedCell cell) {
     if (this.getLastCell() != null) {
       return !CellUtil.matchingRowColumn(cell, this.getLastCell());
     }

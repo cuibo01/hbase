@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver;
 
 import java.util.Collections;
@@ -23,11 +22,11 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
-
 import org.apache.hadoop.metrics2.MetricHistogram;
 import org.apache.hadoop.metrics2.MetricsCollector;
 import org.apache.hadoop.metrics2.MetricsRecordBuilder;
 import org.apache.hadoop.metrics2.lib.DynamicMetricsRegistry;
+import org.apache.hadoop.metrics2.lib.MutableFastCounter;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +46,7 @@ public class MetricsUserSourceImpl implements MetricsUserSource {
   private final String userIncrementKey;
   private final String userAppendKey;
   private final String userReplayKey;
+  private final String userBlockBytesScannedKey;
 
   private MetricHistogram getHisto;
   private MetricHistogram scanTimeHisto;
@@ -55,11 +55,11 @@ public class MetricsUserSourceImpl implements MetricsUserSource {
   private MetricHistogram incrementHisto;
   private MetricHistogram appendHisto;
   private MetricHistogram replayHisto;
+  private MutableFastCounter blockBytesScannedCount;
 
   private final int hashCode;
 
   private AtomicBoolean closed = new AtomicBoolean(false);
-  private final MetricsUserAggregateSourceImpl agg;
   private final DynamicMetricsRegistry registry;
 
   private ConcurrentHashMap<String, ClientMetrics> clientMetricsMap;
@@ -74,32 +74,39 @@ public class MetricsUserSourceImpl implements MetricsUserSource {
       this.hostName = hostName;
     }
 
-    @Override public void incrementReadRequest() {
+    @Override
+    public void incrementReadRequest() {
       readRequestsCount.increment();
     }
 
-    @Override public void incrementWriteRequest() {
+    @Override
+    public void incrementWriteRequest() {
       writeRequestsCount.increment();
     }
 
-    @Override public String getHostName() {
+    @Override
+    public String getHostName() {
       return hostName;
     }
 
-    @Override public long getReadRequestsCount() {
+    @Override
+    public long getReadRequestsCount() {
       return readRequestsCount.sum();
     }
 
-    @Override public long getWriteRequestsCount() {
+    @Override
+    public long getWriteRequestsCount() {
       return writeRequestsCount.sum();
     }
 
-    @Override public void incrementFilteredReadRequests() {
+    @Override
+    public void incrementFilteredReadRequests() {
       filteredRequestsCount.increment();
 
     }
 
-    @Override public long getFilteredReadRequests() {
+    @Override
+    public long getFilteredReadRequests() {
       return filteredRequestsCount.sum();
     }
   }
@@ -110,10 +117,9 @@ public class MetricsUserSourceImpl implements MetricsUserSource {
     }
 
     this.user = user;
-    this.agg = agg;
     this.registry = agg.getMetricsRegistry();
 
-    this.userNamePrefix = "user_" + user + "_metric_";
+    this.userNamePrefix = "User_" + user + "_metric_";
 
     hashCode = userNamePrefix.hashCode();
 
@@ -124,21 +130,21 @@ public class MetricsUserSourceImpl implements MetricsUserSource {
     userIncrementKey = userNamePrefix + MetricsRegionServerSource.INCREMENT_KEY;
     userAppendKey = userNamePrefix + MetricsRegionServerSource.APPEND_KEY;
     userReplayKey = userNamePrefix + MetricsRegionServerSource.REPLAY_KEY;
+    userBlockBytesScannedKey = userNamePrefix + MetricsRegionServerSource.BLOCK_BYTES_SCANNED_KEY;
     clientMetricsMap = new ConcurrentHashMap<>();
     agg.register(this);
   }
 
   @Override
   public void register() {
-    synchronized (this) {
-      getHisto = registry.newTimeHistogram(userGetKey);
-      scanTimeHisto = registry.newTimeHistogram(userScanTimeKey);
-      putHisto = registry.newTimeHistogram(userPutKey);
-      deleteHisto = registry.newTimeHistogram(userDeleteKey);
-      incrementHisto = registry.newTimeHistogram(userIncrementKey);
-      appendHisto = registry.newTimeHistogram(userAppendKey);
-      replayHisto = registry.newTimeHistogram(userReplayKey);
-    }
+    getHisto = registry.newTimeHistogram(userGetKey);
+    scanTimeHisto = registry.newTimeHistogram(userScanTimeKey);
+    putHisto = registry.newTimeHistogram(userPutKey);
+    deleteHisto = registry.newTimeHistogram(userDeleteKey);
+    incrementHisto = registry.newTimeHistogram(userIncrementKey);
+    appendHisto = registry.newTimeHistogram(userAppendKey);
+    replayHisto = registry.newTimeHistogram(userReplayKey);
+    blockBytesScannedCount = registry.newCounter(userBlockBytesScannedKey, "", 0);
   }
 
   @Override
@@ -154,15 +160,14 @@ public class MetricsUserSourceImpl implements MetricsUserSource {
       LOG.debug("Removing user Metrics for user: " + user);
     }
 
-    synchronized (this) {
-      registry.removeMetric(userGetKey);
-      registry.removeMetric(userScanTimeKey);
-      registry.removeMetric(userPutKey);
-      registry.removeMetric(userDeleteKey);
-      registry.removeMetric(userIncrementKey);
-      registry.removeMetric(userAppendKey);
-      registry.removeMetric(userReplayKey);
-    }
+    registry.removeMetric(userGetKey);
+    registry.removeMetric(userScanTimeKey);
+    registry.removeMetric(userPutKey);
+    registry.removeMetric(userDeleteKey);
+    registry.removeMetric(userIncrementKey);
+    registry.removeMetric(userAppendKey);
+    registry.removeMetric(userReplayKey);
+    registry.removeMetric(userBlockBytesScannedKey);
   }
 
   @Override
@@ -191,8 +196,8 @@ public class MetricsUserSourceImpl implements MetricsUserSource {
 
   @Override
   public boolean equals(Object obj) {
-    return obj == this ||
-        (obj instanceof MetricsUserSourceImpl && compareTo((MetricsUserSourceImpl) obj) == 0);
+    return obj == this
+      || (obj instanceof MetricsUserSourceImpl && compareTo((MetricsUserSourceImpl) obj) == 0);
   }
 
   void snapshot(MetricsRecordBuilder mrb, boolean ignored) {
@@ -228,18 +233,21 @@ public class MetricsUserSourceImpl implements MetricsUserSource {
   }
 
   @Override
-  public void updateGet(long t) {
-    getHisto.add(t);
+  public void updateGet(long time, long blockBytesScanned) {
+    getHisto.add(time);
+    blockBytesScannedCount.incr(blockBytesScanned);
   }
 
   @Override
-  public void updateIncrement(long t) {
-    incrementHisto.add(t);
+  public void updateIncrement(long time, long blockBytesScanned) {
+    incrementHisto.add(time);
+    blockBytesScannedCount.incr(blockBytesScanned);
   }
 
   @Override
-  public void updateAppend(long t) {
-    appendHisto.add(t);
+  public void updateAppend(long time, long blockBytesScanned) {
+    appendHisto.add(time);
+    blockBytesScannedCount.incr(blockBytesScanned);
   }
 
   @Override
@@ -248,20 +256,29 @@ public class MetricsUserSourceImpl implements MetricsUserSource {
   }
 
   @Override
-  public void updateScanTime(long t) {
-    scanTimeHisto.add(t);
+  public void updateScan(long time, long blockBytesScanned) {
+    scanTimeHisto.add(time);
+    blockBytesScannedCount.incr(blockBytesScanned);
   }
 
-  @Override public void getMetrics(MetricsCollector metricsCollector, boolean all) {
+  @Override
+  public void updateCheckAndMutate(long blockBytesScanned) {
+    blockBytesScannedCount.incr(blockBytesScanned);
+  }
+
+  @Override
+  public void getMetrics(MetricsCollector metricsCollector, boolean all) {
     MetricsRecordBuilder mrb = metricsCollector.addRecord(this.userNamePrefix);
     registry.snapshot(mrb, all);
   }
 
-  @Override public Map<String, ClientMetrics> getClientMetrics() {
+  @Override
+  public Map<String, ClientMetrics> getClientMetrics() {
     return Collections.unmodifiableMap(clientMetricsMap);
   }
 
-  @Override public ClientMetrics getOrCreateMetricsClient(String client) {
+  @Override
+  public ClientMetrics getOrCreateMetricsClient(String client) {
     ClientMetrics source = clientMetricsMap.get(client);
     if (source != null) {
       return source;

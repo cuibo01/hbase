@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.regionserver.wal;
 
 import static org.apache.hadoop.hbase.util.ConcurrentMapUtils.computeIfAbsent;
 
+import com.google.errorprone.annotations.RestrictedApi;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -50,46 +51,47 @@ import org.slf4j.LoggerFactory;
  * </p>
  */
 @InterfaceAudience.Private
-class SequenceIdAccounting {
+public class SequenceIdAccounting {
   private static final Logger LOG = LoggerFactory.getLogger(SequenceIdAccounting.class);
 
   /**
    * This lock ties all operations on {@link SequenceIdAccounting#flushingSequenceIds} and
-   * {@link #lowestUnflushedSequenceIds} Maps. {@link #lowestUnflushedSequenceIds} has the
-   * lowest outstanding sequence ids EXCEPT when flushing. When we flush, the current
-   * lowest set for the region/column family are moved (atomically because of this lock) to
+   * {@link #lowestUnflushedSequenceIds} Maps. {@link #lowestUnflushedSequenceIds} has the lowest
+   * outstanding sequence ids EXCEPT when flushing. When we flush, the current lowest set for the
+   * region/column family are moved (atomically because of this lock) to
    * {@link #flushingSequenceIds}.
-   * 
-   * <p>The two Maps are tied by this locking object EXCEPT when we go to update the lowest
-   * entry; see {@link #lowestUnflushedSequenceIds}. In here is a putIfAbsent call on
-   * {@link #lowestUnflushedSequenceIds}. In this latter case, we will add this lowest
-   * sequence id if we find that there is no entry for the current column family. There will be no
-   * entry only if we just came up OR we have moved aside current set of lowest sequence ids
-   * because the current set are being flushed (by putting them into {@link #flushingSequenceIds}).
-   * This is how we pick up the next 'lowest' sequence id per region per column family to be used
-   * figuring what is in the next flush.
+   * <p>
+   * The two Maps are tied by this locking object EXCEPT when we go to update the lowest entry; see
+   * {@link #lowestUnflushedSequenceIds}. In here is a putIfAbsent call on
+   * {@link #lowestUnflushedSequenceIds}. In this latter case, we will add this lowest sequence id
+   * if we find that there is no entry for the current column family. There will be no entry only if
+   * we just came up OR we have moved aside current set of lowest sequence ids because the current
+   * set are being flushed (by putting them into {@link #flushingSequenceIds}). This is how we pick
+   * up the next 'lowest' sequence id per region per column family to be used figuring what is in
+   * the next flush.
    */
   private final Object tieLock = new Object();
 
   /**
-   * Map of encoded region names and family names to their OLDEST -- i.e. their first,
-   * the longest-lived, their 'earliest', the 'lowest' -- sequence id.
-   *
-   * <p>When we flush, the current lowest sequence ids get cleared and added to
-   * {@link #flushingSequenceIds}. The next append that comes in, is then added
-   * here to {@link #lowestUnflushedSequenceIds} as the next lowest sequenceid.
-   *
-   * <p>If flush fails, currently server is aborted so no need to restore previous sequence ids.
-   * <p>Needs to be concurrent Maps because we use putIfAbsent updating oldest.
+   * Map of encoded region names and family names to their OLDEST -- i.e. their first, the
+   * longest-lived, their 'earliest', the 'lowest' -- sequence id.
+   * <p>
+   * When we flush, the current lowest sequence ids get cleared and added to
+   * {@link #flushingSequenceIds}. The next append that comes in, is then added here to
+   * {@link #lowestUnflushedSequenceIds} as the next lowest sequenceid.
+   * <p>
+   * If flush fails, currently server is aborted so no need to restore previous sequence ids.
+   * <p>
+   * Needs to be concurrent Maps because we use putIfAbsent updating oldest.
    */
-  private final ConcurrentMap<byte[], ConcurrentMap<ImmutableByteArray, Long>>
-    lowestUnflushedSequenceIds = new ConcurrentHashMap<>();
+  private final ConcurrentMap<byte[],
+    ConcurrentMap<ImmutableByteArray, Long>> lowestUnflushedSequenceIds = new ConcurrentHashMap<>();
 
   /**
    * Map of encoded region names and family names to their lowest or OLDEST sequence/edit id
    * currently being flushed out to hfiles. Entries are moved here from
-   * {@link #lowestUnflushedSequenceIds} while the lock {@link #tieLock} is held
-   * (so movement between the Maps is atomic).
+   * {@link #lowestUnflushedSequenceIds} while the lock {@link #tieLock} is held (so movement
+   * between the Maps is atomic).
    */
   private final Map<byte[], Map<ImmutableByteArray, Long>> flushingSequenceIds = new HashMap<>();
 
@@ -108,10 +110,12 @@ class SequenceIdAccounting {
 
   /**
    * Returns the lowest unflushed sequence id for the region.
-   * @return Lowest outstanding unflushed sequenceid for <code>encodedRegionName</code>. Will
-   * return {@link HConstants#NO_SEQNUM} when none.
+   * @return Lowest outstanding unflushed sequenceid for <code>encodedRegionName</code>. Will return
+   *         {@link HConstants#NO_SEQNUM} when none.
    */
-  long getLowestSequenceId(final byte[] encodedRegionName) {
+  @RestrictedApi(explanation = "Should only be called in tests", link = "",
+      allowedOnPath = ".*/src/test/.*")
+  public long getLowestSequenceId(final byte[] encodedRegionName) {
     synchronized (this.tieLock) {
       Map<?, Long> m = this.flushingSequenceIds.get(encodedRegionName);
       long flushingLowest = m != null ? getLowestSequenceId(m) : Long.MAX_VALUE;
@@ -150,7 +154,7 @@ class SequenceIdAccounting {
   /**
    * Reset the accounting of highest sequenceid by regionname.
    * @return Return the previous accounting Map of regions to the last sequence id written into
-   * each.
+   *         each.
    */
   Map<byte[], Long> resetHighest() {
     Map<byte[], Long> old = this.highestSequenceIds;
@@ -160,15 +164,12 @@ class SequenceIdAccounting {
 
   /**
    * We've been passed a new sequenceid for the region. Set it as highest seen for this region and
-   * if we are to record oldest, or lowest sequenceids, save it as oldest seen if nothing
-   * currently older.
-   * @param encodedRegionName
-   * @param families
-   * @param sequenceid
+   * if we are to record oldest, or lowest sequenceids, save it as oldest seen if nothing currently
+   * older.
    * @param lowest Whether to keep running account of oldest sequence id.
    */
   void update(byte[] encodedRegionName, Set<byte[]> families, long sequenceid,
-      final boolean lowest) {
+    final boolean lowest) {
     Long l = Long.valueOf(sequenceid);
     this.highestSequenceIds.put(encodedRegionName, l);
     if (lowest) {
@@ -207,7 +208,7 @@ class SequenceIdAccounting {
    * Update the store sequence id, e.g., upon executing in-memory compaction
    */
   void updateStore(byte[] encodedRegionName, byte[] familyName, Long sequenceId,
-      boolean onlyIfGreater) {
+    boolean onlyIfGreater) {
     if (sequenceId == null) {
       return;
     }
@@ -250,8 +251,8 @@ class SequenceIdAccounting {
    */
   private static long getLowestSequenceId(Map<?, Long> sequenceids) {
     long lowest = HConstants.NO_SEQNUM;
-    for (Map.Entry<? , Long> entry : sequenceids.entrySet()){
-      if (entry.getKey().toString().equals("METAFAMILY")){
+    for (Map.Entry<?, Long> entry : sequenceids.entrySet()) {
+      if (entry.getKey().toString().equals("METAFAMILY")) {
         continue;
       }
       Long sid = entry.getValue();
@@ -263,7 +264,6 @@ class SequenceIdAccounting {
   }
 
   /**
-   * @param src
    * @return New Map that has same keys as <code>src</code> but instead of a Map for a value, it
    *         instead has found the smallest sequence id and it returns that as the value instead.
    */
@@ -283,19 +283,19 @@ class SequenceIdAccounting {
 
   /**
    * @param encodedRegionName Region to flush.
-   * @param families Families to flush. May be a subset of all families in the region.
-   * @return Returns {@link HConstants#NO_SEQNUM} if we are flushing the whole region OR if
-   * we are flushing a subset of all families but there are no edits in those families not
-   * being flushed; in other words, this is effectively same as a flush of all of the region
-   * though we were passed a subset of regions. Otherwise, it returns the sequence id of the
-   * oldest/lowest outstanding edit.
+   * @param families          Families to flush. May be a subset of all families in the region.
+   * @return Returns {@link HConstants#NO_SEQNUM} if we are flushing the whole region OR if we are
+   *         flushing a subset of all families but there are no edits in those families not being
+   *         flushed; in other words, this is effectively same as a flush of all of the region
+   *         though we were passed a subset of regions. Otherwise, it returns the sequence id of the
+   *         oldest/lowest outstanding edit.
    */
   Long startCacheFlush(final byte[] encodedRegionName, final Set<byte[]> families) {
-    Map<byte[],Long> familytoSeq = new HashMap<>();
-    for (byte[] familyName : families){
-      familytoSeq.put(familyName,HConstants.NO_SEQNUM);
+    Map<byte[], Long> familytoSeq = new HashMap<>();
+    for (byte[] familyName : families) {
+      familytoSeq.put(familyName, HConstants.NO_SEQNUM);
     }
-    return startCacheFlush(encodedRegionName,familytoSeq);
+    return startCacheFlush(encodedRegionName, familytoSeq);
   }
 
   Long startCacheFlush(final byte[] encodedRegionName, final Map<byte[], Long> familyToSeq) {
@@ -311,7 +311,7 @@ class SequenceIdAccounting {
         for (Map.Entry<byte[], Long> entry : familyToSeq.entrySet()) {
           ImmutableByteArray familyNameWrapper = ImmutableByteArray.wrap((byte[]) entry.getKey());
           Long seqId = null;
-          if(entry.getValue() == HConstants.NO_SEQNUM) {
+          if (entry.getValue() == HConstants.NO_SEQNUM) {
             seqId = m.remove(familyNameWrapper);
           } else {
             seqId = m.replace(familyNameWrapper, entry.getValue());
@@ -325,8 +325,8 @@ class SequenceIdAccounting {
         }
         if (oldSequenceIds != null && !oldSequenceIds.isEmpty()) {
           if (this.flushingSequenceIds.put(encodedRegionName, oldSequenceIds) != null) {
-            LOG.warn("Flushing Map not cleaned up for " + Bytes.toString(encodedRegionName) +
-              ", sequenceid=" + oldSequenceIds);
+            LOG.warn("Flushing Map not cleaned up for " + Bytes.toString(encodedRegionName)
+              + ", sequenceid=" + oldSequenceIds);
           }
         }
         if (m.isEmpty()) {
@@ -398,7 +398,7 @@ class SequenceIdAccounting {
       flushing = this.flushingSequenceIds.remove(encodedRegionName);
       if (flushing != null) {
         Map<ImmutableByteArray, Long> unflushed = getOrCreateLowestSequenceIds(encodedRegionName);
-        for (Map.Entry<ImmutableByteArray, Long> e: flushing.entrySet()) {
+        for (Map.Entry<ImmutableByteArray, Long> e : flushing.entrySet()) {
           // Set into unflushed the 'old' oldest sequenceid and if any value in flushed with this
           // value, it will now be in tmpMap.
           tmpMap.put(e.getKey(), unflushed.put(e.getKey(), e.getValue()));
@@ -412,9 +412,9 @@ class SequenceIdAccounting {
       for (Map.Entry<ImmutableByteArray, Long> e : flushing.entrySet()) {
         Long currentId = tmpMap.get(e.getKey());
         if (currentId != null && currentId.longValue() < e.getValue().longValue()) {
-          String errorStr = Bytes.toString(encodedRegionName) + " family "
-              + e.getKey().toString() + " acquired edits out of order current memstore seq="
-              + currentId + ", previous oldest unflushed id=" + e.getValue();
+          String errorStr = Bytes.toString(encodedRegionName) + " family " + e.getKey().toString()
+            + " acquired edits out of order current memstore seq=" + currentId
+            + ", previous oldest unflushed id=" + e.getValue();
           LOG.error(errorStr);
           Runtime.getRuntime().halt(1);
         }
@@ -425,10 +425,10 @@ class SequenceIdAccounting {
   /**
    * See if passed <code>sequenceids</code> are lower -- i.e. earlier -- than any outstanding
    * sequenceids, sequenceids we are holding on to in this accounting instance.
-   * @param sequenceids Keyed by encoded region name. Cannot be null (doesn't make sense for it to
-   *          be null).
+   * @param sequenceids  Keyed by encoded region name. Cannot be null (doesn't make sense for it to
+   *                     be null).
    * @param keysBlocking An optional collection that is used to return the specific keys that are
-   *          causing this method to return false.
+   *                     causing this method to return false.
    * @return true if all sequenceids are lower, older than, the old sequenceids in this instance.
    */
   boolean areAllLower(Map<byte[], Long> sequenceids, Collection<byte[]> keysBlocking) {
@@ -465,9 +465,8 @@ class SequenceIdAccounting {
 
   /**
    * Iterates over the given Map and compares sequence ids with corresponding entries in
-   * {@link #lowestUnflushedSequenceIds}. If a region in
-   * {@link #lowestUnflushedSequenceIds} has a sequence id less than that passed in
-   * <code>sequenceids</code> then return it.
+   * {@link #lowestUnflushedSequenceIds}. If a region in {@link #lowestUnflushedSequenceIds} has a
+   * sequence id less than that passed in <code>sequenceids</code> then return it.
    * @param sequenceids Sequenceids keyed by encoded region name.
    * @return stores of regions found in this instance with sequence ids less than those passed in.
    */
@@ -481,6 +480,11 @@ class SequenceIdAccounting {
           continue;
         }
         for (Map.Entry<ImmutableByteArray, Long> me : m.entrySet()) {
+          // FLUSH events produce an entry in the wal with a "fake" METAFAMILY CF. We need to ignore
+          // these entries here, as there is actual no such store.
+          if (me.getKey().toString().equals("METAFAMILY")) {
+            continue;
+          }
           if (me.getValue() <= e.getValue()) {
             if (toFlush == null) {
               toFlush = new TreeMap(Bytes.BYTES_COMPARATOR);

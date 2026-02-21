@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -35,7 +35,7 @@ public class ThrottleSettings extends QuotaSettings {
   final QuotaProtos.ThrottleRequest proto;
 
   ThrottleSettings(final String userName, final TableName tableName, final String namespace,
-      final String regionServer, final QuotaProtos.ThrottleRequest proto) {
+    final String regionServer, final QuotaProtos.ThrottleRequest proto) {
     super(userName, tableName, namespace, regionServer);
     this.proto = proto;
   }
@@ -56,13 +56,15 @@ public class ThrottleSettings extends QuotaSettings {
   }
 
   public TimeUnit getTimeUnit() {
-    return proto.hasTimedQuota() ?
-      ProtobufUtil.toTimeUnit(proto.getTimedQuota().getTimeUnit()) : null;
+    return proto.hasTimedQuota()
+      ? ProtobufUtil.toTimeUnit(proto.getTimedQuota().getTimeUnit())
+      : null;
   }
 
   public QuotaScope getQuotaScope() {
-    return proto.hasTimedQuota() ? ProtobufUtil.toQuotaScope(proto.getTimedQuota().getScope())
-        : null;
+    return proto.hasTimedQuota()
+      ? ProtobufUtil.toQuotaScope(proto.getTimedQuota().getScope())
+      : null;
   }
 
   @Override
@@ -91,17 +93,23 @@ public class ThrottleSettings extends QuotaSettings {
           case REQUEST_NUMBER:
           case WRITE_NUMBER:
           case READ_NUMBER:
+          case ATOMIC_REQUEST_NUMBER:
             builder.append(String.format("%dreq", timedQuota.getSoftLimit()));
             break;
           case REQUEST_SIZE:
           case WRITE_SIZE:
           case READ_SIZE:
+          case ATOMIC_READ_SIZE:
+          case ATOMIC_WRITE_SIZE:
             builder.append(sizeToString(timedQuota.getSoftLimit()));
             break;
           case REQUEST_CAPACITY_UNIT:
           case READ_CAPACITY_UNIT:
           case WRITE_CAPACITY_UNIT:
             builder.append(String.format("%dCU", timedQuota.getSoftLimit()));
+            break;
+          case REQUEST_HANDLER_USAGE_MS:
+            builder.append(String.format("%dms", timedQuota.getSoftLimit()));
             break;
           default:
         }
@@ -140,17 +148,16 @@ public class ThrottleSettings extends QuotaSettings {
         }
 
         if (!proto.getType().equals(otherProto.getType())) {
-          throw new IllegalArgumentException(
-              "Cannot merge a ThrottleRequest for " + proto.getType() + " with " +
-                  otherProto.getType());
+          throw new IllegalArgumentException("Cannot merge a ThrottleRequest for " + proto.getType()
+            + " with " + otherProto.getType());
         }
         QuotaProtos.TimedQuota.Builder timedQuotaBuilder = proto.getTimedQuota().toBuilder();
         timedQuotaBuilder.mergeFrom(otherProto.getTimedQuota());
 
-        QuotaProtos.ThrottleRequest mergedReq = builder.setTimedQuota(
-            timedQuotaBuilder.build()).build();
+        QuotaProtos.ThrottleRequest mergedReq =
+          builder.setTimedQuota(timedQuotaBuilder.build()).build();
         return new ThrottleSettings(getUserName(), getTableName(), getNamespace(),
-            getRegionServer(), mergedReq);
+          getRegionServer(), mergedReq);
       }
     }
     return this;
@@ -159,13 +166,13 @@ public class ThrottleSettings extends QuotaSettings {
   private void validateTimedQuota(final TimedQuota timedQuota) throws IOException {
     if (timedQuota.getSoftLimit() < 1) {
       throw new DoNotRetryIOException(new UnsupportedOperationException(
-          "The throttle limit must be greater then 0, got " + timedQuota.getSoftLimit()));
+        "The throttle limit must be greater then 0, got " + timedQuota.getSoftLimit()));
     }
   }
 
   static ThrottleSettings fromTimedQuota(final String userName, final TableName tableName,
-      final String namespace, final String regionServer, ThrottleType type,
-      QuotaProtos.TimedQuota timedQuota) {
+    final String namespace, final String regionServer, ThrottleType type,
+    QuotaProtos.TimedQuota timedQuota) {
     QuotaProtos.ThrottleRequest.Builder builder = QuotaProtos.ThrottleRequest.newBuilder();
     builder.setType(ProtobufUtil.toProtoThrottleType(type));
     builder.setTimedQuota(timedQuota);

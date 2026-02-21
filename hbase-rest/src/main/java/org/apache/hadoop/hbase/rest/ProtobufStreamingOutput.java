@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,14 +19,9 @@ package org.apache.hadoop.hbase.rest;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.util.List;
-import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
-import org.apache.hadoop.hbase.rest.model.CellModel;
 import org.apache.hadoop.hbase.rest.model.CellSetModel;
-import org.apache.hadoop.hbase.rest.model.RowModel;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -50,15 +45,15 @@ public class ProtobufStreamingOutput implements StreamingOutput {
     this.limit = limit;
     this.fetchSize = fetchSize;
     if (LOG.isTraceEnabled()) {
-      LOG.trace("Created StreamingOutput with content type = " + this.contentType
-          + " user limit : " + this.limit + " scan fetch size : " + this.fetchSize);
+      LOG.trace("Created StreamingOutput with content type = " + this.contentType + " user limit : "
+        + this.limit + " scan fetch size : " + this.fetchSize);
     }
   }
 
   @Override
   public void write(OutputStream outStream) throws IOException, WebApplicationException {
     Result[] rowsToSend;
-    if(limit < fetchSize){
+    if (limit < fetchSize) {
       rowsToSend = this.resultScanner.next(limit);
       writeToStream(createModelFromResults(rowsToSend), this.contentType, outStream);
     } else {
@@ -69,7 +64,7 @@ public class ProtobufStreamingOutput implements StreamingOutput {
         } else {
           rowsToSend = this.resultScanner.next(this.fetchSize);
         }
-        if(rowsToSend.length == 0){
+        if (rowsToSend.length == 0) {
           break;
         }
         count = count - rowsToSend.length;
@@ -79,9 +74,9 @@ public class ProtobufStreamingOutput implements StreamingOutput {
   }
 
   private void writeToStream(CellSetModel model, String contentType, OutputStream outStream)
-      throws IOException {
+    throws IOException {
     byte[] objectBytes = model.createProtobufOutput();
-    outStream.write(Bytes.toBytes((short)objectBytes.length));
+    outStream.write(Bytes.toBytes((short) objectBytes.length));
     outStream.write(objectBytes);
     outStream.flush();
     if (LOG.isTraceEnabled()) {
@@ -91,15 +86,11 @@ public class ProtobufStreamingOutput implements StreamingOutput {
 
   private CellSetModel createModelFromResults(Result[] results) {
     CellSetModel cellSetModel = new CellSetModel();
-    for (Result rs : results) {
-      byte[] rowKey = rs.getRow();
-      RowModel rModel = new RowModel(rowKey);
-      List<Cell> kvs = rs.listCells();
-      for (Cell kv : kvs) {
-        rModel.addCell(new CellModel(CellUtil.cloneFamily(kv), CellUtil.cloneQualifier(kv), kv
-            .getTimestamp(), CellUtil.cloneValue(kv)));
+    for (int i = 0; i < results.length; i++) {
+      if (results[i].isEmpty()) {
+        continue;
       }
-      cellSetModel.addRow(rModel);
+      cellSetModel.addRow(RestUtil.createRowModelFromResult(results[i]));
     }
     return cellSetModel;
   }

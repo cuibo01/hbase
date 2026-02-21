@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,10 +20,10 @@ package org.apache.hadoop.hbase.regionserver.querymatcher;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.NavigableSet;
-
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValue.Type;
@@ -117,7 +117,7 @@ public abstract class ScanQueryMatcher implements ShipperListener {
   protected final CellComparator rowComparator;
 
   /** Key to seek to in memstore and StoreFiles */
-  protected final Cell startKey;
+  protected final ExtendedCell startKey;
 
   /** Keeps track of columns and versions */
   protected final ColumnTracker columns;
@@ -128,10 +128,10 @@ public abstract class ScanQueryMatcher implements ShipperListener {
   protected final long now;
 
   /** Row the query is on */
-  protected Cell currentRow;
+  protected ExtendedCell currentRow;
 
-  protected ScanQueryMatcher(Cell startKey, ScanInfo scanInfo, ColumnTracker columns,
-      long oldestUnexpiredTS, long now) {
+  protected ScanQueryMatcher(ExtendedCell startKey, ScanInfo scanInfo, ColumnTracker columns,
+    long oldestUnexpiredTS, long now) {
     this.rowComparator = scanInfo.getComparator();
     this.startKey = startKey;
     this.oldestUnexpiredTS = oldestUnexpiredTS;
@@ -139,13 +139,9 @@ public abstract class ScanQueryMatcher implements ShipperListener {
     this.columns = columns;
   }
 
-  /**
-   * @param cell
-   * @param oldestTimestamp
-   * @return true if the cell is expired
-   */
-  private static boolean isCellTTLExpired(final Cell cell, final long oldestTimestamp,
-      final long now) {
+  /** Returns true if the cell is expired */
+  private static boolean isCellTTLExpired(final ExtendedCell cell, final long oldestTimestamp,
+    final long now) {
     // Look for a TTL tag first. Use it instead of the family setting if
     // found. If a cell has multiple TTLs, resolve the conflict by using the
     // first tag encountered.
@@ -173,7 +169,25 @@ public abstract class ScanQueryMatcher implements ShipperListener {
    * Check before the delete logic.
    * @return null means continue.
    */
-  protected final MatchCode preCheck(Cell cell) {
+  protected final MatchCode preCheck(ExtendedCell cell) {
+    final MatchCode code = preCheckRaw(cell);
+    if (code != null) {
+      return code;
+    }
+
+    // check if the cell is expired by cell TTL
+    if (isCellTTLExpired(cell, this.oldestUnexpiredTS, this.now)) {
+      return MatchCode.SKIP;
+    }
+
+    return null;
+  }
+
+  /**
+   * preCheck for raw scan. This should not skip expired cells.
+   * @return null means continue.
+   */
+  protected final MatchCode preCheckRaw(ExtendedCell cell) {
     if (currentRow == null) {
       // Since the curCell is null it means we are already sure that we have moved over to the next
       // row
@@ -195,14 +209,10 @@ public abstract class ScanQueryMatcher implements ShipperListener {
     if (timestamp == PrivateConstants.OLDEST_TIMESTAMP || columns.isDone(timestamp)) {
       return columns.getNextRowOrNextColumn(cell);
     }
-    // check if the cell is expired by cell TTL
-    if (isCellTTLExpired(cell, this.oldestUnexpiredTS, this.now)) {
-      return MatchCode.SKIP;
-    }
     return null;
   }
 
-  protected final MatchCode checkDeleted(DeleteTracker deletes, Cell cell) {
+  protected final MatchCode checkDeleted(DeleteTracker deletes, ExtendedCell cell) {
     if (deletes.isEmpty() && !(deletes instanceof NewVersionBehaviorTracker)) {
       return null;
     }
@@ -226,7 +236,6 @@ public abstract class ScanQueryMatcher implements ShipperListener {
     }
   }
 
-
   /**
    * Determines if the caller should do one of several things:
    * <ul>
@@ -239,26 +248,20 @@ public abstract class ScanQueryMatcher implements ShipperListener {
    * @param cell KeyValue to check
    * @return The match code instance.
    * @throws IOException in case there is an internal consistency problem caused by a data
-   *           corruption.
+   *                     corruption.
    */
-  public abstract MatchCode match(Cell cell) throws IOException;
+  public abstract MatchCode match(ExtendedCell cell) throws IOException;
 
-  /**
-   * @return the start key
-   */
-  public Cell getStartKey() {
+  /** Returns the start key */
+  public ExtendedCell getStartKey() {
     return startKey;
   }
 
-  /**
-   * @return whether there is an null column in the query
-   */
+  /** Returns whether there is an null column in the query */
   public abstract boolean hasNullColumnInQuery();
 
-  /**
-   * @return a cell represent the current row
-   */
-  public Cell currentRow() {
+  /** Returns a cell represent the current row */
+  public ExtendedCell currentRow() {
     return currentRow;
   }
 
@@ -273,9 +276,8 @@ public abstract class ScanQueryMatcher implements ShipperListener {
 
   /**
    * Set the row when there is change in row
-   * @param currentRow
    */
-  public void setToNewRow(Cell currentRow) {
+  public void setToNewRow(ExtendedCell currentRow) {
     this.currentRow = currentRow;
     columns.reset();
     reset();
@@ -288,20 +290,21 @@ public abstract class ScanQueryMatcher implements ShipperListener {
    *         <code>stopRow</code> or we are scanning on row only because this Scan is for a Get,
    *         etc.
    */
-  public abstract boolean moreRowsMayExistAfter(Cell cell);
+  public abstract boolean moreRowsMayExistAfter(ExtendedCell cell);
 
-  public Cell getKeyForNextColumn(Cell cell) {
+  public ExtendedCell getKeyForNextColumn(ExtendedCell cell) {
     // We aren't sure whether any DeleteFamily cells exist, so we can't skip to next column.
     // TODO: Current way disable us to seek to next column quickly. Is there any better solution?
     // see HBASE-18471 for more details
     // see TestFromClientSide3#testScanAfterDeletingSpecifiedRow
     // see TestFromClientSide3#testScanAfterDeletingSpecifiedRowV2
     if (cell.getQualifierLength() == 0) {
-      Cell nextKey = PrivateCellUtil.createNextOnRowCol(cell);
+      ExtendedCell nextKey = PrivateCellUtil.createNextOnRowCol(cell);
       if (nextKey != cell) {
         return nextKey;
       }
-      // The cell is at the end of row/family/qualifier, so it is impossible to find any DeleteFamily cells.
+      // The cell is at the end of row/family/qualifier, so it is impossible to find any
+      // DeleteFamily cells.
       // Let us seek to next column.
     }
     ColumnCount nextColumn = columns.getColumnHint();
@@ -318,9 +321,9 @@ public abstract class ScanQueryMatcher implements ShipperListener {
    * @param currentCell The Cell we're using to calculate the seek key
    * @return result of the compare between the indexed key and the key portion of the passed cell
    */
-  public int compareKeyForNextRow(Cell nextIndexed, Cell currentCell) {
-    return PrivateCellUtil.compareKeyBasedOnColHint(rowComparator, nextIndexed, currentCell, 0, 0, null, 0,
-      0, PrivateConstants.OLDEST_TIMESTAMP, Type.Minimum.getCode());
+  public int compareKeyForNextRow(ExtendedCell nextIndexed, ExtendedCell currentCell) {
+    return PrivateCellUtil.compareKeyBasedOnColHint(rowComparator, nextIndexed, currentCell, 0, 0,
+      null, 0, 0, PrivateConstants.OLDEST_TIMESTAMP, Type.Minimum.getCode());
   }
 
   /**
@@ -328,11 +331,11 @@ public abstract class ScanQueryMatcher implements ShipperListener {
    * @param currentCell The Cell we're using to calculate the seek key
    * @return result of the compare between the indexed key and the key portion of the passed cell
    */
-  public int compareKeyForNextColumn(Cell nextIndexed, Cell currentCell) {
+  public int compareKeyForNextColumn(ExtendedCell nextIndexed, ExtendedCell currentCell) {
     ColumnCount nextColumn = columns.getColumnHint();
     if (nextColumn == null) {
-      return PrivateCellUtil.compareKeyBasedOnColHint(rowComparator, nextIndexed, currentCell, 0, 0, null,
-        0, 0, PrivateConstants.OLDEST_TIMESTAMP, Type.Minimum.getCode());
+      return PrivateCellUtil.compareKeyBasedOnColHint(rowComparator, nextIndexed, currentCell, 0, 0,
+        null, 0, 0, PrivateConstants.OLDEST_TIMESTAMP, Type.Minimum.getCode());
     } else {
       return PrivateCellUtil.compareKeyBasedOnColHint(rowComparator, nextIndexed, currentCell,
         currentCell.getFamilyOffset(), currentCell.getFamilyLength(), nextColumn.getBuffer(),
@@ -341,15 +344,13 @@ public abstract class ScanQueryMatcher implements ShipperListener {
     }
   }
 
-  /**
-   * @return the Filter
-   */
+  /** Returns the Filter */
   public abstract Filter getFilter();
 
   /**
    * Delegate to {@link Filter#getNextCellHint(Cell)}. If no filter, return {@code null}.
    */
-  public abstract Cell getNextKeyHint(Cell cell) throws IOException;
+  public abstract ExtendedCell getNextKeyHint(ExtendedCell cell) throws IOException;
 
   @Override
   public void beforeShipped() throws IOException {
@@ -361,13 +362,13 @@ public abstract class ScanQueryMatcher implements ShipperListener {
     }
   }
 
-  protected static Cell createStartKeyFromRow(byte[] startRow, ScanInfo scanInfo) {
+  protected static ExtendedCell createStartKeyFromRow(byte[] startRow, ScanInfo scanInfo) {
     return PrivateCellUtil.createFirstDeleteFamilyCellOnRow(startRow, scanInfo.getFamily());
   }
 
   protected static Pair<DeleteTracker, ColumnTracker> getTrackers(RegionCoprocessorHost host,
-      NavigableSet<byte[]> columns, ScanInfo scanInfo, long oldestUnexpiredTS, Scan userScan)
-      throws IOException {
+    NavigableSet<byte[]> columns, ScanInfo scanInfo, long oldestUnexpiredTS, Scan userScan)
+    throws IOException {
     int resultMaxVersion = scanInfo.getMaxVersions();
     int maxVersionToCheck = resultMaxVersion;
     if (userScan != null) {
@@ -383,8 +384,7 @@ public abstract class ScanQueryMatcher implements ShipperListener {
     DeleteTracker deleteTracker;
     if (scanInfo.isNewVersionBehavior() && (userScan == null || !userScan.isRaw())) {
       deleteTracker = new NewVersionBehaviorTracker(columns, scanInfo.getComparator(),
-          scanInfo.getMinVersions(), scanInfo.getMaxVersions(), resultMaxVersion,
-          oldestUnexpiredTS);
+        scanInfo.getMinVersions(), scanInfo.getMaxVersions(), resultMaxVersion, oldestUnexpiredTS);
     } else {
       deleteTracker = new ScanDeleteTracker(scanInfo.getComparator());
     }
@@ -392,8 +392,8 @@ public abstract class ScanQueryMatcher implements ShipperListener {
       deleteTracker = host.postInstantiateDeleteTracker(deleteTracker);
       if (deleteTracker instanceof VisibilityScanDeleteTracker && scanInfo.isNewVersionBehavior()) {
         deleteTracker = new VisibilityNewVersionBehaivorTracker(columns, scanInfo.getComparator(),
-            scanInfo.getMinVersions(), scanInfo.getMaxVersions(), resultMaxVersion,
-            oldestUnexpiredTS);
+          scanInfo.getMinVersions(), scanInfo.getMaxVersions(), resultMaxVersion,
+          oldestUnexpiredTS);
       }
     }
 
@@ -403,7 +403,7 @@ public abstract class ScanQueryMatcher implements ShipperListener {
       columnTracker = (NewVersionBehaviorTracker) deleteTracker;
     } else if (columns == null || columns.size() == 0) {
       columnTracker = new ScanWildcardColumnTracker(scanInfo.getMinVersions(), maxVersionToCheck,
-          oldestUnexpiredTS, scanInfo.getComparator());
+        oldestUnexpiredTS, scanInfo.getComparator());
     } else {
       columnTracker = new ExplicitColumnTracker(columns, scanInfo.getMinVersions(),
         maxVersionToCheck, oldestUnexpiredTS);
@@ -413,7 +413,7 @@ public abstract class ScanQueryMatcher implements ShipperListener {
 
   // Used only for testing purposes
   static MatchCode checkColumn(ColumnTracker columnTracker, byte[] bytes, int offset, int length,
-      long ttl, byte type, boolean ignoreCount) throws IOException {
+    long ttl, byte type, boolean ignoreCount) throws IOException {
     KeyValue kv = KeyValueUtil.createFirstOnRow(HConstants.EMPTY_BYTE_ARRAY, 0, 0,
       HConstants.EMPTY_BYTE_ARRAY, 0, 0, bytes, offset, length);
     MatchCode matchCode = columnTracker.checkColumn(kv, type);

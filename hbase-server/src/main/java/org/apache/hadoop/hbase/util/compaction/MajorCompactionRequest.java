@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -28,8 +28,11 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.regionserver.HRegionFileSystem;
 import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTracker;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerFactory;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -52,16 +55,14 @@ class MajorCompactionRequest {
     this.region = region;
   }
 
-  MajorCompactionRequest(Connection connection, RegionInfo region,
-      Set<String> stores) {
+  MajorCompactionRequest(Connection connection, RegionInfo region, Set<String> stores) {
     this(connection, region);
     this.stores = stores;
   }
 
   static Optional<MajorCompactionRequest> newRequest(Connection connection, RegionInfo info,
-      Set<String> stores, long timestamp) throws IOException {
-    MajorCompactionRequest request =
-        new MajorCompactionRequest(connection, info, stores);
+    Set<String> stores, long timestamp) throws IOException {
+    MajorCompactionRequest request = new MajorCompactionRequest(connection, info, stores);
     return request.createRequest(connection, stores, timestamp);
   }
 
@@ -77,8 +78,8 @@ class MajorCompactionRequest {
     this.stores = stores;
   }
 
-  Optional<MajorCompactionRequest> createRequest(Connection connection,
-      Set<String> stores, long timestamp) throws IOException {
+  Optional<MajorCompactionRequest> createRequest(Connection connection, Set<String> stores,
+    long timestamp) throws IOException {
     Set<String> familiesToCompact = getStoresRequiringCompaction(stores, timestamp);
     MajorCompactionRequest request = null;
     if (!familiesToCompact.isEmpty()) {
@@ -88,7 +89,7 @@ class MajorCompactionRequest {
   }
 
   Set<String> getStoresRequiringCompaction(Set<String> requestedStores, long timestamp)
-      throws IOException {
+    throws IOException {
     HRegionFileSystem fileSystem = getFileSystem();
     Set<String> familiesToCompact = Sets.newHashSet();
     for (String family : requestedStores) {
@@ -100,37 +101,44 @@ class MajorCompactionRequest {
   }
 
   boolean shouldCFBeCompacted(HRegionFileSystem fileSystem, String family, long ts)
-      throws IOException {
+    throws IOException {
     // do we have any store files?
-    Collection<StoreFileInfo> storeFiles = fileSystem.getStoreFiles(family);
+    StoreFileTracker sft = getStoreFileTracker(family, fileSystem);
+    List<StoreFileInfo> storeFiles = sft.load();
     if (storeFiles == null) {
-      LOG.info("Excluding store: " + family + " for compaction for region:  " + fileSystem
-          .getRegionInfo().getEncodedName(), " has no store files");
+      LOG.info("Excluding store: " + family + " for compaction for region:  "
+        + fileSystem.getRegionInfo().getEncodedName(), " has no store files");
       return false;
     }
     // check for reference files
-    if (fileSystem.hasReferences(family) && familyHasReferenceFile(fileSystem, family, ts)) {
+    if (sft.hasReferences() && familyHasReferenceFile(fileSystem, family, ts)) {
       LOG.info("Including store: " + family + " with: " + storeFiles.size()
-          + " files for compaction for region: " + fileSystem.getRegionInfo().getEncodedName());
+        + " files for compaction for region: " + fileSystem.getRegionInfo().getEncodedName());
       return true;
     }
     // check store file timestamps
     boolean includeStore = this.shouldIncludeStore(fileSystem, family, storeFiles, ts);
     if (!includeStore) {
-      LOG.info("Excluding store: " + family + " for compaction for region:  " + fileSystem
-          .getRegionInfo().getEncodedName() + " already compacted");
+      LOG.info("Excluding store: " + family + " for compaction for region:  "
+        + fileSystem.getRegionInfo().getEncodedName() + " already compacted");
     }
     return includeStore;
   }
 
+  public StoreFileTracker getStoreFileTracker(String family, HRegionFileSystem fileSystem)
+    throws IOException {
+    TableDescriptor htd = connection.getTable(getRegion().getTable()).getDescriptor();
+    return StoreFileTrackerFactory.create(connection.getConfiguration(), htd,
+      htd.getColumnFamily(family.getBytes()), fileSystem, false);
+  }
+
   protected boolean shouldIncludeStore(HRegionFileSystem fileSystem, String family,
-      Collection<StoreFileInfo> storeFiles, long ts) throws IOException {
+    Collection<StoreFileInfo> storeFiles, long ts) throws IOException {
 
     for (StoreFileInfo storeFile : storeFiles) {
       if (storeFile.getModificationTime() < ts) {
         LOG.info("Including store: " + family + " with: " + storeFiles.size()
-            + " files for compaction for region: "
-            + fileSystem.getRegionInfo().getEncodedName());
+          + " files for compaction for region: " + fileSystem.getRegionInfo().getEncodedName());
         return true;
       }
     }
@@ -138,14 +146,14 @@ class MajorCompactionRequest {
   }
 
   protected boolean familyHasReferenceFile(HRegionFileSystem fileSystem, String family, long ts)
-      throws IOException {
+    throws IOException {
     List<Path> referenceFiles =
-        getReferenceFilePaths(fileSystem.getFileSystem(), fileSystem.getStoreDir(family));
+      getReferenceFilePaths(fileSystem.getFileSystem(), fileSystem.getStoreDir(family));
     for (Path referenceFile : referenceFiles) {
       FileStatus status = fileSystem.getFileSystem().getFileLinkStatus(referenceFile);
       if (status.getModificationTime() < ts) {
-        LOG.info("Including store: " + family + " for compaction for region:  " + fileSystem
-            .getRegionInfo().getEncodedName() + " (reference store files)");
+        LOG.info("Including store: " + family + " for compaction for region:  "
+          + fileSystem.getRegionInfo().getEncodedName() + " (reference store files)");
         return true;
       }
     }
@@ -153,17 +161,16 @@ class MajorCompactionRequest {
 
   }
 
-  List<Path> getReferenceFilePaths(FileSystem fileSystem, Path familyDir)
-      throws IOException {
+  List<Path> getReferenceFilePaths(FileSystem fileSystem, Path familyDir) throws IOException {
     return FSUtils.getReferenceFilePaths(fileSystem, familyDir);
   }
 
   HRegionFileSystem getFileSystem() throws IOException {
     try (Admin admin = connection.getAdmin()) {
       return HRegionFileSystem.openRegionFromFileSystem(admin.getConfiguration(),
-        CommonFSUtils.getCurrentFileSystem(admin.getConfiguration()),
-        CommonFSUtils.getTableDir(CommonFSUtils.getRootDir(admin.getConfiguration()),
-          region.getTable()), region, true);
+        CommonFSUtils.getCurrentFileSystem(admin.getConfiguration()), CommonFSUtils.getTableDir(
+          CommonFSUtils.getRootDir(admin.getConfiguration()), region.getTable()),
+        region, true);
     }
   }
 

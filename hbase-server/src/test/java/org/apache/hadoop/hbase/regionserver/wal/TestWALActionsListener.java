@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -38,6 +38,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALEditInternalHelper;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.junit.After;
@@ -50,17 +51,16 @@ import org.junit.experimental.categories.Category;
 /**
  * Test that the actions are called while playing with an WAL
  */
-@Category({RegionServerTests.class, SmallTests.class})
+@Category({ RegionServerTests.class, SmallTests.class })
 public class TestWALActionsListener {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestWALActionsListener.class);
+    HBaseClassTestRule.forClass(TestWALActionsListener.class);
 
-  private final static HBaseTestingUtil TEST_UTIL =
-      new HBaseTestingUtil();
+  private final static HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
 
-  private final static byte[] SOME_BYTES =  Bytes.toBytes("t");
+  private final static byte[] SOME_BYTES = Bytes.toBytes("t");
   private static Configuration conf;
   private static Path rootDir;
   private static Path walRootDir;
@@ -90,9 +90,9 @@ public class TestWALActionsListener {
   }
 
   /**
-   * Add a bunch of dummy data and roll the logs every two insert. We
-   * should end up with 10 rolled files (plus the roll called in
-   * the constructor). Also test adding a listener while it's running.
+   * Add a bunch of dummy data and roll the logs every two insert. We should end up with 10 rolled
+   * files (plus the roll called in the constructor). Also test adding a listener while it's
+   * running.
    */
   @Test
   public void testActionListener() throws Exception {
@@ -101,14 +101,14 @@ public class TestWALActionsListener {
     wals.getWALProvider().addWALActionsListener(observer);
     DummyWALActionsListener laterobserver = new DummyWALActionsListener();
     RegionInfo hri = RegionInfoBuilder.newBuilder(TableName.valueOf(SOME_BYTES))
-        .setStartKey(SOME_BYTES).setEndKey(SOME_BYTES).build();
+      .setStartKey(SOME_BYTES).setEndKey(SOME_BYTES).build();
     final WAL wal = wals.getWAL(hri);
     MultiVersionConcurrencyControl mvcc = new MultiVersionConcurrencyControl();
     for (int i = 0; i < 20; i++) {
       byte[] b = Bytes.toBytes(i + "");
       KeyValue kv = new KeyValue(b, b, b);
       WALEdit edit = new WALEdit();
-      edit.add(kv);
+      WALEditInternalHelper.addExtendedCell(edit, kv);
       NavigableMap<byte[], Integer> scopes = new TreeMap<>(Bytes.BYTES_COMPARATOR);
       scopes.put(b, 0);
       long txid = wal.appendData(hri,
@@ -130,7 +130,6 @@ public class TestWALActionsListener {
     assertEquals(5, laterobserver.postLogRollCounter);
     assertEquals(1, observer.closedCount);
   }
-
 
   /**
    * Just counts when methods are called
@@ -157,4 +156,3 @@ public class TestWALActionsListener {
   }
 
 }
-

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,10 +17,14 @@
  */
 package org.apache.hadoop.hbase.backup;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.util.HashSet;
 import java.util.List;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.backup.impl.BackupManifest;
 import org.apache.hadoop.hbase.backup.impl.BackupSystemTable;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.util.ToolRunner;
@@ -30,12 +34,14 @@ import org.junit.experimental.categories.Category;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
+
 @Category(LargeTests.class)
 public class TestFullBackup extends TestBackupBase {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestFullBackup.class);
+    HBaseClassTestRule.forClass(TestFullBackup.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestFullBackup.class);
 
@@ -44,9 +50,8 @@ public class TestFullBackup extends TestBackupBase {
     LOG.info("test full backup on a multiple tables with data: command-line");
     try (BackupSystemTable table = new BackupSystemTable(TEST_UTIL.getConnection())) {
       int before = table.getBackupHistory().size();
-      String[] args =
-          new String[] { "create", "full", BACKUP_ROOT_DIR, "-t",
-              table1.getNameAsString() + "," + table2.getNameAsString() };
+      String[] args = new String[] { "create", "full", BACKUP_ROOT_DIR, "-t",
+        table1.getNameAsString() + "," + table2.getNameAsString() };
       // Run backup
       int ret = ToolRunner.run(conf1, new BackupDriver(), args);
       assertTrue(ret == 0);
@@ -57,6 +62,11 @@ public class TestFullBackup extends TestBackupBase {
         String backupId = data.getBackupId();
         assertTrue(checkSucceeded(backupId));
       }
+
+      BackupInfo newestBackup = backups.get(0);
+      BackupManifest manifest =
+        HBackupFileSystem.getManifest(conf1, new Path(BACKUP_ROOT_DIR), newestBackup.getBackupId());
+      assertEquals(Sets.newHashSet(table1, table2), new HashSet<>(manifest.getTableList()));
     }
     LOG.info("backup complete");
   }

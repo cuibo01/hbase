@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.regionserver.HStoreFile;
 import org.apache.hadoop.hbase.regionserver.StoreContext;
 import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -50,13 +51,6 @@ class MigrationStoreFileTracker extends StoreFileTrackerBase {
   }
 
   @Override
-  public List<StoreFileInfo> load() throws IOException {
-    List<StoreFileInfo> files = src.load();
-    dst.set(files);
-    return files;
-  }
-
-  @Override
   public boolean requireWritingToTmpDirFirst() {
     // Returns true if either of the two StoreFileTracker returns true.
     // For example, if we want to migrate from a tracker implementation which can ignore the broken
@@ -65,6 +59,15 @@ class MigrationStoreFileTracker extends StoreFileTrackerBase {
     // then after we finally change the implementation which can not ignore the broken files, we
     // will be in trouble.
     return src.requireWritingToTmpDirFirst() || dst.requireWritingToTmpDirFirst();
+  }
+
+  @Override
+  protected List<StoreFileInfo> doLoadStoreFiles(boolean readOnly) throws IOException {
+    List<StoreFileInfo> files = src.doLoadStoreFiles(readOnly);
+    if (!readOnly) {
+      dst.doSetStoreFiles(files);
+    }
+    return files;
   }
 
   @Override
@@ -81,9 +84,14 @@ class MigrationStoreFileTracker extends StoreFileTrackerBase {
   }
 
   @Override
-  public void set(List<StoreFileInfo> files) {
+  protected void doSetStoreFiles(Collection<StoreFileInfo> files) throws IOException {
     throw new UnsupportedOperationException(
       "Should not call this method on " + getClass().getSimpleName());
+  }
+
+  @Override
+  public void removeStoreFiles(List<HStoreFile> storeFiles) throws IOException {
+    dst.removeStoreFiles(storeFiles);
   }
 
   static Class<? extends StoreFileTracker> getSrcTrackerClass(Configuration conf) {

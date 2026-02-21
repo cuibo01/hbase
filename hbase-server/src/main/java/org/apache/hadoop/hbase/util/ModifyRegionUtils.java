@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.util;
 
 import java.io.IOException;
@@ -30,18 +28,19 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.regionserver.HRegion;
-import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 /**
  * Utility methods for interacting with the regions.
@@ -62,18 +61,12 @@ public abstract class ModifyRegionUtils {
   }
 
   public static RegionInfo[] createRegionInfos(TableDescriptor tableDescriptor,
-      byte[][] splitKeys) {
+    byte[][] splitKeys) {
     long regionId = EnvironmentEdgeManager.currentTime();
     RegionInfo[] hRegionInfos = null;
     if (splitKeys == null || splitKeys.length == 0) {
-      hRegionInfos = new RegionInfo[]{
-          RegionInfoBuilder.newBuilder(tableDescriptor.getTableName())
-           .setStartKey(null)
-           .setEndKey(null)
-           .setSplit(false)
-           .setRegionId(regionId)
-           .build()
-      };
+      hRegionInfos = new RegionInfo[] { RegionInfoBuilder.newBuilder(tableDescriptor.getTableName())
+        .setStartKey(null).setEndKey(null).setSplit(false).setRegionId(regionId).build() };
     } else {
       int numRegions = splitKeys.length + 1;
       hRegionInfos = new RegionInfo[numRegions];
@@ -81,13 +74,8 @@ public abstract class ModifyRegionUtils {
       byte[] endKey = null;
       for (int i = 0; i < numRegions; i++) {
         endKey = (i == splitKeys.length) ? null : splitKeys[i];
-        hRegionInfos[i] =
-            RegionInfoBuilder.newBuilder(tableDescriptor.getTableName())
-                .setStartKey(startKey)
-                .setEndKey(endKey)
-                .setSplit(false)
-                .setRegionId(regionId)
-                .build();
+        hRegionInfos[i] = RegionInfoBuilder.newBuilder(tableDescriptor.getTableName())
+          .setStartKey(startKey).setEndKey(endKey).setSplit(false).setRegionId(regionId).build();
         startKey = endKey;
       }
     }
@@ -95,46 +83,49 @@ public abstract class ModifyRegionUtils {
   }
 
   /**
-   * Create new set of regions on the specified file-system.
-   * NOTE: that you should add the regions to hbase:meta after this operation.
-   *
-   * @param conf {@link Configuration}
-   * @param rootDir Root directory for HBase instance
+   * Create new set of regions on the specified file-system. NOTE: that you should add the regions
+   * to hbase:meta after this operation.
+   * @param env             {@link MasterProcedureEnv}
+   * @param rootDir         Root directory for HBase instance
    * @param tableDescriptor description of the table
-   * @param newRegions {@link RegionInfo} that describes the regions to create
-   * @param task {@link RegionFillTask} custom code to populate region after creation
-   * @throws IOException
+   * @param newRegions      {@link RegionInfo} that describes the regions to create
+   * @param task            {@link RegionFillTask} custom code to populate region after creation
    */
-  public static List<RegionInfo> createRegions(final Configuration conf, final Path rootDir,
-      final TableDescriptor tableDescriptor, final RegionInfo[] newRegions,
-      final RegionFillTask task) throws IOException {
+  public static List<RegionInfo> createRegions(final MasterProcedureEnv env, final Path rootDir,
+    final TableDescriptor tableDescriptor, final RegionInfo[] newRegions, final RegionFillTask task)
+    throws IOException {
     if (newRegions == null) return null;
     int regionNumber = newRegions.length;
-    ThreadPoolExecutor exec = getRegionOpenAndInitThreadPool(conf,
-        "RegionOpenAndInit-" + tableDescriptor.getTableName(), regionNumber);
+    ThreadPoolExecutor exec = getRegionOpenAndInitThreadPool(env.getMasterConfiguration(),
+      "RegionOpenAndInit-" + tableDescriptor.getTableName(), regionNumber);
     try {
-      return createRegions(exec, conf, rootDir, tableDescriptor, newRegions, task);
+      return createRegions(exec, env.getMasterConfiguration(), env, rootDir, tableDescriptor,
+        newRegions, task);
     } finally {
       exec.shutdownNow();
     }
   }
 
+  public static List<RegionInfo> createRegions(final ThreadPoolExecutor exec,
+    final Configuration conf, final Path rootDir, final TableDescriptor tableDescriptor,
+    final RegionInfo[] newRegions, final RegionFillTask task) throws IOException {
+    return createRegions(exec, conf, null, rootDir, tableDescriptor, newRegions, task);
+  }
+
   /**
-   * Create new set of regions on the specified file-system.
-   * NOTE: that you should add the regions to hbase:meta after this operation.
-   *
-   * @param exec Thread Pool Executor
-   * @param conf {@link Configuration}
-   * @param rootDir Root directory for HBase instance
+   * Create new set of regions on the specified file-system. NOTE: that you should add the regions
+   * to hbase:meta after this operation.
+   * @param exec            Thread Pool Executor
+   * @param conf            {@link Configuration}
+   * @param rootDir         Root directory for HBase instance
    * @param tableDescriptor description of the table
-   * @param newRegions {@link RegionInfo} that describes the regions to create
-   * @param task {@link RegionFillTask} custom code to populate region after creation
-   * @throws IOException
+   * @param newRegions      {@link RegionInfo} that describes the regions to create
+   * @param task            {@link RegionFillTask} custom code to populate region after creation
    */
   public static List<RegionInfo> createRegions(final ThreadPoolExecutor exec,
-                                                final Configuration conf, final Path rootDir,
-                                                final TableDescriptor tableDescriptor, final RegionInfo[] newRegions,
-                                                final RegionFillTask task) throws IOException {
+    final Configuration conf, final MasterProcedureEnv env, final Path rootDir,
+    final TableDescriptor tableDescriptor, final RegionInfo[] newRegions, final RegionFillTask task)
+    throws IOException {
     if (newRegions == null) return null;
     int regionNumber = newRegions.length;
     CompletionService<RegionInfo> completionService = new ExecutorCompletionService<>(exec);
@@ -143,7 +134,7 @@ public abstract class ModifyRegionUtils {
       completionService.submit(new Callable<RegionInfo>() {
         @Override
         public RegionInfo call() throws IOException {
-          return createRegion(conf, rootDir, tableDescriptor, newRegion, task);
+          return createRegion(conf, env, rootDir, tableDescriptor, newRegion, task);
         }
       });
     }
@@ -163,22 +154,22 @@ public abstract class ModifyRegionUtils {
 
   /**
    * Create new set of regions on the specified file-system.
-   * @param conf {@link Configuration}
-   * @param rootDir Root directory for HBase instance
+   * @param conf            {@link Configuration}
+   * @param rootDir         Root directory for HBase instance
    * @param tableDescriptor description of the table
-   * @param newRegion {@link RegionInfo} that describes the region to create
-   * @param task {@link RegionFillTask} custom code to populate region after creation
-   * @throws IOException
+   * @param newRegion       {@link RegionInfo} that describes the region to create
+   * @param task            {@link RegionFillTask} custom code to populate region after creation
    */
-  public static RegionInfo createRegion(final Configuration conf, final Path rootDir,
-      final TableDescriptor tableDescriptor, final RegionInfo newRegion,
-      final RegionFillTask task) throws IOException {
+  public static RegionInfo createRegion(final Configuration conf, final MasterProcedureEnv env,
+    final Path rootDir, final TableDescriptor tableDescriptor, final RegionInfo newRegion,
+    final RegionFillTask task) throws IOException {
     // 1. Create HRegion
     // The WAL subsystem will use the default rootDir rather than the passed in rootDir
     // unless I pass along via the conf.
     Configuration confForWAL = new Configuration(conf);
     confForWAL.set(HConstants.HBASE_DIR, rootDir.toString());
-    HRegion region = HRegion.createHRegion(newRegion, rootDir, conf, tableDescriptor, null, false);
+    HRegion region = HRegion.createHRegion(newRegion, rootDir, conf, tableDescriptor, null, false,
+      null, env == null ? null : env.getMasterServices());
     try {
       // 2. Custom user code to interact with the created region
       if (task != null) {
@@ -193,16 +184,14 @@ public abstract class ModifyRegionUtils {
 
   /**
    * Execute the task on the specified set of regions.
-   *
-   * @param exec Thread Pool Executor
+   * @param exec    Thread Pool Executor
    * @param regions {@link RegionInfo} that describes the regions to edit
-   * @param task {@link RegionFillTask} custom code to edit the region
-   * @throws IOException
+   * @param task    {@link RegionFillTask} custom code to edit the region
    */
   public static void editRegions(final ThreadPoolExecutor exec,
-      final Collection<RegionInfo> regions, final RegionEditTask task) throws IOException {
+    final Collection<RegionInfo> regions, final RegionEditTask task) throws IOException {
     final ExecutorCompletionService<Void> completionService = new ExecutorCompletionService<>(exec);
-    for (final RegionInfo hri: regions) {
+    for (final RegionInfo hri : regions) {
       completionService.submit(new Callable<Void>() {
         @Override
         public Void call() throws IOException {
@@ -213,7 +202,7 @@ public abstract class ModifyRegionUtils {
     }
 
     try {
-      for (RegionInfo hri: regions) {
+      for (RegionInfo hri : regions) {
         completionService.take().get();
       }
     } catch (InterruptedException e) {

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -99,15 +99,15 @@ public class TestTransitRegionStateProcedure {
     HMaster master = UTIL.getHBaseCluster().getMaster();
     AssignmentManager am = master.getAssignmentManager();
     RegionStateNode regionNode = am.getRegionStates().getRegionStateNode(proc.getRegion());
-    assertFalse(regionNode.isInTransition());
+    assertFalse(regionNode.isTransitionScheduled());
     regionNode.setProcedure(proc);
-    assertTrue(regionNode.isInTransition());
+    assertTrue(regionNode.isTransitionScheduled());
     ProcedureExecutor<MasterProcedureEnv> procExec = master.getMasterProcedureExecutor();
     ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdate(procExec, true);
     long procId = procExec.submitProcedure(proc);
     MasterProcedureTestingUtility.testRecoveryAndDoubleExecution(procExec, procId);
     regionNode = am.getRegionStates().getRegionStateNode(proc.getRegion());
-    assertFalse(regionNode.isInTransition());
+    assertFalse(regionNode.isTransitionScheduled());
   }
 
   @Test

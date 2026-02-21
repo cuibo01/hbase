@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,7 +22,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
@@ -39,20 +38,22 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.mockito.Mockito;
 
-@Category({MiscTests.class, SmallTests.class})
+@Category({ MiscTests.class, SmallTests.class })
 public class TestCellUtil {
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCellUtil.class);
+    HBaseClassTestRule.forClass(TestCellUtil.class);
 
   /**
    * CellScannable used in test. Returns a {@link TestCellScanner}
    */
   private static class TestCellScannable implements CellScannable {
     private final int cellsCount;
+
     TestCellScannable(final int cellsCount) {
       this.cellsCount = cellsCount;
     }
+
     @Override
     public CellScanner cellScanner() {
       return new TestCellScanner(this.cellsCount);
@@ -90,8 +91,8 @@ public class TestCellUtil {
   /**
    * Cell used in test. Has row only.
    */
-  private static class TestCell implements Cell {
-    private final byte [] row;
+  private static class TestCell implements ExtendedCell {
+    private final byte[] row;
 
     TestCell(final int i) {
       this.row = Bytes.toBytes(i);
@@ -109,72 +110,61 @@ public class TestCellUtil {
 
     @Override
     public short getRowLength() {
-      return (short)this.row.length;
+      return (short) this.row.length;
     }
 
     @Override
     public byte[] getFamilyArray() {
-      // TODO Auto-generated method stub
       return null;
     }
 
     @Override
     public int getFamilyOffset() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public byte getFamilyLength() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public byte[] getQualifierArray() {
-      // TODO Auto-generated method stub
       return null;
     }
 
     @Override
     public int getQualifierOffset() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public int getQualifierLength() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public long getTimestamp() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public byte getTypeByte() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public byte[] getValueArray() {
-      // TODO Auto-generated method stub
       return null;
     }
 
     @Override
     public int getValueOffset() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public int getValueLength() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
@@ -185,31 +175,41 @@ public class TestCellUtil {
 
     @Override
     public byte[] getTagsArray() {
-      // TODO Auto-generated method stub
       return null;
     }
 
     @Override
     public int getTagsOffset() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public long getSequenceId() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public int getTagsLength() {
-      // TODO Auto-generated method stub
       return 0;
     }
 
     @Override
     public long heapSize() {
       return 0;
+    }
+
+    @Override
+    public void setSequenceId(long seqId) throws IOException {
+
+    }
+
+    @Override
+    public void setTimestamp(long ts) throws IOException {
+
+    }
+
+    @Override
+    public void setTimestamp(byte[] ts) throws IOException {
     }
   }
 
@@ -233,17 +233,17 @@ public class TestCellUtil {
       cells.add(new TestCellScannable(1));
     }
     consume(CellUtil.createCellScanner(cells), hundredK);
-    NavigableMap<byte [], List<Cell>> m = new TreeMap<>(Bytes.BYTES_COMPARATOR);
+    NavigableMap<byte[], List<Cell>> m = new TreeMap<>(Bytes.BYTES_COMPARATOR);
     List<Cell> cellArray = new ArrayList<>(hundredK);
     for (int i = 0; i < hundredK; i++) {
       cellArray.add(new TestCell(i));
     }
-    m.put(new byte [] {'f'}, cellArray);
+    m.put(new byte[] { 'f' }, cellArray);
     consume(CellUtil.createCellScanner(m), hundredK);
   }
 
   private CellScanner doCreateCellArray(final int itemsPerList) {
-    Cell [] cells = new Cell [itemsPerList];
+    Cell[] cells = new Cell[itemsPerList];
     for (int i = 0; i < itemsPerList; i++) {
       cells[i] = new TestCell(i);
     }
@@ -315,7 +315,7 @@ public class TestCellUtil {
     Assert.assertFalse(PrivateCellUtil.overlappingKeys(b, c, a, b));
     Assert.assertFalse(PrivateCellUtil.overlappingKeys(b, c, empty, b));
     Assert.assertFalse(PrivateCellUtil.overlappingKeys(b, c, empty, a));
-    Assert.assertFalse(PrivateCellUtil.overlappingKeys(a,b, b, c));
+    Assert.assertFalse(PrivateCellUtil.overlappingKeys(a, b, b, c));
     Assert.assertFalse(PrivateCellUtil.overlappingKeys(empty, b, b, c));
     Assert.assertFalse(PrivateCellUtil.overlappingKeys(empty, a, b, c));
   }
@@ -323,8 +323,8 @@ public class TestCellUtil {
   @Test
   public void testFindCommonPrefixInFlatKey() {
     // The whole key matching case
-    KeyValue kv1 = new KeyValue(Bytes.toBytes("r1"), Bytes.toBytes("f1"),
-        Bytes.toBytes("q1"), null);
+    KeyValue kv1 =
+      new KeyValue(Bytes.toBytes("r1"), Bytes.toBytes("f1"), Bytes.toBytes("q1"), null);
     Assert.assertEquals(kv1.getKeyLength(),
       PrivateCellUtil.findCommonPrefixInFlatKey(kv1, kv1, true, true));
     Assert.assertEquals(kv1.getKeyLength(),
@@ -332,42 +332,47 @@ public class TestCellUtil {
     Assert.assertEquals(kv1.getKeyLength() - KeyValue.TIMESTAMP_TYPE_SIZE,
       PrivateCellUtil.findCommonPrefixInFlatKey(kv1, kv1, true, false));
     // The rk length itself mismatch
-    KeyValue kv2 = new KeyValue(Bytes.toBytes("r12"), Bytes.toBytes("f1"),
-        Bytes.toBytes("q1"), null);
+    KeyValue kv2 =
+      new KeyValue(Bytes.toBytes("r12"), Bytes.toBytes("f1"), Bytes.toBytes("q1"), null);
     Assert.assertEquals(1, PrivateCellUtil.findCommonPrefixInFlatKey(kv1, kv2, true, true));
     // part of rk is same
-    KeyValue kv3 = new KeyValue(Bytes.toBytes("r14"), Bytes.toBytes("f1"),
-        Bytes.toBytes("q1"), null);
+    KeyValue kv3 =
+      new KeyValue(Bytes.toBytes("r14"), Bytes.toBytes("f1"), Bytes.toBytes("q1"), null);
     Assert.assertEquals(KeyValue.ROW_LENGTH_SIZE + Bytes.toBytes("r1").length,
       PrivateCellUtil.findCommonPrefixInFlatKey(kv2, kv3, true, true));
     // entire rk is same but different cf name
-    KeyValue kv4 = new KeyValue(Bytes.toBytes("r14"), Bytes.toBytes("f2"),
-        Bytes.toBytes("q1"), null);
-    Assert.assertEquals(KeyValue.ROW_LENGTH_SIZE + kv3.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
+    KeyValue kv4 =
+      new KeyValue(Bytes.toBytes("r14"), Bytes.toBytes("f2"), Bytes.toBytes("q1"), null);
+    Assert.assertEquals(
+      KeyValue.ROW_LENGTH_SIZE + kv3.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
         + Bytes.toBytes("f").length,
-        PrivateCellUtil.findCommonPrefixInFlatKey(kv3, kv4, false, true));
+      PrivateCellUtil.findCommonPrefixInFlatKey(kv3, kv4, false, true));
     // rk and family are same and part of qualifier
-    KeyValue kv5 = new KeyValue(Bytes.toBytes("r14"), Bytes.toBytes("f2"),
-        Bytes.toBytes("q123"), null);
-    Assert.assertEquals(KeyValue.ROW_LENGTH_SIZE + kv3.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
+    KeyValue kv5 =
+      new KeyValue(Bytes.toBytes("r14"), Bytes.toBytes("f2"), Bytes.toBytes("q123"), null);
+    Assert.assertEquals(
+      KeyValue.ROW_LENGTH_SIZE + kv3.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
         + kv4.getFamilyLength() + kv4.getQualifierLength(),
-        PrivateCellUtil.findCommonPrefixInFlatKey(kv4, kv5, true, true));
+      PrivateCellUtil.findCommonPrefixInFlatKey(kv4, kv5, true, true));
     // rk, cf and q are same. ts differs
     KeyValue kv6 = new KeyValue(Bytes.toBytes("rk"), 1234L);
     KeyValue kv7 = new KeyValue(Bytes.toBytes("rk"), 1235L);
     // only last byte out of 8 ts bytes in ts part differs
-    Assert.assertEquals(KeyValue.ROW_LENGTH_SIZE + kv6.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
+    Assert.assertEquals(
+      KeyValue.ROW_LENGTH_SIZE + kv6.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
         + kv6.getFamilyLength() + kv6.getQualifierLength() + 7,
-        PrivateCellUtil.findCommonPrefixInFlatKey(kv6, kv7, true, true));
+      PrivateCellUtil.findCommonPrefixInFlatKey(kv6, kv7, true, true));
     // rk, cf, q and ts are same. Only type differs
     KeyValue kv8 = new KeyValue(Bytes.toBytes("rk"), 1234L, KeyValue.Type.Delete);
-    Assert.assertEquals(KeyValue.ROW_LENGTH_SIZE + kv6.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
+    Assert.assertEquals(
+      KeyValue.ROW_LENGTH_SIZE + kv6.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
         + kv6.getFamilyLength() + kv6.getQualifierLength() + KeyValue.TIMESTAMP_SIZE,
-        PrivateCellUtil.findCommonPrefixInFlatKey(kv6, kv8, true, true));
+      PrivateCellUtil.findCommonPrefixInFlatKey(kv6, kv8, true, true));
     // With out TS_TYPE check
-    Assert.assertEquals(KeyValue.ROW_LENGTH_SIZE + kv6.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
+    Assert.assertEquals(
+      KeyValue.ROW_LENGTH_SIZE + kv6.getRowLength() + KeyValue.FAMILY_LENGTH_SIZE
         + kv6.getFamilyLength() + kv6.getQualifierLength(),
-        PrivateCellUtil.findCommonPrefixInFlatKey(kv6, kv8, true, false));
+      PrivateCellUtil.findCommonPrefixInFlatKey(kv6, kv8, true, false));
   }
 
   /**
@@ -375,33 +380,24 @@ public class TestCellUtil {
    */
   @Test
   public void testToString() {
-    byte [] row = Bytes.toBytes("row");
+    byte[] row = Bytes.toBytes("row");
     long ts = 123L;
     // Make a KeyValue and a Cell and see if same toString result.
-    KeyValue kv = new KeyValue(row, HConstants.EMPTY_BYTE_ARRAY, HConstants.EMPTY_BYTE_ARRAY,
-        ts, KeyValue.Type.Minimum, HConstants.EMPTY_BYTE_ARRAY);
-    Cell cell = ExtendedCellBuilderFactory.create(CellBuilderType.DEEP_COPY)
-      .setRow(row)
-      .setFamily(HConstants.EMPTY_BYTE_ARRAY)
-      .setQualifier(HConstants.EMPTY_BYTE_ARRAY)
-      .setTimestamp(ts)
-      .setType(KeyValue.Type.Minimum.getCode())
-      .setValue(HConstants.EMPTY_BYTE_ARRAY)
-      .build();
+    KeyValue kv = new KeyValue(row, HConstants.EMPTY_BYTE_ARRAY, HConstants.EMPTY_BYTE_ARRAY, ts,
+      KeyValue.Type.Minimum, HConstants.EMPTY_BYTE_ARRAY);
+    Cell cell = ExtendedCellBuilderFactory.create(CellBuilderType.DEEP_COPY).setRow(row)
+      .setFamily(HConstants.EMPTY_BYTE_ARRAY).setQualifier(HConstants.EMPTY_BYTE_ARRAY)
+      .setTimestamp(ts).setType(KeyValue.Type.Minimum.getCode())
+      .setValue(HConstants.EMPTY_BYTE_ARRAY).build();
     String cellToString = CellUtil.getCellKeyAsString(cell);
     assertEquals(kv.toString(), cellToString);
     // Do another w/ non-null family.
-    byte [] f = new byte [] {'f'};
-    byte [] q = new byte [] {'q'};
+    byte[] f = new byte[] { 'f' };
+    byte[] q = new byte[] { 'q' };
     kv = new KeyValue(row, f, q, ts, KeyValue.Type.Minimum, HConstants.EMPTY_BYTE_ARRAY);
-    cell = ExtendedCellBuilderFactory.create(CellBuilderType.DEEP_COPY)
-      .setRow(row)
-      .setFamily(f)
-      .setQualifier(q)
-      .setTimestamp(ts)
-      .setType(KeyValue.Type.Minimum.getCode())
-      .setValue(HConstants.EMPTY_BYTE_ARRAY)
-      .build();
+    cell = ExtendedCellBuilderFactory.create(CellBuilderType.DEEP_COPY).setRow(row).setFamily(f)
+      .setQualifier(q).setTimestamp(ts).setType(KeyValue.Type.Minimum.getCode())
+      .setValue(HConstants.EMPTY_BYTE_ARRAY).build();
     cellToString = CellUtil.getCellKeyAsString(cell);
     assertEquals(kv.toString(), cellToString);
   }
@@ -417,14 +413,9 @@ public class TestCellUtil {
     long seqId = 1042;
 
     Cell cell = ExtendedCellBuilderFactory.create(CellBuilderType.DEEP_COPY)
-      .setRow(Bytes.toBytes(row))
-      .setFamily(Bytes.toBytes(family))
-      .setQualifier(Bytes.toBytes(qualifier))
-      .setTimestamp(timestamp)
-      .setType(type.getCode())
-      .setValue(Bytes.toBytes(value))
-      .setSequenceId(seqId)
-      .build();
+      .setRow(Bytes.toBytes(row)).setFamily(Bytes.toBytes(family))
+      .setQualifier(Bytes.toBytes(qualifier)).setTimestamp(timestamp).setType(type.getCode())
+      .setValue(Bytes.toBytes(value)).setSequenceId(seqId).build();
 
     String nonVerbose = CellUtil.toString(cell, false);
     String verbose = CellUtil.toString(cell, true);
@@ -432,17 +423,11 @@ public class TestCellUtil {
     System.out.println("nonVerbose=" + nonVerbose);
     System.out.println("verbose=" + verbose);
 
-    Assert.assertEquals(
-        String.format("%s/%s:%s/%d/%s/vlen=%s/seqid=%s",
-          row, family, qualifier, timestamp, type.toString(),
-          Bytes.toBytes(value).length, seqId),
-        nonVerbose);
+    Assert.assertEquals(String.format("%s/%s:%s/%d/%s/vlen=%s/seqid=%s", row, family, qualifier,
+      timestamp, type.toString(), Bytes.toBytes(value).length, seqId), nonVerbose);
 
-    Assert.assertEquals(
-      String.format("%s/%s:%s/%d/%s/vlen=%s/seqid=%s/%s",
-        row, family, qualifier, timestamp, type.toString(), Bytes.toBytes(value).length,
-        seqId, value),
-      verbose);
+    Assert.assertEquals(String.format("%s/%s:%s/%d/%s/vlen=%s/seqid=%s/%s", row, family, qualifier,
+      timestamp, type.toString(), Bytes.toBytes(value).length, seqId, value), verbose);
 
     // TODO: test with tags
   }
@@ -455,9 +440,9 @@ public class TestCellUtil {
     byte[] v = Bytes.toBytes("val1");
     byte[] tags = Bytes.toBytes("tag1");
     KeyValue kv =
-        new KeyValue(r, f, q, 0, q.length, 1234L, KeyValue.Type.Put, v, 0, v.length, tags);
+      new KeyValue(r, f, q, 0, q.length, 1234L, KeyValue.Type.Put, v, 0, v.length, tags);
     ByteBuffer buffer = ByteBuffer.wrap(kv.getBuffer());
-    Cell bbCell = new ByteBufferKeyValue(buffer, 0, buffer.remaining());
+    ExtendedCell bbCell = new ByteBufferKeyValue(buffer, 0, buffer.remaining());
     byte[] rDest = CellUtil.cloneRow(bbCell);
     assertTrue(Bytes.equals(r, rDest));
     byte[] fDest = CellUtil.cloneFamily(bbCell);
@@ -480,7 +465,7 @@ public class TestCellUtil {
     byte[] v = Bytes.toBytes("val1");
     byte[] tags = Bytes.toBytes("tag1");
     KeyValue kv =
-        new KeyValue(r, f, q1, 0, q1.length, 1234L, KeyValue.Type.Put, v, 0, v.length, tags);
+      new KeyValue(r, f, q1, 0, q1.length, 1234L, KeyValue.Type.Put, v, 0, v.length, tags);
     ByteBuffer buffer = ByteBuffer.wrap(kv.getBuffer());
     Cell bbCell1 = new ByteBufferKeyValue(buffer, 0, buffer.remaining());
     kv = new KeyValue(r, f, q2, 0, q2.length, 1234L, KeyValue.Type.Put, v, 0, v.length, tags);
@@ -533,32 +518,10 @@ public class TestCellUtil {
   }
 
   @Test
-  public void testWriteCell() throws IOException {
-    byte[] r = Bytes.toBytes("row1");
-    byte[] f = Bytes.toBytes("cf1");
-    byte[] q1 = Bytes.toBytes("qual1");
-    byte[] q2 = Bytes.toBytes("qual2");
-    byte[] v = Bytes.toBytes("val1");
-    byte[] tags = Bytes.toBytes("tag1");
-    KeyValue kv =
-        new KeyValue(r, f, q1, 0, q1.length, 1234L, KeyValue.Type.Put, v, 0, v.length, tags);
-    NonExtendedCell nonExtCell = new NonExtendedCell(kv);
-    ByteArrayOutputStream os = new ByteArrayOutputStream();
-    int writeCell = PrivateCellUtil.writeCell(nonExtCell, os, true);
-    byte[] byteArray = os.toByteArray();
-    KeyValue res = new KeyValue(byteArray);
-    assertTrue(CellUtil.equals(kv, res));
-  }
-
-  // Workaround for jdk 11 - reflective access to interface default methods for testGetType
-  private abstract class CellForMockito implements Cell {
-  }
-
-  @Test
   public void testGetType() {
-    CellForMockito c = Mockito.mock(CellForMockito.class);
+    ExtendedCell c = Mockito.mock(ExtendedCell.class);
     Mockito.when(c.getType()).thenCallRealMethod();
-    for (CellForMockito.Type type : CellForMockito.Type.values()) {
+    for (Cell.Type type : Cell.Type.values()) {
       Mockito.when(c.getTypeByte()).thenReturn(type.getCode());
       assertEquals(type, c.getType());
     }
@@ -567,122 +530,14 @@ public class TestCellUtil {
       Mockito.when(c.getTypeByte()).thenReturn(KeyValue.Type.Maximum.getCode());
       c.getType();
       fail("The code of Maximum can't be handled by Cell.Type");
-    } catch(UnsupportedOperationException e) {
+    } catch (UnsupportedOperationException e) {
     }
 
     try {
       Mockito.when(c.getTypeByte()).thenReturn(KeyValue.Type.Minimum.getCode());
       c.getType();
       fail("The code of Maximum can't be handled by Cell.Type");
-    } catch(UnsupportedOperationException e) {
-    }
-  }
-
-  private static class NonExtendedCell implements Cell {
-    private KeyValue kv;
-
-    public NonExtendedCell(KeyValue kv) {
-      this.kv = kv;
-    }
-
-    @Override
-    public byte[] getRowArray() {
-      return this.kv.getRowArray();
-    }
-
-    @Override
-    public int getRowOffset() {
-      return this.kv.getRowOffset();
-    }
-
-    @Override
-    public short getRowLength() {
-      return this.kv.getRowLength();
-    }
-
-    @Override
-    public byte[] getFamilyArray() {
-      return this.kv.getFamilyArray();
-    }
-
-    @Override
-    public int getFamilyOffset() {
-      return this.kv.getFamilyOffset();
-    }
-
-    @Override
-    public byte getFamilyLength() {
-      return this.kv.getFamilyLength();
-    }
-
-    @Override
-    public byte[] getQualifierArray() {
-      return this.kv.getQualifierArray();
-    }
-
-    @Override
-    public int getQualifierOffset() {
-      return this.kv.getQualifierOffset();
-    }
-
-    @Override
-    public int getQualifierLength() {
-      return this.kv.getQualifierLength();
-    }
-
-    @Override
-    public long getTimestamp() {
-      return this.kv.getTimestamp();
-    }
-
-    @Override
-    public byte getTypeByte() {
-      return this.kv.getTypeByte();
-    }
-
-    @Override
-    public long getSequenceId() {
-      return this.kv.getSequenceId();
-    }
-
-    @Override
-    public byte[] getValueArray() {
-      return this.kv.getValueArray();
-    }
-
-    @Override
-    public int getValueOffset() {
-      return this.kv.getValueOffset();
-    }
-
-    @Override
-    public int getValueLength() {
-      return this.kv.getValueLength();
-    }
-
-    @Override
-    public int getSerializedSize() {
-      return this.kv.getSerializedSize();
-    }
-
-    @Override
-    public byte[] getTagsArray() {
-      return this.kv.getTagsArray();
-    }
-
-    @Override
-    public int getTagsOffset() {
-      return this.kv.getTagsOffset();
-    }
-
-    @Override
-    public int getTagsLength() {
-      return this.kv.getTagsLength();
-    }
-
-    @Override
-    public long heapSize() {
-      return this.kv.heapSize();
+    } catch (UnsupportedOperationException e) {
     }
   }
 }

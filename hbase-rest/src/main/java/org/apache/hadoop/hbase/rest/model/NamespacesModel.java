@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,28 +15,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.rest.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
-
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlRootElement;
-
 import org.apache.hadoop.hbase.NamespaceDescriptor;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.rest.ProtobufMessageHandler;
+import org.apache.hadoop.hbase.rest.RestUtil;
+import org.apache.hadoop.hbase.rest.protobuf.generated.NamespacesMessage.Namespaces;
+import org.apache.yetus.audience.InterfaceAudience;
 
-import org.apache.hadoop.hbase.shaded.rest.protobuf.generated.NamespacesMessage.Namespaces;
-
-import com.fasterxml.jackson.annotation.JsonProperty;
-
+import org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream;
+import org.apache.hbase.thirdparty.com.google.protobuf.Message;
 
 /**
  * A list of HBase namespaces.
@@ -45,7 +42,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * <li>Namespace: namespace name</li>
  * </ul>
  */
-@XmlRootElement(name="Namespaces")
+@XmlRootElement(name = "Namespaces")
 @XmlAccessorType(XmlAccessType.FIELD)
 @InterfaceAudience.Private
 public class NamespacesModel implements Serializable, ProtobufMessageHandler {
@@ -53,18 +50,18 @@ public class NamespacesModel implements Serializable, ProtobufMessageHandler {
   private static final long serialVersionUID = 1L;
 
   @JsonProperty("Namespace")
-  @XmlElement(name="Namespace")
+  @XmlElement(name = "Namespace")
   private List<String> namespaces = new ArrayList<>();
 
   /**
    * Default constructor. Do not use.
    */
-  public NamespacesModel() {}
+  public NamespacesModel() {
+  }
 
   /**
    * Constructor
    * @param admin the administrative API
-   * @throws IOException
    */
   public NamespacesModel(Admin admin) throws IOException {
     NamespaceDescriptor[] nds = admin.listNamespaceDescriptors();
@@ -74,9 +71,7 @@ public class NamespacesModel implements Serializable, ProtobufMessageHandler {
     }
   }
 
-  /**
-   * @return all namespaces
-   */
+  /** Returns all namespaces */
   public List<String> getNamespaces() {
     return namespaces;
   }
@@ -88,7 +83,8 @@ public class NamespacesModel implements Serializable, ProtobufMessageHandler {
     this.namespaces = namespaces;
   }
 
-  /* (non-Javadoc)
+  /*
+   * (non-Javadoc)
    * @see java.lang.Object#toString()
    */
   @Override
@@ -102,16 +98,16 @@ public class NamespacesModel implements Serializable, ProtobufMessageHandler {
   }
 
   @Override
-  public byte[] createProtobufOutput() {
+  public Message messageFromObject() {
     Namespaces.Builder builder = Namespaces.newBuilder();
     builder.addAllNamespace(namespaces);
-    return builder.build().toByteArray();
+    return builder.build();
   }
 
   @Override
-  public ProtobufMessageHandler getObjectFromMessage(byte[] message) throws IOException {
+  public ProtobufMessageHandler getObjectFromMessage(CodedInputStream cis) throws IOException {
     Namespaces.Builder builder = Namespaces.newBuilder();
-    builder.mergeFrom(message);
+    RestUtil.mergeFrom(builder, cis);
     namespaces = builder.getNamespaceList();
     return this;
   }

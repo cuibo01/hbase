@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,6 +18,7 @@
 package org.apache.hadoop.hbase.client;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -78,6 +79,11 @@ public class DummyAsyncTable<C extends ScanResultConsumerBase> implements AsyncT
   }
 
   @Override
+  public Map<String, byte[]> getRequestAttributes() {
+    return null;
+  }
+
+  @Override
   public CompletableFuture<Result> get(Get get) {
     return null;
   }
@@ -118,8 +124,8 @@ public class DummyAsyncTable<C extends ScanResultConsumerBase> implements AsyncT
   }
 
   @Override
-  public List<CompletableFuture<CheckAndMutateResult>> checkAndMutate(
-    List<CheckAndMutate> checkAndMutates) {
+  public List<CompletableFuture<CheckAndMutateResult>>
+    checkAndMutate(List<CheckAndMutate> checkAndMutates) {
     return null;
   }
 
@@ -164,14 +170,21 @@ public class DummyAsyncTable<C extends ScanResultConsumerBase> implements AsyncT
 
   @Override
   public <S, R> CompletableFuture<R> coprocessorService(Function<RpcChannel, S> stubMaker,
-      ServiceCaller<S, R> callable, byte[] row) {
+    ServiceCaller<S, R> callable, byte[] row) {
     return null;
   }
 
   @Override
   public <S, R> CoprocessorServiceBuilder<S, R> coprocessorService(
-      Function<RpcChannel, S> stubMaker, ServiceCaller<S, R> callable,
-      CoprocessorCallback<R> callback) {
+    Function<RpcChannel, S> stubMaker, ServiceCaller<S, R> callable,
+    CoprocessorCallback<R> callback) {
+    return null;
+  }
+
+  @Override
+  public <S, R> CoprocessorServiceBuilder<S, R> coprocessorService(
+    Function<RpcChannel, S> stubMaker, ServiceCaller<S, R> callable,
+    PartialResultCoprocessorCallback<S, R> callback) {
     return null;
   }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,6 +26,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.StreamCapabilities;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.io.asyncfs.monitor.StreamSlowMonitor;
 import org.apache.hadoop.hbase.util.AtomicUtils;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
@@ -44,8 +45,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos.WALTrailer;
  * Writer for protobuf-based WAL.
  */
 @InterfaceAudience.Private
-public class ProtobufLogWriter extends AbstractProtobufLogWriter
-    implements FSHLogProvider.Writer {
+public class ProtobufLogWriter extends AbstractProtobufLogWriter implements FSHLogProvider.Writer {
 
   private static final Logger LOG = LoggerFactory.getLogger(ProtobufLogWriter.class);
 
@@ -55,11 +55,11 @@ public class ProtobufLogWriter extends AbstractProtobufLogWriter
 
   @Override
   public void append(Entry entry) throws IOException {
-    entry.getKey().getBuilder(compressor).
-        setFollowingKvCount(entry.getEdit().size()).build().writeDelimitedTo(output);
+    entry.getKey().getBuilder(compressor).setFollowingKvCount(entry.getEdit().size()).build()
+      .writeDelimitedTo(output);
     for (Cell cell : entry.getEdit().getCells()) {
       // cellEncoder must assume little about the stream, since we write PB and cells in turn.
-      cellEncoder.write(cell);
+      cellEncoder.write((ExtendedCell) cell);
     }
     length.set(output.getPos());
   }
@@ -67,15 +67,10 @@ public class ProtobufLogWriter extends AbstractProtobufLogWriter
   @Override
   public void close() throws IOException {
     if (this.output != null) {
-      try {
-        if (!trailerWritten) {
-          writeWALTrailer();
-        }
-        this.output.close();
-      } catch (NullPointerException npe) {
-        // Can get a NPE coming up from down in DFSClient$DFSOutputStream#close
-        LOG.warn(npe.toString(), npe);
+      if (!trailerWritten) {
+        writeWALTrailer();
       }
+      this.output.close();
       this.output = null;
     }
   }
@@ -106,17 +101,18 @@ public class ProtobufLogWriter extends AbstractProtobufLogWriter
 
   @Override
   protected void initOutput(FileSystem fs, Path path, boolean overwritable, int bufferSize,
-      short replication, long blockSize, StreamSlowMonitor monitor) throws IOException,
-      StreamLacksCapabilityException {
-    FSDataOutputStreamBuilder<?, ?> builder = fs
-      .createFile(path)
-      .overwrite(overwritable)
-      .bufferSize(bufferSize)
-      .replication(replication)
-      .blockSize(blockSize);
+    short replication, long blockSize, StreamSlowMonitor monitor, boolean noLocalWrite)
+    throws IOException, StreamLacksCapabilityException {
+    FSDataOutputStreamBuilder<?, ?> builder = fs.createFile(path).overwrite(overwritable)
+      .bufferSize(bufferSize).replication(replication).blockSize(blockSize);
     if (builder instanceof DistributedFileSystem.HdfsDataOutputStreamBuilder) {
-      this.output = ((DistributedFileSystem.HdfsDataOutputStreamBuilder) builder)
-        .replicate().build();
+      DistributedFileSystem.HdfsDataOutputStreamBuilder dfsBuilder =
+        (DistributedFileSystem.HdfsDataOutputStreamBuilder) builder;
+      dfsBuilder.replicate();
+      if (noLocalWrite) {
+        dfsBuilder.noLocalWrite();
+      }
+      this.output = dfsBuilder.build();
     } else {
       this.output = builder.build();
     }
@@ -127,6 +123,17 @@ public class ProtobufLogWriter extends AbstractProtobufLogWriter
       }
       if (!output.hasCapability(StreamCapabilities.HSYNC)) {
         throw new StreamLacksCapabilityException(StreamCapabilities.HSYNC);
+      }
+    }
+  }
+
+  @Override
+  protected void closeOutputIfNecessary() {
+    if (this.output != null) {
+      try {
+        this.output.close();
+      } catch (IOException e) {
+        LOG.warn("Close output failed", e);
       }
     }
   }

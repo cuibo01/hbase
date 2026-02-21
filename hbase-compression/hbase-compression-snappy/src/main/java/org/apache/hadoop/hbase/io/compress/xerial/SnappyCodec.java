@@ -1,18 +1,19 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements. See the NOTICE file distributed with this
- * work for additional information regarding copyright ownership. The ASF
- * licenses this file to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
- * License for the specific language governing permissions and limitations
- * under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.hadoop.hbase.io.compress.xerial;
 
@@ -30,6 +31,9 @@ import org.apache.hadoop.io.compress.CompressionOutputStream;
 import org.apache.hadoop.io.compress.Compressor;
 import org.apache.hadoop.io.compress.Decompressor;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.xerial.snappy.Snappy;
 
 /**
  * Hadoop Snappy codec implemented with Xerial Snappy.
@@ -41,10 +45,33 @@ public class SnappyCodec implements Configurable, CompressionCodec {
 
   public static final String SNAPPY_BUFFER_SIZE_KEY = "hbase.io.compress.snappy.buffersize";
 
+  private static final Logger LOG = LoggerFactory.getLogger(SnappyCodec.class);
   private Configuration conf;
+  private int bufferSize;
+  private static boolean loaded = false;
+  private static Throwable loadError;
+
+  static {
+    try {
+      Snappy.getNativeLibraryVersion();
+      loaded = true;
+    } catch (Throwable t) {
+      loadError = t;
+      LOG.error("The Snappy native libraries could not be loaded", t);
+    }
+  }
+
+  /** Return true if the native shared libraries were loaded; false otherwise. */
+  public static boolean isLoaded() {
+    return loaded;
+  }
 
   public SnappyCodec() {
+    if (!isLoaded()) {
+      throw new RuntimeException("Snappy codec could not be loaded", loadError);
+    }
     conf = new Configuration();
+    bufferSize = getBufferSize(conf);
   }
 
   @Override
@@ -55,16 +82,17 @@ public class SnappyCodec implements Configurable, CompressionCodec {
   @Override
   public void setConf(Configuration conf) {
     this.conf = conf;
+    this.bufferSize = getBufferSize(conf);
   }
 
   @Override
   public Compressor createCompressor() {
-    return new SnappyCompressor(getBufferSize(conf));
+    return new SnappyCompressor(bufferSize);
   }
 
   @Override
   public Decompressor createDecompressor() {
-    return new SnappyDecompressor(getBufferSize(conf));
+    return new SnappyDecompressor(bufferSize);
   }
 
   @Override
@@ -74,8 +102,8 @@ public class SnappyCodec implements Configurable, CompressionCodec {
 
   @Override
   public CompressionInputStream createInputStream(InputStream in, Decompressor d)
-      throws IOException {
-    return new BlockDecompressorStream(in, d, getBufferSize(conf));
+    throws IOException {
+    return new BlockDecompressorStream(in, d, bufferSize);
   }
 
   @Override
@@ -85,10 +113,9 @@ public class SnappyCodec implements Configurable, CompressionCodec {
 
   @Override
   public CompressionOutputStream createOutputStream(OutputStream out, Compressor c)
-      throws IOException {
-    int bufferSize = getBufferSize(conf);
-    int compressionOverhead = (bufferSize / 6) + 32;
-    return new BlockCompressorStream(out, c, bufferSize, compressionOverhead);
+    throws IOException {
+    return new BlockCompressorStream(out, c, bufferSize,
+      Snappy.maxCompressedLength(bufferSize) - bufferSize); // overhead only
   }
 
   @Override
@@ -109,10 +136,9 @@ public class SnappyCodec implements Configurable, CompressionCodec {
   // Package private
 
   static int getBufferSize(Configuration conf) {
-    int size = conf.getInt(SNAPPY_BUFFER_SIZE_KEY,
+    return conf.getInt(SNAPPY_BUFFER_SIZE_KEY,
       conf.getInt(CommonConfigurationKeys.IO_COMPRESSION_CODEC_SNAPPY_BUFFERSIZE_KEY,
         CommonConfigurationKeys.IO_COMPRESSION_CODEC_SNAPPY_BUFFERSIZE_DEFAULT));
-    return size > 0 ? size : 256 * 1024; // Don't change this default
   }
 
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,8 +17,8 @@
  */
 package org.apache.hadoop.hbase.rest;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -29,7 +29,6 @@ import java.util.List;
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
 import org.apache.hadoop.hbase.CellUtil;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.ServerName;
@@ -50,20 +49,16 @@ import org.apache.hadoop.hbase.rest.model.TableRegionModel;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.RestTests;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Category({RestTests.class, MediumTests.class})
+@Tag(RestTests.TAG)
+@Tag(MediumTests.TAG)
 public class TestTableResource {
-
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestTableResource.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestTableResource.class);
 
@@ -74,25 +69,20 @@ public class TestTableResource {
   private static List<HRegionLocation> regionMap;
 
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
-  private static final HBaseRESTTestingUtility REST_TEST_UTIL =
-    new HBaseRESTTestingUtility();
+  private static final HBaseRESTTestingUtility REST_TEST_UTIL = new HBaseRESTTestingUtility();
   private static Client client;
   private static JAXBContext context;
 
-  @BeforeClass
+  @BeforeAll
   public static void setUpBeforeClass() throws Exception {
     TEST_UTIL.startMiniCluster(3);
     REST_TEST_UTIL.startServletContainer(TEST_UTIL.getConfiguration());
-    client = new Client(new Cluster().add("localhost",
-      REST_TEST_UTIL.getServletPort()));
-    context = JAXBContext.newInstance(
-        TableModel.class,
-        TableInfoModel.class,
-        TableListModel.class,
-        TableRegionModel.class);
+    client = new Client(new Cluster().add("localhost", REST_TEST_UTIL.getServletPort()));
+    context = JAXBContext.newInstance(TableModel.class, TableInfoModel.class, TableListModel.class,
+      TableRegionModel.class);
     TEST_UTIL.createMultiRegionTable(TABLE, Bytes.toBytes(COLUMN_FAMILY), NUM_REGIONS);
     byte[] k = new byte[3];
-    byte [][] famAndQf = CellUtil.parseColumn(Bytes.toBytes(COLUMN));
+    byte[][] famAndQf = CellUtil.parseColumn(Bytes.toBytes(COLUMN));
     List<Put> puts = new ArrayList<>();
     for (byte b1 = 'a'; b1 < 'z'; b1++) {
       for (byte b2 = 'a'; b2 < 'z'; b2++) {
@@ -110,7 +100,7 @@ public class TestTableResource {
 
     Connection connection = TEST_UTIL.getConnection();
 
-    Table table =  connection.getTable(TABLE);
+    Table table = connection.getTable(TABLE);
     table.put(puts);
     table.close();
 
@@ -120,11 +110,11 @@ public class TestTableResource {
     // should have four regions now
     assertEquals(NUM_REGIONS, m.size());
     regionMap = m;
-    LOG.error("regions: " + regionMap);
+    LOG.error("regions: {}", regionMap);
     regionLocator.close();
   }
 
-  @AfterClass
+  @AfterAll
   public static void tearDownAfterClass() throws Exception {
     REST_TEST_UTIL.shutdownServletContainer();
     TEST_UTIL.shutdownMiniCluster();
@@ -151,23 +141,22 @@ public class TestTableResource {
     while (regions.hasNext()) {
       TableRegionModel region = regions.next();
       boolean found = false;
-      LOG.debug("looking for region " + region.getName());
-      for (HRegionLocation e: regionMap) {
+      LOG.debug("looking for region {}", region.getName());
+      for (HRegionLocation e : regionMap) {
         RegionInfo hri = e.getRegion();
         // getRegionNameAsString uses Bytes.toStringBinary which escapes some non-printable
         // characters
         String hriRegionName = Bytes.toString(hri.getRegionName());
         String regionName = region.getName();
-        LOG.debug("comparing to region " + hriRegionName);
+        LOG.debug("comparing to region {}", hriRegionName);
         if (hriRegionName.equals(regionName)) {
           found = true;
           byte[] startKey = hri.getStartKey();
           byte[] endKey = hri.getEndKey();
           ServerName serverName = e.getServerName();
           InetSocketAddress sa =
-              new InetSocketAddress(serverName.getHostname(), serverName.getPort());
-          String location = sa.getHostName() + ":" +
-            Integer.valueOf(sa.getPort());
+            new InetSocketAddress(serverName.getHostname(), serverName.getPort());
+          String location = sa.getHostName() + ":" + Integer.valueOf(sa.getPort());
           assertEquals(hri.getRegionId(), region.getId());
           assertTrue(Bytes.equals(startKey, region.getStartKey()));
           assertTrue(Bytes.equals(endKey, region.getEndKey()));
@@ -175,7 +164,7 @@ public class TestTableResource {
           break;
         }
       }
-      assertTrue("Couldn't find region " + region.getName(), found);
+      assertTrue(found, "Couldn't find region " + region.getName());
     }
   }
 
@@ -191,9 +180,8 @@ public class TestTableResource {
     Response response = client.get("/", Constants.MIMETYPE_XML);
     assertEquals(200, response.getCode());
     assertEquals(Constants.MIMETYPE_XML, response.getHeader("content-type"));
-    TableListModel model = (TableListModel)
-      context.createUnmarshaller()
-        .unmarshal(new ByteArrayInputStream(response.getBody()));
+    TableListModel model = (TableListModel) context.createUnmarshaller()
+      .unmarshal(new ByteArrayInputStream(response.getBody()));
     checkTableList(model);
   }
 
@@ -229,12 +217,11 @@ public class TestTableResource {
 
   @Test
   public void testTableInfoXML() throws IOException, JAXBException {
-    Response response = client.get("/" + TABLE + "/regions",  Constants.MIMETYPE_XML);
+    Response response = client.get("/" + TABLE + "/regions", Constants.MIMETYPE_XML);
     assertEquals(200, response.getCode());
     assertEquals(Constants.MIMETYPE_XML, response.getHeader("content-type"));
-    TableInfoModel model = (TableInfoModel)
-      context.createUnmarshaller()
-        .unmarshal(new ByteArrayInputStream(response.getBody()));
+    TableInfoModel model = (TableInfoModel) context.createUnmarshaller()
+      .unmarshal(new ByteArrayInputStream(response.getBody()));
     checkTableInfo(model);
   }
 
@@ -269,6 +256,4 @@ public class TestTableResource {
     Response response2 = client.get("/" + notExistTable + "/regions", Constants.MIMETYPE_XML);
     assertEquals(404, response2.getCode());
   }
-
 }
-

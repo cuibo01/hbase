@@ -20,6 +20,7 @@ package org.apache.hadoop.hbase.master.normalizer;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.hadoop.conf.Configuration;
@@ -30,19 +31,19 @@ import org.apache.hadoop.hbase.conf.ConfigurationManager;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.apache.hadoop.hbase.zookeeper.RegionNormalizerTracker;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+
 import org.apache.hbase.thirdparty.com.google.common.util.concurrent.RateLimiter;
 
 /**
  * Test that configuration changes are propagated to all children.
  */
-@Category({ MasterTests.class, SmallTests.class})
+@Category({ MasterTests.class, SmallTests.class })
 public class TestRegionNormalizerManagerConfigurationObserver {
 
   @ClassRule
@@ -55,10 +56,14 @@ public class TestRegionNormalizerManagerConfigurationObserver {
 
   private Configuration conf;
   private SimpleRegionNormalizer normalizer;
-  @Mock private MasterServices masterServices;
-  @Mock private RegionNormalizerTracker tracker;
-  @Mock private RegionNormalizerChore chore;
-  @Mock private RegionNormalizerWorkQueue<TableName> queue;
+  @Mock
+  private MasterServices masterServices;
+  @Mock
+  private RegionNormalizerStateStore stateStore;
+  @Mock
+  private RegionNormalizerChore chore;
+  @Mock
+  private RegionNormalizerWorkQueue<TableName> queue;
   private RegionNormalizerWorker worker;
   private ConfigurationManager configurationManager;
 
@@ -69,7 +74,7 @@ public class TestRegionNormalizerManagerConfigurationObserver {
     normalizer = new SimpleRegionNormalizer();
     worker = new RegionNormalizerWorker(conf, masterServices, normalizer, queue);
     final RegionNormalizerManager normalizerManager =
-      new RegionNormalizerManager(tracker, chore, queue, worker);
+      new RegionNormalizerManager(stateStore, chore, queue, worker);
     configurationManager = new ConfigurationManager();
     configurationManager.registerObserver(normalizerManager);
   }

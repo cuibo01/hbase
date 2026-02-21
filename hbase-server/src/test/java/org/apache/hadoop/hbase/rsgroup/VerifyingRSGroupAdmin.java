@@ -144,12 +144,22 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
     return admin.listTableDescriptors(pattern, includeSysTables);
   }
 
+  @Override
+  public List<TableDescriptor> listTableDescriptorsByState(boolean isEnabled) throws IOException {
+    return admin.listTableDescriptorsByState(isEnabled);
+  }
+
   public TableName[] listTableNames() throws IOException {
     return admin.listTableNames();
   }
 
   public TableName[] listTableNames(Pattern pattern, boolean includeSysTables) throws IOException {
     return admin.listTableNames(pattern, includeSysTables);
+  }
+
+  @Override
+  public List<TableName> listTableNamesByState(boolean isEnabled) throws IOException {
+    return admin.listTableNamesByState(isEnabled);
   }
 
   public TableDescriptor getDescriptor(TableName tableName)
@@ -225,6 +235,10 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
 
   public void flush(TableName tableName, byte[] columnFamily) throws IOException {
     admin.flush(tableName, columnFamily);
+  }
+
+  public void flush(TableName tableName, List<byte[]> columnFamilies) throws IOException {
+    admin.flush(tableName, columnFamilies);
   }
 
   public void flushRegion(byte[] regionName) throws IOException {
@@ -398,8 +412,34 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
     return admin.splitRegionAsync(regionName, splitPoint);
   }
 
+  @Override
+  public void truncateRegion(byte[] regionName) throws IOException {
+    admin.truncateRegion(regionName);
+  }
+
+  @Override
+  public Future<Void> truncateRegionAsync(byte[] regionName) throws IOException {
+    return admin.truncateRegionAsync(regionName);
+  }
+
   public Future<Void> modifyTableAsync(TableDescriptor td) throws IOException {
-    return admin.modifyTableAsync(td);
+    return modifyTableAsync(td, true);
+  }
+
+  public Future<Void> modifyTableAsync(TableDescriptor td, boolean reopenRegions)
+    throws IOException {
+    return admin.modifyTableAsync(td, reopenRegions);
+  }
+
+  @Override
+  public Future<Void> reopenTableRegionsAsync(TableName tableName) throws IOException {
+    return admin.reopenTableRegionsAsync(tableName);
+  }
+
+  @Override
+  public Future<Void> reopenTableRegionsAsync(TableName tableName, List<RegionInfo> regions)
+    throws IOException {
+    return admin.reopenTableRegionsAsync(tableName, regions);
   }
 
   public void shutdown() throws IOException {
@@ -495,6 +535,11 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
 
   public void rollWALWriter(ServerName serverName) throws IOException, FailedLogCloseException {
     admin.rollWALWriter(serverName);
+  }
+
+  @Override
+  public Map<ServerName, Long> rollAllWALWriters() throws IOException {
+    return admin.rollAllWALWriters();
   }
 
   public CompactionState getCompactionState(TableName tableName) throws IOException {
@@ -676,6 +721,11 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
     return admin.transitReplicationPeerSyncReplicationStateAsync(peerId, state);
   }
 
+  @Override
+  public boolean isReplicationPeerEnabled(String peerId) throws IOException {
+    return admin.isReplicationPeerEnabled(peerId);
+  }
+
   public void decommissionRegionServers(List<ServerName> servers, boolean offload)
     throws IOException {
     admin.decommissionRegionServers(servers, offload);
@@ -825,7 +875,8 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
     verify();
   }
 
-  public BalanceResponse balanceRSGroup(String groupName, BalanceRequest request) throws IOException {
+  public BalanceResponse balanceRSGroup(String groupName, BalanceRequest request)
+    throws IOException {
     return admin.balanceRSGroup(groupName, request);
   }
 
@@ -837,7 +888,7 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
 
   @Override
   public void updateRSGroupConfig(String groupName, Map<String, String> configuration)
-      throws IOException {
+    throws IOException {
     admin.updateRSGroupConfig(groupName, configuration);
     verify();
   }
@@ -933,4 +984,31 @@ public class VerifyingRSGroupAdmin implements Admin, Closeable {
     throws IOException {
     return admin.modifyTableStoreFileTrackerAsync(tableName, dstSFT);
   }
+
+  @Override
+  public void flushMasterStore() throws IOException {
+    admin.flushMasterStore();
+  }
+
+  @Override
+  public List<String> getCachedFilesList(ServerName serverName) throws IOException {
+    return admin.getCachedFilesList(serverName);
+  }
+
+  @Override
+  public void restoreBackupSystemTable(String snapshotName) throws IOException {
+    admin.restoreBackupSystemTable(snapshotName);
+  }
+
+  @Override
+  public boolean replicationPeerModificationSwitch(boolean on, boolean drainProcedures)
+    throws IOException {
+    return admin.replicationPeerModificationSwitch(on, drainProcedures);
+  }
+
+  @Override
+  public boolean isReplicationPeerModificationEnabled() throws IOException {
+    return admin.isReplicationPeerModificationEnabled();
+  }
+
 }

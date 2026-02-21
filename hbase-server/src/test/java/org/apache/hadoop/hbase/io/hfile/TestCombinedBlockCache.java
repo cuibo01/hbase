@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,24 +19,28 @@ package org.apache.hadoop.hbase.io.hfile;
 
 import static org.apache.hadoop.hbase.HConstants.BUCKET_CACHE_IOENGINE_KEY;
 import static org.apache.hadoop.hbase.HConstants.BUCKET_CACHE_SIZE_KEY;
+import static org.apache.hadoop.hbase.io.ByteBuffAllocator.HEAP;
 import static org.junit.Assert.assertEquals;
 
+import java.nio.ByteBuffer;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.io.hfile.CombinedBlockCache.CombinedCacheStats;
+import org.apache.hadoop.hbase.nio.ByteBuff;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.junit.Assert;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({SmallTests.class})
+@Category({ SmallTests.class })
 public class TestCombinedBlockCache {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCombinedBlockCache.class);
+    HBaseClassTestRule.forClass(TestCombinedBlockCache.class);
 
   private static final HBaseTestingUtil UTIL = new HBaseTestingUtil();
 
@@ -44,8 +48,7 @@ public class TestCombinedBlockCache {
   public void testCombinedCacheStats() {
     CacheStats lruCacheStats = new CacheStats("lruCacheStats", 2);
     CacheStats bucketCacheStats = new CacheStats("bucketCacheStats", 2);
-    CombinedCacheStats stats =
-        new CombinedCacheStats(lruCacheStats, bucketCacheStats);
+    CombinedCacheStats stats = new CombinedCacheStats(lruCacheStats, bucketCacheStats);
 
     double delta = 0.01;
 
@@ -54,8 +57,8 @@ public class TestCombinedBlockCache {
     // bucket cache: 2 hit non-caching,1 miss non-caching/primary,1 fail insert
     lruCacheStats.hit(true, true, BlockType.DATA);
     lruCacheStats.miss(true, false, BlockType.DATA);
-    bucketCacheStats.hit(false,true, BlockType.DATA);
-    bucketCacheStats.hit(false,true, BlockType.DATA);
+    bucketCacheStats.hit(false, true, BlockType.DATA);
+    bucketCacheStats.hit(false, true, BlockType.DATA);
     bucketCacheStats.miss(false, true, BlockType.DATA);
 
     assertEquals(5, stats.getRequestCount());
@@ -71,7 +74,6 @@ public class TestCombinedBlockCache {
     assertEquals(0.4, stats.getMissRatio(), delta);
     assertEquals(0.5, stats.getMissCachingRatio(), delta);
 
-
     // lru cache: 2 evicted, 1 evict
     // bucket cache: 1 evict
     lruCacheStats.evicted(1000, true);
@@ -83,7 +85,7 @@ public class TestCombinedBlockCache {
     assertEquals(1, stats.getPrimaryEvictedCount());
     assertEquals(1.0, stats.evictedPerEviction(), delta);
 
-    // lru cache:  1 fail insert
+    // lru cache: 1 fail insert
     lruCacheStats.failInsert();
     assertEquals(1, stats.getFailedInserts());
 
@@ -112,11 +114,53 @@ public class TestCombinedBlockCache {
 
   @Test
   public void testMultiThreadGetAndEvictBlock() throws Exception {
+    BlockCache blockCache = createCombinedBlockCache();
+    TestLruBlockCache.testMultiThreadGetAndEvictBlockInternal(blockCache);
+  }
+
+  @Test
+  public void testCombinedBlockCacheStatsWithDataBlockType() throws Exception {
+    testCombinedBlockCacheStats(BlockType.DATA, 0, 1);
+  }
+
+  @Test
+  public void testCombinedBlockCacheStatsWithMetaBlockType() throws Exception {
+    testCombinedBlockCacheStats(BlockType.META, 1, 0);
+  }
+
+  @Test
+  public void testCombinedBlockCacheStatsWithNoBlockType() throws Exception {
+    testCombinedBlockCacheStats(null, 0, 1);
+  }
+
+  private CombinedBlockCache createCombinedBlockCache() {
     Configuration conf = UTIL.getConfiguration();
     conf.set(BUCKET_CACHE_IOENGINE_KEY, "offheap");
     conf.setInt(BUCKET_CACHE_SIZE_KEY, 32);
     BlockCache blockCache = BlockCacheFactory.createBlockCache(conf);
     Assert.assertTrue(blockCache instanceof CombinedBlockCache);
-    TestLruBlockCache.testMultiThreadGetAndEvictBlockInternal(blockCache);
+    return (CombinedBlockCache) blockCache;
   }
+
+  public void testCombinedBlockCacheStats(BlockType type, int expectedL1Miss, int expectedL2Miss)
+    throws Exception {
+    CombinedBlockCache blockCache = createCombinedBlockCache();
+    BlockCacheKey key = new BlockCacheKey("key1", 0, false, type);
+    int size = 100;
+    int length = HConstants.HFILEBLOCK_HEADER_SIZE + size;
+    byte[] byteArr = new byte[length];
+    HFileContext meta = new HFileContextBuilder().build();
+    HFileBlock blk = new HFileBlock(type != null ? type : BlockType.DATA, size, size, -1,
+      ByteBuff.wrap(ByteBuffer.wrap(byteArr, 0, size)), HFileBlock.FILL_HEADER, -1, 52, -1, meta,
+      HEAP);
+    blockCache.cacheBlock(key, blk);
+    blockCache.getBlock(key, true, false, true);
+    assertEquals(0, blockCache.getStats().getMissCount());
+    blockCache.evictBlock(key);
+    blockCache.getBlock(key, true, false, true);
+    assertEquals(1, blockCache.getStats().getMissCount());
+    assertEquals(expectedL1Miss, blockCache.getFirstLevelCache().getStats().getMissCount());
+    assertEquals(expectedL2Miss, blockCache.getSecondLevelCache().getStats().getMissCount());
+  }
+
 }

@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,8 +24,8 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos;
 
 /**
- * Class to help with dealing with a snapshot description on the client side.
- * There is a corresponding class on the server side.
+ * Class to help with dealing with a snapshot description on the client side. There is a
+ * corresponding class on the server side.
  */
 @InterfaceAudience.Private
 public final class ClientSnapshotDescriptionUtils {
@@ -37,17 +36,17 @@ public final class ClientSnapshotDescriptionUtils {
    * Check to make sure that the description of the snapshot requested is valid
    * @param snapshot description of the snapshot
    * @throws IllegalArgumentException if the name of the snapshot or the name of the table to
-   *           snapshot are not valid names
+   *                                  snapshot are not valid names
    */
   public static void assertSnapshotRequestIsValid(SnapshotProtos.SnapshotDescription snapshot)
-      throws IllegalArgumentException {
+    throws IllegalArgumentException {
     // make sure the snapshot name is valid
     TableName.isLegalTableQualifierName(Bytes.toBytes(snapshot.getName()), true);
     if (snapshot.hasTable()) {
       // make sure the table name is valid, this will implicitly check validity
       TableName tableName = TableName.valueOf(snapshot.getTable());
 
-      if (tableName.isSystemTable()) {
+      if (tableName.isSystemTable() && !tableName.isBackupsTable()) {
         throw new IllegalArgumentException("System table snapshots are not allowed");
       }
     }
@@ -68,15 +67,8 @@ public final class ClientSnapshotDescriptionUtils {
       return null;
     }
 
-    return new StringBuilder("{ ss=")
-            .append(snapshot.getName())
-            .append(" table=")
-            .append(snapshot.hasTable() ? TableName.valueOf(snapshot.getTable()) : "")
-            .append(" type=")
-            .append(snapshot.getType())
-            .append(" ttl=")
-            .append(snapshot.getTtl())
-            .append(" }")
-            .toString();
+    return new StringBuilder("{ ss=").append(snapshot.getName()).append(" table=")
+      .append(snapshot.hasTable() ? TableName.valueOf(snapshot.getTable()) : "").append(" type=")
+      .append(snapshot.getType()).append(" ttl=").append(snapshot.getTtl()).append(" }").toString();
   }
 }

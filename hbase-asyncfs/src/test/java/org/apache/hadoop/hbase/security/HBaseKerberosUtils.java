@@ -18,8 +18,6 @@
 package org.apache.hadoop.hbase.security;
 
 import java.io.File;
-import java.io.IOException;
-import java.net.InetAddress;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeys;
 import org.apache.hadoop.hbase.AuthUtil;
@@ -110,9 +108,9 @@ public final class HBaseKerberosUtils {
 
   /**
    * Set up configuration for a secure HDFS+HBase cluster.
-   * @param conf configuration object.
+   * @param conf             configuration object.
    * @param servicePrincipal service principal used by NN, HM and RS.
-   * @param spnegoPrincipal SPNEGO principal used by NN web UI.
+   * @param spnegoPrincipal  SPNEGO principal used by NN web UI.
    */
   public static void setSecuredConfiguration(Configuration conf, String servicePrincipal,
     String spnegoPrincipal) {
@@ -156,7 +154,7 @@ public final class HBaseKerberosUtils {
   /**
    * Set up SSL configuration for HDFS NameNode and DataNode.
    * @param utility a HBaseTestingUtility object.
-   * @param clazz the caller test class.
+   * @param clazz   the caller test class.
    * @throws Exception if unable to set up SSL configuration
    */
   public static void setSSLConfiguration(HBaseCommonTestingUtil utility, Class<?> clazz)
@@ -172,20 +170,12 @@ public final class HBaseKerberosUtils {
     KeyStoreTestUtil.setupSSLConfig(keystoresDir.getAbsolutePath(), sslConfDir, conf, false);
   }
 
-  public static UserGroupInformation loginAndReturnUGI(Configuration conf, String username)
-    throws IOException {
-    String hostname = InetAddress.getLocalHost().getHostName();
-    String keyTabFileConfKey = "hbase." + username + ".keytab.file";
-    String keyTabFileLocation = conf.get(keyTabFileConfKey);
-    String principalConfKey = "hbase." + username + ".kerberos.principal";
-    String principal = org.apache.hadoop.security.SecurityUtil
-      .getServerPrincipal(conf.get(principalConfKey), hostname);
-    if (keyTabFileLocation == null || principal == null) {
-      LOG.warn(
-        "Principal or key tab file null for : " + principalConfKey + ", " + keyTabFileConfKey);
-    }
-    UserGroupInformation ugi =
-      UserGroupInformation.loginUserFromKeytabAndReturnUGI(principal, keyTabFileLocation);
-    return ugi;
+  public static UserGroupInformation loginKerberosPrincipal(String krbKeytab, String krbPrincipal)
+    throws Exception {
+    Configuration conf = new Configuration();
+    conf.set(CommonConfigurationKeys.HADOOP_SECURITY_AUTHENTICATION, "kerberos");
+    UserGroupInformation.setConfiguration(conf);
+    UserGroupInformation.loginUserFromKeytab(krbPrincipal, krbKeytab);
+    return UserGroupInformation.getLoginUser();
   }
 }

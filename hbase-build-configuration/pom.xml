@@ -1,5 +1,5 @@
-<?xml version="1.0"?>
-<project xmlns="https://maven.apache.org/POM/4.0.0" xmlns:xsi="https://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <!--
   /**
    * Licensed to the Apache Software Foundation (ASF) under one
@@ -21,17 +21,29 @@
   -->
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <artifactId>hbase</artifactId>
     <groupId>org.apache.hbase</groupId>
-    <version>3.0.0-alpha-3-SNAPSHOT</version>
-    <relativePath>..</relativePath>
+    <artifactId>hbase</artifactId>
+    <version>${revision}</version>
+    <relativePath>../pom.xml</relativePath>
   </parent>
 
   <artifactId>hbase-build-configuration</artifactId>
-  <name>Apache HBase - Build Configuration</name>
-  <description>Configure the build-support artifacts for maven build</description>
 
   <packaging>pom</packaging>
+  <name>Apache HBase - Build Configuration</name>
+  <description>Configure the build-support artifacts for maven build</description>
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.hbase</groupId>
+      <artifactId>hbase-annotations</artifactId>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.yetus</groupId>
+      <artifactId>audience-annotations</artifactId>
+    </dependency>
+  </dependencies>
   <build>
     <plugins>
       <plugin>
@@ -50,49 +62,12 @@
       </plugin>
     </plugins>
   </build>
-  <dependencies>
-    <dependency>
-      <groupId>org.apache.hbase</groupId>
-      <artifactId>hbase-annotations</artifactId>
-      <type>test-jar</type>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.yetus</groupId>
-      <artifactId>audience-annotations</artifactId>
-    </dependency>
-  </dependencies>
   <profiles>
     <profile>
       <id>errorProne</id>
       <activation>
         <activeByDefault>false</activeByDefault>
       </activation>
-      <properties>
-        <!-- https://errorprone.info/docs/installation Maven section has details -->
-        <!-- required when compiling with JDK 8 -->
-        <javac.version>9+181-r4173-1</javac.version>
-      </properties>
-      <dependencies>
-        <dependency>
-          <groupId>com.google.errorprone</groupId>
-          <artifactId>error_prone_core</artifactId>
-          <version>${error-prone.version}</version>
-          <scope>provided</scope>
-          <exclusions>
-            <exclusion>
-              <groupId>com.google.code.findbugs</groupId>
-              <artifactId>jsr305</artifactId>
-            </exclusion>
-          </exclusions>
-        </dependency>
-        <dependency>
-          <groupId>com.google.errorprone</groupId>
-          <artifactId>javac</artifactId>
-          <version>${javac.version}</version>
-          <scope>provided</scope>
-        </dependency>
-      </dependencies>
       <build>
         <plugins>
           <!-- Turn on error-prone -->
@@ -100,17 +75,25 @@
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-compiler-plugin</artifactId>
             <configuration>
-              <source>${compileSource}</source>
-              <target>${compileSource}</target>
-              <!-- required when compiling with JDK 8 -->
-              <fork>true</fork>
+              <release>${releaseTarget}</release>
               <showWarnings>true</showWarnings>
+              <fork>true</fork>
               <compilerArgs>
+                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
+                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
+                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>
+                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED</arg>
+                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED</arg>
+                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED</arg>
+                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED</arg>
+                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED</arg>
+                <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED</arg>
+                <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED</arg>
                 <arg>-XDcompilePolicy=simple</arg>
                 <!-- All -Xep need to be on single line see: https://github.com/google/error-prone/pull/1115 -->
-                <arg>-Xplugin:ErrorProne -XepDisableWarningsInGeneratedCode -Xep:FallThrough:OFF -Xep:MutablePublicArray:OFF -Xep:ClassNewInstance:ERROR -Xep:MissingDefault:ERROR</arg>
-                <!-- Required when compiling with JDK 8 -->
-                <arg>-J-Xbootclasspath/p:${settings.localRepository}/com/google/errorprone/javac/${javac.version}/javac-${javac.version}.jar</arg>
+                <arg>-Xplugin:ErrorProne -XepDisableWarningsInGeneratedCode -XepExcludedPaths:.*/target/.* -Xep:FallThrough:OFF -Xep:MutablePublicArray:OFF -Xep:ClassNewInstance:ERROR -Xep:MissingDefault:ERROR -Xep:BanJNDI:WARN</arg>
+                <!-- Required by error prone >= 2.36.0. See https://github.com/google/error-prone/commit/e71db1f369a9367f6f2db34c4fbd006b6d6238fd !-->
+                <arg>--should-stop=ifError=FLOW</arg>
               </compilerArgs>
               <annotationProcessorPaths>
                 <path>
@@ -120,6 +103,25 @@
                 </path>
               </annotationProcessorPaths>
             </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-enforcer-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>jdk11-required</id>
+                <goals>
+                  <goal>enforce</goal>
+                </goals>
+                <configuration>
+                  <rules>
+                    <requireJavaVersion>
+                      <version>[11,)</version>
+                    </requireJavaVersion>
+                  </rules>
+                </configuration>
+              </execution>
+            </executions>
           </plugin>
         </plugins>
       </build>

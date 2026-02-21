@@ -1,7 +1,6 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-<!--
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <!--
   /**
    * Licensed to the Apache Software Foundation (ASF) under one
    * or more contributor license agreements.  See the NOTICE file
@@ -23,71 +22,16 @@
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
-    <artifactId>hbase-shaded</artifactId>
     <groupId>org.apache.hbase</groupId>
-    <version>3.0.0-alpha-3-SNAPSHOT</version>
-    <relativePath>..</relativePath>
+    <artifactId>hbase-shaded</artifactId>
+    <version>${revision}</version>
+    <relativePath>../pom.xml</relativePath>
   </parent>
 
   <artifactId>hbase-shaded-testing-util</artifactId>
   <name>Apache HBase - Shaded - Testing Util</name>
   <dependencies>
     <!-- test-jar dependencies -->
-    <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-common</artifactId>
-      <version>${hadoop.version}</version>
-      <type>test-jar</type>
-      <scope>compile</scope>
-      <exclusions>
-        <exclusion>
-          <groupId>javax.servlet.jsp</groupId>
-          <artifactId>jsp-api</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.codehaus.jackson</groupId>
-          <artifactId>jackson-mapper-asl</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.codehaus.jackson</groupId>
-          <artifactId>jackson-core-asl</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.codehaus.jackson</groupId>
-          <artifactId>jackson-jaxrs</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.codehaus.jackson</groupId>
-          <artifactId>jackson-xc</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>javax.xml.bind</groupId>
-          <artifactId>jaxb-api</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>javax.ws.rs</groupId>
-          <artifactId>jsr311-api</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-hdfs</artifactId>
-      <type>test-jar</type>
-      <scope>compile</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-mapreduce-client-app</artifactId>
-      <type>test-jar</type>
-      <scope>compile</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-mapreduce-client-jobclient</artifactId>
-      <type>test-jar</type>
-      <scope>compile</scope>
-    </dependency>
     <dependency>
       <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-common</artifactId>
@@ -122,12 +66,6 @@
       <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-hadoop-compat</artifactId>
       <type>test-jar</type>
-      <scope>compile</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.codehaus.jackson</groupId>
-      <artifactId>jackson-jaxrs</artifactId>
-      <version>1.9.13</version>
       <scope>compile</scope>
     </dependency>
     <dependency>
@@ -192,6 +130,7 @@
                   <exclude>commons-logging:*</exclude>
                   <exclude>org.javassist:*</exclude>
                   <exclude>io.opentelemetry:*</exclude>
+                  <exclude>io.opentelemetry.semconv:*</exclude>
                 </excludes>
               </artifactSet>
             </configuration>
@@ -200,4 +139,40 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>hadoop-3.0</id>
+      <activation>
+        <property>
+          <name>!hadoop.profile</name>
+        </property>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.apache.hadoop</groupId>
+          <artifactId>hadoop-common</artifactId>
+          <type>test-jar</type>
+          <scope>compile</scope>
+        </dependency>
+        <dependency>
+          <groupId>org.apache.hadoop</groupId>
+          <artifactId>hadoop-hdfs</artifactId>
+          <type>test-jar</type>
+          <scope>compile</scope>
+        </dependency>
+        <dependency>
+          <groupId>org.apache.hadoop</groupId>
+          <artifactId>hadoop-mapreduce-client-app</artifactId>
+          <type>test-jar</type>
+          <scope>compile</scope>
+        </dependency>
+        <dependency>
+          <groupId>org.apache.hadoop</groupId>
+          <artifactId>hadoop-mapreduce-client-jobclient</artifactId>
+          <type>test-jar</type>
+          <scope>compile</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+  </profiles>
 </project>

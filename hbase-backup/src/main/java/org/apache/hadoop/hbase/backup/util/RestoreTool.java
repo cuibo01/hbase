@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.backup.util;
 
 import java.io.FileNotFoundException;
@@ -47,6 +46,7 @@ import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
 import org.apache.hadoop.hbase.snapshot.SnapshotDescriptionUtils;
 import org.apache.hadoop.hbase.snapshot.SnapshotManifest;
+import org.apache.hadoop.hbase.snapshot.SnapshotTTLExpiredException;
 import org.apache.hadoop.hbase.tool.BulkLoadHFilesTool;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -55,6 +55,7 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
 
 /**
@@ -62,24 +63,26 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.Snapshot
  */
 @InterfaceAudience.Private
 public class RestoreTool {
-  public static final Logger LOG = LoggerFactory.getLogger(BackupUtils.class);
+  public static final Logger LOG = LoggerFactory.getLogger(RestoreTool.class);
   private final static long TABLE_AVAILABILITY_WAIT_TIME = 180000;
 
   private final String[] ignoreDirs = { HConstants.RECOVERED_EDITS_DIR };
   protected Configuration conf;
   protected Path backupRootPath;
+  protected Path restoreRootDir;
   protected String backupId;
   protected FileSystem fs;
 
   // store table name and snapshot dir mapping
   private final HashMap<TableName, Path> snapshotMap = new HashMap<>();
 
-  public RestoreTool(Configuration conf, final Path backupRootPath, final String backupId)
-      throws IOException {
+  public RestoreTool(Configuration conf, final Path backupRootPath, final Path restoreRootDir,
+    final String backupId) throws IOException {
     this.conf = conf;
     this.backupRootPath = backupRootPath;
     this.backupId = backupId;
     this.fs = backupRootPath.getFileSystem(conf);
+    this.restoreRootDir = restoreRootDir;
   }
 
   /**
@@ -91,8 +94,8 @@ public class RestoreTool {
    */
   Path getTableArchivePath(TableName tableName) throws IOException {
     Path baseDir =
-        new Path(HBackupFileSystem.getTableBackupPath(tableName, backupRootPath, backupId),
-            HConstants.HFILE_ARCHIVE_DIRECTORY);
+      new Path(HBackupFileSystem.getTableBackupPath(tableName, backupRootPath, backupId),
+        HConstants.HFILE_ARCHIVE_DIRECTORY);
     Path dataDir = new Path(baseDir, HConstants.BASE_NAMESPACE_DIR);
     Path archivePath = new Path(dataDir, tableName.getNamespaceAsString());
     Path tableArchivePath = new Path(archivePath, tableName.getQualifierAsString());
@@ -142,16 +145,19 @@ public class RestoreTool {
    * During incremental backup operation. Call WalPlayer to replay WAL in backup image Currently
    * tableNames and newTablesNames only contain single table, will be expanded to multiple tables in
    * the future
-   * @param conn HBase connection
-   * @param tableBackupPath backup path
-   * @param logDirs : incremental backup folders, which contains WAL
-   * @param tableNames : source tableNames(table names were backuped)
-   * @param newTableNames : target tableNames(table names to be restored to)
-   * @param incrBackupId incremental backup Id
+   * @param conn               HBase connection
+   * @param tableBackupPath    backup path
+   * @param logDirs            : incremental backup folders, which contains WAL
+   * @param tableNames         : source tableNames(table names were backuped)
+   * @param newTableNames      : target tableNames(table names to be restored to)
+   * @param incrBackupId       incremental backup Id
+   * @param keepOriginalSplits whether the original region splits from the full backup should be
+   *                           kept
    * @throws IOException exception
    */
   public void incrementalRestoreTable(Connection conn, Path tableBackupPath, Path[] logDirs,
-      TableName[] tableNames, TableName[] newTableNames, String incrBackupId) throws IOException {
+    TableName[] tableNames, TableName[] newTableNames, String incrBackupId,
+    boolean keepOriginalSplits) throws IOException {
     try (Admin admin = conn.getAdmin()) {
       if (tableNames.length != newTableNames.length) {
         throw new IOException("Number of source tables and target tables does not match!");
@@ -163,7 +169,7 @@ public class RestoreTool {
       for (TableName tableName : newTableNames) {
         if (!admin.tableExists(tableName)) {
           throw new IOException("HBase table " + tableName
-              + " does not exist. Create the table first, e.g. by restoring a full backup.");
+            + " does not exist. Create the table first, e.g. by restoring a full backup.");
         }
       }
       // adjust table schema
@@ -179,7 +185,7 @@ public class RestoreTool {
         TableDescriptor newTableDescriptor = admin.getDescriptor(newTableName);
         List<ColumnFamilyDescriptor> families = Arrays.asList(tableDescriptor.getColumnFamilies());
         List<ColumnFamilyDescriptor> existingFamilies =
-            Arrays.asList(newTableDescriptor.getColumnFamilies());
+          Arrays.asList(newTableDescriptor.getColumnFamilies());
         TableDescriptorBuilder builder = TableDescriptorBuilder.newBuilder(newTableDescriptor);
         boolean schemaChangeNeeded = false;
         for (ColumnFamilyDescriptor family : families) {
@@ -199,38 +205,38 @@ public class RestoreTool {
           LOG.info("Changed " + newTableDescriptor.getTableName() + " to: " + newTableDescriptor);
         }
       }
+      configureForRestoreJob(keepOriginalSplits);
       RestoreJob restoreService = BackupRestoreFactory.getRestoreJob(conf);
 
-      restoreService.run(logDirs, tableNames, newTableNames, false);
+      restoreService.run(logDirs, tableNames, restoreRootDir, newTableNames, false);
     }
   }
 
   public void fullRestoreTable(Connection conn, Path tableBackupPath, TableName tableName,
-      TableName newTableName, boolean truncateIfExists, String lastIncrBackupId)
-          throws IOException {
+    TableName newTableName, boolean truncateIfExists, boolean isKeepOriginalSplits,
+    String lastIncrBackupId) throws IOException {
     createAndRestoreTable(conn, tableName, newTableName, tableBackupPath, truncateIfExists,
-      lastIncrBackupId);
+      isKeepOriginalSplits, lastIncrBackupId);
   }
 
   /**
    * Returns value represent path for path to backup table snapshot directory:
    * "/$USER/SBACKUP_ROOT/backup_id/namespace/table/.hbase-snapshot"
    * @param backupRootPath backup root path
-   * @param tableName table name
-   * @param backupId backup Id
+   * @param tableName      table name
+   * @param backupId       backup Id
    * @return path for snapshot
    */
   Path getTableSnapshotPath(Path backupRootPath, TableName tableName, String backupId) {
     return new Path(HBackupFileSystem.getTableBackupPath(tableName, backupRootPath, backupId),
-        HConstants.SNAPSHOT_DIR_NAME);
+      HConstants.SNAPSHOT_DIR_NAME);
   }
 
   /**
    * Returns value represent path for:
    * ""/$USER/SBACKUP_ROOT/backup_id/namespace/table/.hbase-snapshot/
-   *    snapshot_1396650097621_namespace_table"
-   * this path contains .snapshotinfo, .tabledesc (0.96 and 0.98) this path contains .snapshotinfo,
-   * .data.manifest (trunk)
+   * snapshot_1396650097621_namespace_table" this path contains .snapshotinfo, .tabledesc (0.96 and
+   * 0.98) this path contains .snapshotinfo, .data.manifest (trunk)
    * @param tableName table name
    * @return path to table info
    * @throws IOException exception
@@ -241,7 +247,7 @@ public class RestoreTool {
 
     // can't build the path directly as the timestamp values are different
     FileStatus[] snapshots = fs.listStatus(tableSnapShotPath,
-        new SnapshotDescriptionUtils.CompletedSnaphotDirectoriesFilter(fs));
+      new SnapshotDescriptionUtils.CompletedSnaphotDirectoriesFilter(fs));
     for (FileStatus snapshot : snapshots) {
       tableInfoPath = snapshot.getPath();
       // SnapshotManifest.DATA_MANIFEST_NAME = "data.manifest";
@@ -261,31 +267,37 @@ public class RestoreTool {
     Path tableInfoPath = this.getTableInfoPath(tableName);
     SnapshotDescription desc = SnapshotDescriptionUtils.readSnapshotInfo(fs, tableInfoPath);
     SnapshotManifest manifest = SnapshotManifest.open(conf, fs, tableInfoPath, desc);
+    if (
+      SnapshotDescriptionUtils.isExpiredSnapshot(desc.getTtl(), desc.getCreationTime(),
+        EnvironmentEdgeManager.currentTime())
+    ) {
+      throw new SnapshotTTLExpiredException(ProtobufUtil.createSnapshotDesc(desc));
+    }
     TableDescriptor tableDescriptor = manifest.getTableDescriptor();
     if (!tableDescriptor.getTableName().equals(tableName)) {
       LOG.error("couldn't find Table Desc for table: " + tableName + " under tableInfoPath: "
-              + tableInfoPath.toString());
-      LOG.error("tableDescriptor.getNameAsString() = "
-              + tableDescriptor.getTableName().getNameAsString());
+        + tableInfoPath.toString());
+      LOG.error(
+        "tableDescriptor.getNameAsString() = " + tableDescriptor.getTableName().getNameAsString());
       throw new FileNotFoundException("couldn't find Table Desc for table: " + tableName
-          + " under tableInfoPath: " + tableInfoPath.toString());
+        + " under tableInfoPath: " + tableInfoPath.toString());
     }
     return tableDescriptor;
   }
 
   private TableDescriptor getTableDescriptor(FileSystem fileSys, TableName tableName,
-      String lastIncrBackupId) throws IOException {
+    String lastIncrBackupId) throws IOException {
     if (lastIncrBackupId != null) {
       String target =
-          BackupUtils.getTableBackupDir(backupRootPath.toString(),
-            lastIncrBackupId, tableName);
+        BackupUtils.getTableBackupDir(backupRootPath.toString(), lastIncrBackupId, tableName);
       return FSTableDescriptors.getTableDescriptorFromFs(fileSys, new Path(target));
     }
     return null;
   }
 
   private void createAndRestoreTable(Connection conn, TableName tableName, TableName newTableName,
-      Path tableBackupPath, boolean truncateIfExists, String lastIncrBackupId) throws IOException {
+    Path tableBackupPath, boolean truncateIfExists, boolean isKeepOriginalSplits,
+    String lastIncrBackupId) throws IOException {
     if (newTableName == null) {
       newTableName = tableName;
     }
@@ -304,8 +316,14 @@ public class RestoreTool {
         // check whether snapshot dir already recorded for target table
         if (snapshotMap.get(tableName) != null) {
           SnapshotDescription desc =
-              SnapshotDescriptionUtils.readSnapshotInfo(fileSys, tableSnapshotPath);
+            SnapshotDescriptionUtils.readSnapshotInfo(fileSys, tableSnapshotPath);
           SnapshotManifest manifest = SnapshotManifest.open(conf, fileSys, tableSnapshotPath, desc);
+          if (
+            SnapshotDescriptionUtils.isExpiredSnapshot(desc.getTtl(), desc.getCreationTime(),
+              EnvironmentEdgeManager.currentTime())
+          ) {
+            throw new SnapshotTTLExpiredException(ProtobufUtil.createSnapshotDesc(desc));
+          }
           tableDescriptor = manifest.getTableDescriptor();
         } else {
           tableDescriptor = getTableDesc(tableName);
@@ -315,8 +333,8 @@ public class RestoreTool {
           LOG.debug("Found no table descriptor in the snapshot dir, previous schema would be lost");
         }
       } else {
-        throw new IOException("Table snapshot directory: " +
-            tableSnapshotPath + " does not exist.");
+        throw new IOException(
+          "Table snapshot directory: " + tableSnapshotPath + " does not exist.");
       }
     }
 
@@ -326,15 +344,14 @@ public class RestoreTool {
         // find table descriptor but no archive dir means the table is empty, create table and exit
         if (LOG.isDebugEnabled()) {
           LOG.debug("find table descriptor but no archive dir for table " + tableName
-              + ", will only create table");
+            + ", will only create table");
         }
         tableDescriptor = TableDescriptorBuilder.copy(newTableName, tableDescriptor);
-        checkAndCreateTable(conn, tableBackupPath, tableName, newTableName, null, tableDescriptor,
-          truncateIfExists);
+        checkAndCreateTable(conn, newTableName, null, tableDescriptor, truncateIfExists);
         return;
       } else {
-        throw new IllegalStateException("Cannot restore hbase table because directory '"
-            + " tableArchivePath is null.");
+        throw new IllegalStateException(
+          "Cannot restore hbase table because directory '" + " tableArchivePath is null.");
       }
     }
 
@@ -351,12 +368,13 @@ public class RestoreTool {
 
       // should only try to create the table with all region informations, so we could pre-split
       // the regions in fine grain
-      checkAndCreateTable(conn, tableBackupPath, tableName, newTableName, regionPathList,
-        tableDescriptor, truncateIfExists);
+      checkAndCreateTable(conn, newTableName, regionPathList, tableDescriptor, truncateIfExists);
+      configureForRestoreJob(isKeepOriginalSplits);
       RestoreJob restoreService = BackupRestoreFactory.getRestoreJob(conf);
       Path[] paths = new Path[regionPathList.size()];
       regionPathList.toArray(paths);
-      restoreService.run(paths, new TableName[]{tableName}, new TableName[] {newTableName}, true);
+      restoreService.run(paths, new TableName[] { tableName }, restoreRootDir,
+        new TableName[] { newTableName }, true);
 
     } catch (Exception e) {
       LOG.error(e.toString(), e);
@@ -430,18 +448,24 @@ public class RestoreTool {
         // start to parse hfile inside one family dir
         Path[] hfiles = FileUtil.stat2Paths(fs.listStatus(familyDir));
         for (Path hfile : hfiles) {
-          if (hfile.getName().startsWith("_") || hfile.getName().startsWith(".")
+          if (
+            hfile.getName().startsWith("_") || hfile.getName().startsWith(".")
               || StoreFileInfo.isReference(hfile.getName())
-              || HFileLink.isHFileLink(hfile.getName())) {
+              || HFileLink.isHFileLink(hfile.getName())
+          ) {
             continue;
           }
           HFile.Reader reader = HFile.createReader(fs, hfile, conf);
           final byte[] first, last;
           try {
+            if (reader.getEntries() == 0) {
+              LOG.debug("Skipping hfile with 0 entries: " + hfile);
+              continue;
+            }
             first = reader.getFirstRowKey().get();
             last = reader.getLastRowKey().get();
             LOG.debug("Trying to figure out region boundaries hfile=" + hfile + " first="
-                + Bytes.toStringBinary(first) + " last=" + Bytes.toStringBinary(last));
+              + Bytes.toStringBinary(first) + " last=" + Bytes.toStringBinary(last));
 
             // To eventually infer start key-end key boundaries
             Integer value = map.containsKey(first) ? (Integer) map.get(first) : 0;
@@ -460,24 +484,22 @@ public class RestoreTool {
   /**
    * Prepare the table for bulkload, most codes copied from {@code createTable} method in
    * {@code BulkLoadHFilesTool}.
-   * @param conn connection
-   * @param tableBackupPath path
-   * @param tableName table name
-   * @param targetTableName target table name
-   * @param regionDirList region directory list
-   * @param htd table descriptor
+   * @param conn             connection
+   * @param targetTableName  target table name
+   * @param regionDirList    region directory list
+   * @param htd              table descriptor
    * @param truncateIfExists truncates table if exists
    * @throws IOException exception
    */
-  private void checkAndCreateTable(Connection conn, Path tableBackupPath, TableName tableName,
-      TableName targetTableName, ArrayList<Path> regionDirList, TableDescriptor htd,
-      boolean truncateIfExists) throws IOException {
+  private void checkAndCreateTable(Connection conn, TableName targetTableName,
+    ArrayList<Path> regionDirList, TableDescriptor htd, boolean truncateIfExists)
+    throws IOException {
     try (Admin admin = conn.getAdmin()) {
       boolean createNew = false;
       if (admin.tableExists(targetTableName)) {
         if (truncateIfExists) {
-          LOG.info("Truncating exising target table '" + targetTableName
-              + "', preserving region splits");
+          LOG.info(
+            "Truncating exising target table '" + targetTableName + "', preserving region splits");
           admin.disableTable(targetTableName);
           admin.truncateTable(targetTableName, true);
         } else {
@@ -494,10 +516,14 @@ public class RestoreTool {
             admin.createTable(htd);
           } else {
             keys = generateBoundaryKeys(regionDirList);
-            // create table using table descriptor and region boundaries
-            admin.createTable(htd, keys);
+            if (keys.length > 0) {
+              // create table using table descriptor and region boundaries
+              admin.createTable(htd, keys);
+            } else {
+              admin.createTable(htd);
+            }
           }
-        } catch (NamespaceNotFoundException e){
+        } catch (NamespaceNotFoundException e) {
           LOG.warn("There was no namespace and the same will be created");
           String namespaceAsString = targetTableName.getNamespaceAsString();
           LOG.info("Creating target namespace '" + namespaceAsString + "'");
@@ -519,9 +545,14 @@ public class RestoreTool {
         }
         if (EnvironmentEdgeManager.currentTime() - startTime > TABLE_AVAILABILITY_WAIT_TIME) {
           throw new IOException("Time out " + TABLE_AVAILABILITY_WAIT_TIME + "ms expired, table "
-              + targetTableName + " is still not available");
+            + targetTableName + " is still not available");
         }
       }
     }
+  }
+
+  private void configureForRestoreJob(boolean keepOriginalSplits) {
+    conf.setBoolean(RestoreJob.KEEP_ORIGINAL_SPLITS_KEY, keepOriginalSplits);
+    conf.set(RestoreJob.BACKUP_ROOT_PATH_KEY, backupRootPath.toString());
   }
 }

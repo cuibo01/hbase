@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -43,7 +43,7 @@ import org.slf4j.LoggerFactory;
  */
 @InterfaceAudience.Private
 public abstract class AbstractPeerProcedure<TState> extends AbstractPeerNoLockProcedure<TState>
-    implements PeerProcedureInterface {
+  implements PeerProcedureInterface {
 
   private static final Logger LOG = LoggerFactory.getLogger(AbstractPeerProcedure.class);
 
@@ -52,7 +52,7 @@ public abstract class AbstractPeerProcedure<TState> extends AbstractPeerNoLockPr
   // The sleep interval when waiting table to be enabled or disabled.
   protected static final int SLEEP_INTERVAL_MS = 1000;
 
-  // used to keep compatible with old client where we can only returns after updateStorage.
+  // used to keep compatible with old client where we can only return after updateStorage.
   protected ProcedurePrepareLatch latch;
 
   protected AbstractPeerProcedure() {
@@ -96,7 +96,7 @@ public abstract class AbstractPeerProcedure<TState> extends AbstractPeerNoLockPr
   }
 
   private void addToMap(Map<String, Long> lastSeqIds, String encodedRegionName, long barrier,
-      ReplicationQueueStorage queueStorage) throws ReplicationException {
+    ReplicationQueueStorage queueStorage) throws ReplicationException {
     if (barrier >= 0) {
       lastSeqIds.put(encodedRegionName, barrier);
       if (lastSeqIds.size() >= UPDATE_LAST_SEQ_ID_BATCH_SIZE) {
@@ -107,7 +107,7 @@ public abstract class AbstractPeerProcedure<TState> extends AbstractPeerNoLockPr
   }
 
   protected final void setLastPushedSequenceId(MasterProcedureEnv env,
-      ReplicationPeerConfig peerConfig) throws IOException, ReplicationException {
+    ReplicationPeerConfig peerConfig) throws IOException, ReplicationException {
     Map<String, Long> lastSeqIds = new HashMap<String, Long>();
     for (TableDescriptor td : env.getMasterServices().getTableDescriptors().getAll().values()) {
       if (!td.hasGlobalReplicationScope()) {
@@ -129,7 +129,7 @@ public abstract class AbstractPeerProcedure<TState> extends AbstractPeerNoLockPr
   // sequence id, if the table has been deleted already, i.e, we hit TableStateNotFoundException,
   // then we do not need to update last pushed sequence id for this table.
   private boolean needSetLastPushedSequenceId(TableStateManager tsm, TableName tn)
-      throws IOException {
+    throws IOException {
     for (;;) {
       try {
         if (!tsm.getTableState(tn).isDisabling()) {
@@ -149,7 +149,7 @@ public abstract class AbstractPeerProcedure<TState> extends AbstractPeerNoLockPr
   // should not forget to check whether the map is empty at last, if not you should call
   // queueStorage.setLastSequenceIds to write out the remaining entries in the map.
   protected final void setLastPushedSequenceIdForTable(MasterProcedureEnv env, TableName tableName,
-      Map<String, Long> lastSeqIds) throws IOException, ReplicationException {
+    Map<String, Long> lastSeqIds) throws IOException, ReplicationException {
     TableStateManager tsm = env.getMasterServices().getTableStateManager();
     ReplicationQueueStorage queueStorage = env.getReplicationPeerManager().getQueueStorage();
     Connection conn = env.getMasterServices().getConnection();
@@ -162,6 +162,12 @@ public abstract class AbstractPeerProcedure<TState> extends AbstractPeerNoLockPr
       LOG.trace("Update last pushed sequence id for {}, {}", tableName, name2Barrier);
       addToMap(lastSeqIds, name2Barrier.getFirst(), name2Barrier.getSecond().longValue() - 1,
         queueStorage);
+    }
+  }
+
+  protected final void checkPeerModificationEnabled(MasterProcedureEnv env) throws IOException {
+    if (!env.getMasterServices().isReplicationPeerModificationEnabled()) {
+      throw new IOException("Replication peer modification disabled");
     }
   }
 }

@@ -1,20 +1,19 @@
 /*
- * Copyright The Apache Software Foundation
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements. See the NOTICE file distributed with this
- * work for additional information regarding copyright ownership. The ASF
- * licenses this file to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
- * License for the specific language governing permissions and limitations
- * under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.hadoop.hbase.regionserver;
 
@@ -72,6 +71,18 @@ public interface MetricsHeapMemoryManagerSource extends BaseSource {
   void setCurMemStoreSizeGauge(long memStoreSize);
 
   /**
+   * Set the current global memstore on-heap size used gauge
+   * @param memStoreOnHeapSize the current memory usage in memstore on-heap, in bytes.
+   */
+  void setCurMemStoreOnHeapSizeGauge(long memStoreOnHeapSize);
+
+  /**
+   * Set the current global memstore off-heap size used gauge
+   * @param memStoreOffHeapSize the current memory usage in memstore off-heap, in bytes.
+   */
+  void setCurMemStoreOffHeapSizeGauge(long memStoreOffHeapSize);
+
+  /**
    * Update the increase/decrease memstore size histogram
    * @param memStoreDeltaSize the tuning result of memstore.
    */
@@ -101,16 +112,16 @@ public interface MetricsHeapMemoryManagerSource extends BaseSource {
   String UNBLOCKED_FLUSH_DESC = "Histogram for the number of unblocked flushes in the memstore";
   String INC_MEMSTORE_TUNING_NAME = "increaseMemStoreSize";
   String INC_MEMSTORE_TUNING_DESC =
-      "Histogram for the heap memory tuner expanding memstore global size limit in bytes";
+    "Histogram for the heap memory tuner expanding memstore global size limit in bytes";
   String DEC_MEMSTORE_TUNING_NAME = "decreaseMemStoreSize";
   String DEC_MEMSTORE_TUNING_DESC =
-      "Histogram for the heap memory tuner shrinking memstore global size limit in bytes";
+    "Histogram for the heap memory tuner shrinking memstore global size limit in bytes";
   String INC_BLOCKCACHE_TUNING_NAME = "increaseBlockCacheSize";
   String INC_BLOCKCACHE_TUNING_DESC =
-      "Histogram for the heap memory tuner expanding blockcache max heap size in bytes";
+    "Histogram for the heap memory tuner expanding blockcache max heap size in bytes";
   String DEC_BLOCKCACHE_TUNING_NAME = "decreaseBlockCacheSize";
   String DEC_BLOCKCACHE_TUNING_DESC =
-      "Histogram for the heap memory tuner shrinking blockcache max heap size in bytes";
+    "Histogram for the heap memory tuner shrinking blockcache max heap size in bytes";
 
   // Gauges
   String BLOCKED_FLUSH_GAUGE_NAME = "blockedFlushGauge";
@@ -119,15 +130,22 @@ public interface MetricsHeapMemoryManagerSource extends BaseSource {
   String UNBLOCKED_FLUSH_GAUGE_DESC = "Gauge for the unblocked flush count before tuning";
   String MEMSTORE_SIZE_GAUGE_NAME = "memStoreSize";
   String MEMSTORE_SIZE_GAUGE_DESC = "Global MemStore used in bytes by the RegionServer";
+  String MEMSTORE_ONHEAP_SIZE_GAUGE_NAME = "memStoreOnHeapSize";
+  String MEMSTORE_ONHEAP_SIZE_GAUGE_DESC =
+    "Global MemStore On-heap size in bytes by the RegionServer";
+  String MEMSTORE_OFFHEAP_SIZE_GAUGE_NAME = "memStoreOffHeapSize";
+  String MEMSTORE_OFFHEAP_SIZE_GAUGE_DESC =
+    "Global MemStore Off-heap size in bytes by the RegionServer";
+
   String BLOCKCACHE_SIZE_GAUGE_NAME = "blockCacheSize";
   String BLOCKCACHE_SIZE_GAUGE_DESC = "BlockCache used in bytes by the RegionServer";
 
   // Counters
   String DO_NOTHING_COUNTER_NAME = "tunerDoNothingCounter";
   String DO_NOTHING_COUNTER_DESC =
-      "The number of times that tuner neither expands memstore global size limit nor expands " +
-              "blockcache max size";
+    "The number of times that tuner neither expands memstore global size limit nor expands "
+      + "blockcache max size";
   String ABOVE_HEAP_LOW_WATERMARK_COUNTER_NAME = "aboveHeapOccupancyLowWaterMarkCounter";
   String ABOVE_HEAP_LOW_WATERMARK_COUNTER_DESC =
-      "The number of times that heap occupancy percent is above low watermark";
+    "The number of times that heap occupancy percent is above low watermark";
 }

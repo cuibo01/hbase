@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -30,24 +29,19 @@ import org.apache.hadoop.hbase.util.DNS;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * Data structure to describe the distribution of HDFS blocks among hosts.
- *
- * Adding erroneous data will be ignored silently.
+ * Data structure to describe the distribution of HDFS blocks among hosts. Adding erroneous data
+ * will be ignored silently.
  */
 @InterfaceAudience.Private
 public class HDFSBlocksDistribution {
-  private Map<String,HostAndWeight> hostAndWeights = null;
+  private Map<String, HostAndWeight> hostAndWeights = null;
   private long uniqueBlocksTotalWeight = 0;
 
   /**
-   * Stores the hostname and weight for that hostname.
-   *
-   * This is used when determining the physical locations of the blocks making
-   * up a region.
-   *
-   * To make a prioritized list of the hosts holding the most data of a region,
-   * this class is used to count the total weight for each host.  The weight is
-   * currently just the size of the file.
+   * Stores the hostname and weight for that hostname. This is used when determining the physical
+   * locations of the blocks making up a region. To make a prioritized list of the hosts holding the
+   * most data of a region, this class is used to count the total weight for each host. The weight
+   * is currently just the size of the file.
    */
   public static class HostAndWeight {
 
@@ -57,8 +51,8 @@ public class HDFSBlocksDistribution {
 
     /**
      * Constructor
-     * @param host the host name
-     * @param weight the weight
+     * @param host         the host name
+     * @param weight       the weight
      * @param weightForSsd the weight for ssd
      */
     public HostAndWeight(String host, long weight, long weightForSsd) {
@@ -69,7 +63,7 @@ public class HDFSBlocksDistribution {
 
     /**
      * add weight
-     * @param weight the weight
+     * @param weight       the weight
      * @param weightForSsd the weight for ssd
      */
     public void addWeight(long weight, long weightForSsd) {
@@ -77,34 +71,26 @@ public class HDFSBlocksDistribution {
       this.weightForSsd += weightForSsd;
     }
 
-    /**
-     * @return the host name
-     */
+    /** Returns the host name */
     public String getHost() {
       return host;
     }
 
-    /**
-     * @return the weight
-     */
+    /** Returns the weight */
     public long getWeight() {
       return weight;
     }
 
-    /**
-     * @return the weight for ssd
-     */
+    /** Returns the weight for ssd */
     public long getWeightForSsd() {
       return weightForSsd;
     }
 
-    /**
-     * comparator used to sort hosts based on weight
-     */
+    /** Comparator used to sort hosts based on weight */
     public static class WeightComparator implements Comparator<HostAndWeight> {
       @Override
       public int compare(HostAndWeight l, HostAndWeight r) {
-        if(l.getWeight() == r.getWeight()) {
+        if (l.getWeight() == r.getWeight()) {
           return l.getHost().compareTo(r.getHost());
         }
         return l.getWeight() < r.getWeight() ? -1 : 1;
@@ -112,25 +98,18 @@ public class HDFSBlocksDistribution {
     }
   }
 
-  /**
-   * Constructor
-   */
   public HDFSBlocksDistribution() {
     this.hostAndWeights = new TreeMap<>();
   }
 
-  /**
-   * @see java.lang.Object#toString()
-   */
   @Override
   public synchronized String toString() {
-    return "number of unique hosts in the distribution=" +
-      this.hostAndWeights.size();
+    return "number of unique hosts in the distribution=" + this.hostAndWeights.size();
   }
 
   /**
    * add some weight to a list of hosts, update the value of unique block weight
-   * @param hosts the list of the host
+   * @param hosts  the list of the host
    * @param weight the weight
    */
   public void addHostsAndBlockWeight(String[] hosts, long weight) {
@@ -139,7 +118,7 @@ public class HDFSBlocksDistribution {
 
   /**
    * add some weight to a list of hosts, update the value of unique block weight
-   * @param hosts the list of the host
+   * @param hosts  the list of the host
    * @param weight the weight
    */
   public void addHostsAndBlockWeight(String[] hosts, long weight, StorageType[] storageTypes) {
@@ -174,8 +153,8 @@ public class HDFSBlocksDistribution {
 
   /**
    * add some weight to a specific host
-   * @param host the host name
-   * @param weight the weight
+   * @param host         the host name
+   * @param weight       the weight
    * @param weightForSsd the weight for ssd
    */
   private void addHostAndBlockWeight(String host, long weight, long weightForSsd) {
@@ -185,7 +164,7 @@ public class HDFSBlocksDistribution {
     }
 
     HostAndWeight hostAndWeight = this.hostAndWeights.get(host);
-    if(hostAndWeight == null) {
+    if (hostAndWeight == null) {
       hostAndWeight = new HostAndWeight(host, weight, weightForSsd);
       this.hostAndWeights.put(host, hostAndWeight);
     } else {
@@ -193,16 +172,13 @@ public class HDFSBlocksDistribution {
     }
   }
 
-  /**
-   * @return the hosts and their weights
-   */
-  public Map<String,HostAndWeight> getHostAndWeights() {
+  /** Returns the hosts and their weights */
+  public Map<String, HostAndWeight> getHostAndWeights() {
     return this.hostAndWeights;
   }
 
   /**
-   * return the weight for a specific host, that will be the total bytes of all
-   * blocks on the host
+   * return the weight for a specific host, that will be the total bytes of all blocks on the host
    * @param host the host name
    * @return the weight of the given host
    */
@@ -210,28 +186,25 @@ public class HDFSBlocksDistribution {
     long weight = 0;
     if (host != null) {
       HostAndWeight hostAndWeight = this.hostAndWeights.get(host);
-      if(hostAndWeight != null) {
+      if (hostAndWeight != null) {
         weight = hostAndWeight.getWeight();
       }
     }
     return weight;
   }
 
-  /**
-   * @return the sum of all unique blocks' weight
-   */
+  /** Returns the sum of all unique blocks' weight */
   public long getUniqueBlocksTotalWeight() {
     return uniqueBlocksTotalWeight;
   }
 
-  /**
-   * Implementations 'visit' hostAndWeight.
-   */
+  /** Implementations 'visit' hostAndWeight. */
   public interface Visitor {
     long visit(final HostAndWeight hostAndWeight);
   }
 
   /**
+   * Get the block locality index for a given host
    * @param host the host name
    * @return the locality index of the given host
    */
@@ -245,6 +218,7 @@ public class HDFSBlocksDistribution {
   }
 
   /**
+   * Get the block locality index for a ssd for a given host
    * @param host the host name
    * @return the locality index with ssd of the given host
    */
@@ -258,6 +232,7 @@ public class HDFSBlocksDistribution {
   }
 
   /**
+   * Get the blocks local weight for a given host
    * @param host the host name
    * @return the blocks local weight of the given host
    */
@@ -266,6 +241,7 @@ public class HDFSBlocksDistribution {
   }
 
   /**
+   * Get the blocks local weight with ssd for a given host
    * @param host the host name
    * @return the blocks local with ssd weight of the given host
    */
@@ -273,10 +249,6 @@ public class HDFSBlocksDistribution {
     return getBlocksLocalityWeightInternal(host, HostAndWeight::getWeightForSsd);
   }
 
-  /**
-   * @param host the host name
-   * @return the locality index of the given host
-   */
   private long getBlocksLocalityWeightInternal(String host, Visitor visitor) {
     long localityIndex = 0;
     HostAndWeight hostAndWeight = this.hostAndWeights.get(host);
@@ -303,31 +275,25 @@ public class HDFSBlocksDistribution {
    * @param otherBlocksDistribution the other hdfs blocks distribution
    */
   public void add(HDFSBlocksDistribution otherBlocksDistribution) {
-    Map<String,HostAndWeight> otherHostAndWeights =
-      otherBlocksDistribution.getHostAndWeights();
-    for (Map.Entry<String, HostAndWeight> otherHostAndWeight:
-      otherHostAndWeights.entrySet()) {
+    Map<String, HostAndWeight> otherHostAndWeights = otherBlocksDistribution.getHostAndWeights();
+    for (Map.Entry<String, HostAndWeight> otherHostAndWeight : otherHostAndWeights.entrySet()) {
       addHostAndBlockWeight(otherHostAndWeight.getValue().host,
         otherHostAndWeight.getValue().weight, otherHostAndWeight.getValue().weightForSsd);
     }
     addUniqueWeight(otherBlocksDistribution.getUniqueBlocksTotalWeight());
   }
 
-  /**
-   * return the sorted list of hosts in terms of their weights
-   */
+  /** Return the sorted list of hosts in terms of their weights */
   public List<String> getTopHosts() {
     HostAndWeight[] hostAndWeights = getTopHostsWithWeights();
     List<String> topHosts = new ArrayList<>(hostAndWeights.length);
-    for(HostAndWeight haw : hostAndWeights) {
+    for (HostAndWeight haw : hostAndWeights) {
       topHosts.add(haw.getHost());
     }
     return topHosts;
   }
 
-  /**
-   * return the sorted list of hosts in terms of their weights
-   */
+  /** Return the sorted list of hosts in terms of their weights */
   public HostAndWeight[] getTopHostsWithWeights() {
     NavigableSet<HostAndWeight> orderedHosts = new TreeSet<>(new HostAndWeight.WeightComparator());
     orderedHosts.addAll(this.hostAndWeights.values());

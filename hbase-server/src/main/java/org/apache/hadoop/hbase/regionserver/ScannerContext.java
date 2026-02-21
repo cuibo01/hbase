@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,8 +17,8 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import com.google.errorprone.annotations.RestrictedApi;
 import java.util.List;
-
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.client.metrics.ServerSideScanMetrics;
@@ -56,7 +56,7 @@ public class ScannerContext {
   /**
    * A different set of progress fields. Only include batch, dataSize and heapSize. Compare to
    * LimitFields, ProgressFields doesn't contain time field. As we save a deadline in LimitFields,
-   * so use {@link EnvironmentEdgeManager.currentTime()} directly when check time limit.
+   * so use {@link EnvironmentEdgeManager#currentTime()} directly when check time limit.
    */
   ProgressFields progress;
 
@@ -83,20 +83,33 @@ public class ScannerContext {
    * some limits and then repeatedly invoke {@link InternalScanner#next(List)} or
    * {@link RegionScanner#next(List)} where each invocation respects these limits separately.
    * <p>
-   * For example: <pre> {@code
+   * For example:
+   *
+   * <pre>
+   *  {@code
    * ScannerContext context = new ScannerContext.newBuilder().setBatchLimit(5).build();
    * RegionScanner scanner = ...
    * List<Cell> results = new ArrayList<Cell>();
    * while(scanner.next(results, context)) {
    *   // Do something with a batch of 5 cells
    * }
-   * }</pre> However, in the case of RPCs, the server wants to be able to define a set of
-   * limits for a particular RPC request and have those limits respected across multiple
-   * invocations. This means that the progress made towards the limits in earlier calls will be
-   * saved and considered in future invocations
+   * }
+   * </pre>
+   *
+   * However, in the case of RPCs, the server wants to be able to define a set of limits for a
+   * particular RPC request and have those limits respected across multiple invocations. This means
+   * that the progress made towards the limits in earlier calls will be saved and considered in
+   * future invocations
    */
   boolean keepProgress;
   private static boolean DEFAULT_KEEP_PROGRESS = false;
+
+  /**
+   * Allows temporarily ignoring limits and skipping tracking of batch and size progress. Used when
+   * skipping to the next row, in which case all processed cells are thrown away so should not count
+   * towards progress.
+   */
+  boolean skippingRow = false;
 
   private Cell lastPeekedCell = null;
 
@@ -112,17 +125,23 @@ public class ScannerContext {
   final ServerSideScanMetrics metrics;
 
   ScannerContext(boolean keepProgress, LimitFields limitsToCopy, boolean trackMetrics) {
+    this(keepProgress, limitsToCopy, trackMetrics, null);
+  }
+
+  ScannerContext(boolean keepProgress, LimitFields limitsToCopy, boolean trackMetrics,
+    ServerSideScanMetrics scanMetrics) {
     this.limits = new LimitFields();
     if (limitsToCopy != null) {
       this.limits.copy(limitsToCopy);
     }
 
     // Progress fields are initialized to 0
-    progress = new ProgressFields(0, 0, 0);
+    progress = new ProgressFields(0, 0, 0, 0);
 
     this.keepProgress = keepProgress;
     this.scannerState = DEFAULT_STATE;
-    this.metrics = trackMetrics ? new ServerSideScanMetrics() : null;
+    this.metrics =
+      trackMetrics ? (scanMetrics != null ? scanMetrics : new ServerSideScanMetrics()) : null;
   }
 
   public boolean isTrackingMetrics() {
@@ -143,7 +162,9 @@ public class ScannerContext {
    * @return true if the progress tracked so far in this instance will be considered during an
    *         invocation of {@link InternalScanner#next(java.util.List)} or
    *         {@link RegionScanner#next(java.util.List)}. false when the progress tracked so far
-   *         should not be considered and should instead be wiped away via {@link #clearProgress()}
+   *         should not be considered and should instead be wiped away via {@link #clearProgress()}.
+   *         This only applies to per-row progress, like batch and data/heap size. Block size is
+   *         never reset because it tracks all of the blocks scanned for an entire request.
    */
   boolean getKeepProgress() {
     return keepProgress;
@@ -154,9 +175,31 @@ public class ScannerContext {
   }
 
   /**
+   * In this mode, only block size progress is tracked, and limits are ignored. We set this mode
+   * when skipping to next row, in which case all cells returned a thrown away so should not count
+   * towards progress.
+   * @return true if we are in skipping row mode.
+   */
+  public boolean getSkippingRow() {
+    return skippingRow;
+  }
+
+  /**
+   * @param skippingRow set true to cause disabling of collecting per-cell progress or enforcing any
+   *                    limits. This is used when trying to skip over all cells in a row, in which
+   *                    case those cells are thrown away so should not count towards progress.
+   */
+  void setSkippingRow(boolean skippingRow) {
+    this.skippingRow = skippingRow;
+  }
+
+  /**
    * Progress towards the batch limit has been made. Increment internal tracking of batch progress
    */
   void incrementBatchProgress(int batch) {
+    if (skippingRow) {
+      return;
+    }
     int currentBatch = progress.getBatch();
     progress.setBatch(currentBatch + batch);
   }
@@ -165,10 +208,23 @@ public class ScannerContext {
    * Progress towards the size limit has been made. Increment internal tracking of size progress
    */
   void incrementSizeProgress(long dataSize, long heapSize) {
+    if (skippingRow) {
+      return;
+    }
     long curDataSize = progress.getDataSize();
     progress.setDataSize(curDataSize + dataSize);
     long curHeapSize = progress.getHeapSize();
     progress.setHeapSize(curHeapSize + heapSize);
+  }
+
+  /**
+   * Progress towards the block limit has been made. Increment internal track of block progress
+   */
+  void incrementBlockProgress(int blockSize) {
+    if (blockSize > 0) {
+      long curBlockSize = progress.getBlockSize();
+      progress.setBlockSize(curBlockSize + blockSize);
+    }
   }
 
   int getBatchProgress() {
@@ -181,6 +237,10 @@ public class ScannerContext {
 
   long getHeapSizeProgress() {
     return progress.getHeapSize();
+  }
+
+  long getBlockSizeProgress() {
+    return progress.getBlockSize();
   }
 
   void setProgress(int batchProgress, long sizeProgress, long heapSizeProgress) {
@@ -199,10 +259,23 @@ public class ScannerContext {
 
   /**
    * Clear away any progress that has been made so far. All progress fields are reset to initial
-   * values
+   * values. Only clears progress that should reset between rows. {@link #getBlockSizeProgress()} is
+   * not reset because it increments for all blocks scanned whether the result is included or
+   * filtered.
    */
   void clearProgress() {
-    progress.setFields(0, 0, 0);
+    progress.setFields(0, 0, 0, getBlockSizeProgress());
+  }
+
+  /**
+   * Clear away the block size progress. Mainly used in compaction, as we will use a single
+   * ScannerContext across all the compaction lifetime, and we will call Shipper.shipped to clear
+   * the block reference, so it is safe to clear the block size progress in compaction.
+   */
+  @RestrictedApi(explanation = "Should only be called in Compactor", link = "",
+      allowedOnPath = ".*/org/apache/hadoop/hbase/.*/*Compactor.java|.*/src/test/.*")
+  public void clearBlockSizeProgress() {
+    progress.setBlockSize(0);
   }
 
   /**
@@ -210,7 +283,6 @@ public class ScannerContext {
    * passed in so that methods can be invoked against the new state. Furthermore, this pattern
    * allows the {@link NoLimitScannerContext} to cleanly override this setter and simply return the
    * new state, thus preserving the immutability of {@link NoLimitScannerContext}
-   * @param state
    * @return The state that was passed in.
    */
   NextState setScannerState(NextState state) {
@@ -227,41 +299,29 @@ public class ScannerContext {
    *         a limit in the middle of a row
    */
   boolean mayHaveMoreCellsInRow() {
-    return scannerState == NextState.SIZE_LIMIT_REACHED_MID_ROW ||
-        scannerState == NextState.TIME_LIMIT_REACHED_MID_ROW ||
-        scannerState == NextState.BATCH_LIMIT_REACHED;
+    return scannerState == NextState.SIZE_LIMIT_REACHED_MID_ROW
+      || scannerState == NextState.TIME_LIMIT_REACHED_MID_ROW
+      || scannerState == NextState.BATCH_LIMIT_REACHED;
   }
 
-  /**
-   * @param checkerScope
-   * @return true if the batch limit can be enforced in the checker's scope
-   */
+  /** Returns true if the batch limit can be enforced in the checker's scope */
   boolean hasBatchLimit(LimitScope checkerScope) {
     return limits.canEnforceBatchLimitFromScope(checkerScope) && limits.getBatch() > 0;
   }
 
-  /**
-   * @param checkerScope
-   * @return true if the size limit can be enforced in the checker's scope
-   */
+  /** Returns true if the size limit can be enforced in the checker's scope */
   boolean hasSizeLimit(LimitScope checkerScope) {
     return limits.canEnforceSizeLimitFromScope(checkerScope)
-        && (limits.getDataSize() > 0 || limits.getHeapSize() > 0);
+      && (limits.getDataSize() > 0 || limits.getHeapSize() > 0 || limits.getBlockSize() > 0);
   }
 
-  /**
-   * @param checkerScope
-   * @return true if the time limit can be enforced in the checker's scope
-   */
+  /** Returns true if the time limit can be enforced in the checker's scope */
   boolean hasTimeLimit(LimitScope checkerScope) {
-    return limits.canEnforceTimeLimitFromScope(checkerScope) &&
-      (limits.getTime() > 0 || returnImmediately);
+    return limits.canEnforceTimeLimitFromScope(checkerScope)
+      && (limits.getTime() > 0 || returnImmediately);
   }
 
-  /**
-   * @param checkerScope
-   * @return true if any limit can be enforced within the checker's scope
-   */
+  /** Returns true if any limit can be enforced within the checker's scope */
   boolean hasAnyLimit(LimitScope checkerScope) {
     return hasBatchLimit(checkerScope) || hasSizeLimit(checkerScope) || hasTimeLimit(checkerScope);
   }
@@ -297,7 +357,7 @@ public class ScannerContext {
    * @return true when the limit is enforceable from the checker's scope and it has been reached
    */
   boolean checkBatchLimit(LimitScope checkerScope) {
-    return hasBatchLimit(checkerScope) && progress.getBatch() >= limits.getBatch();
+    return !skippingRow && hasBatchLimit(checkerScope) && progress.getBatch() >= limits.getBatch();
   }
 
   /**
@@ -305,18 +365,20 @@ public class ScannerContext {
    * @return true when the limit is enforceable from the checker's scope and it has been reached
    */
   boolean checkSizeLimit(LimitScope checkerScope) {
-    return hasSizeLimit(checkerScope) && (progress.getDataSize() >= limits.getDataSize()
-        || progress.getHeapSize() >= limits.getHeapSize());
+    return !skippingRow && hasSizeLimit(checkerScope)
+      && (progress.getDataSize() >= limits.getDataSize()
+        || progress.getHeapSize() >= limits.getHeapSize()
+        || progress.getBlockSize() >= limits.getBlockSize());
   }
 
   /**
    * @param checkerScope The scope that the limit is being checked from. The time limit is always
-   *          checked against {@link EnvironmentEdgeManager.currentTime}
+   *                     checked against {@link EnvironmentEdgeManager.currentTime}
    * @return true when the limit is enforceable from the checker's scope and it has been reached
    */
   boolean checkTimeLimit(LimitScope checkerScope) {
-    return hasTimeLimit(checkerScope) &&
-      (returnImmediately || EnvironmentEdgeManager.currentTime() >= limits.getTime());
+    return !skippingRow && hasTimeLimit(checkerScope)
+      && (returnImmediately || EnvironmentEdgeManager.currentTime() >= limits.getTime());
   }
 
   /**
@@ -325,7 +387,7 @@ public class ScannerContext {
    */
   boolean checkAnyLimitReached(LimitScope checkerScope) {
     return checkSizeLimit(checkerScope) || checkBatchLimit(checkerScope)
-        || checkTimeLimit(checkerScope);
+      || checkTimeLimit(checkerScope);
   }
 
   Cell getLastPeekedCell() {
@@ -373,6 +435,7 @@ public class ScannerContext {
     boolean keepProgress = DEFAULT_KEEP_PROGRESS;
     boolean trackMetrics = false;
     LimitFields limits = new LimitFields();
+    ServerSideScanMetrics scanMetrics = null;
 
     private Builder() {
     }
@@ -391,10 +454,12 @@ public class ScannerContext {
       return this;
     }
 
-    public Builder setSizeLimit(LimitScope sizeScope, long dataSizeLimit, long heapSizeLimit) {
+    public Builder setSizeLimit(LimitScope sizeScope, long dataSizeLimit, long heapSizeLimit,
+      long blockSizeLimit) {
       limits.setDataSize(dataSizeLimit);
       limits.setHeapSize(heapSizeLimit);
       limits.setSizeScope(sizeScope);
+      limits.setBlockSize(blockSizeLimit);
       return this;
     }
 
@@ -409,8 +474,13 @@ public class ScannerContext {
       return this;
     }
 
+    public Builder setScanMetrics(ServerSideScanMetrics scanMetrics) {
+      this.scanMetrics = scanMetrics;
+      return this;
+    }
+
     public ScannerContext build() {
-      return new ScannerContext(keepProgress, limits, trackMetrics);
+      return new ScannerContext(keepProgress, limits, trackMetrics, scanMetrics);
     }
   }
 
@@ -452,9 +522,7 @@ public class ScannerContext {
       return this.moreValues;
     }
 
-    /**
-     * @return true when the state indicates that a limit has been reached and scan should stop
-     */
+    /** Returns true when the state indicates that a limit has been reached and scan should stop */
     public boolean limitReached() {
       return this.limitReached;
     }
@@ -542,6 +610,9 @@ public class ScannerContext {
     // The sum of heap space occupied by all tracked cells. This includes Cell POJO's overhead as
     // such AND data cells of Cells which are in on heap area.
     long heapSize = DEFAULT_SIZE;
+    // The total amount of block bytes that have been loaded in order to process cells for the
+    // request.
+    long blockSize = DEFAULT_SIZE;
 
     LimitScope timeScope = DEFAULT_SCOPE;
     long time = DEFAULT_TIME;
@@ -555,19 +626,21 @@ public class ScannerContext {
     void copy(LimitFields limitsToCopy) {
       if (limitsToCopy != null) {
         setFields(limitsToCopy.getBatch(), limitsToCopy.getSizeScope(), limitsToCopy.getDataSize(),
-            limitsToCopy.getHeapSize(), limitsToCopy.getTimeScope(), limitsToCopy.getTime());
+          limitsToCopy.getHeapSize(), limitsToCopy.getBlockSize(), limitsToCopy.getTimeScope(),
+          limitsToCopy.getTime());
       }
     }
 
     /**
      * Set all fields together.
      */
-    void setFields(int batch, LimitScope sizeScope, long dataSize, long heapSize,
-        LimitScope timeScope, long time) {
+    void setFields(int batch, LimitScope sizeScope, long dataSize, long heapSize, long blockSize,
+      LimitScope timeScope, long time) {
       setBatch(batch);
       setSizeScope(sizeScope);
       setDataSize(dataSize);
       setHeapSize(heapSize);
+      setBlockSize(blockSize);
       setTimeScope(timeScope);
       setTime(time);
     }
@@ -580,10 +653,7 @@ public class ScannerContext {
       this.batch = batch;
     }
 
-    /**
-     * @param checkerScope
-     * @return true when the limit can be enforced from the scope of the checker
-     */
+    /** Returns true when the limit can be enforced from the scope of the checker */
     boolean canEnforceBatchLimitFromScope(LimitScope checkerScope) {
       return LimitScope.BETWEEN_CELLS.canEnforceLimitFromScope(checkerScope);
     }
@@ -596,6 +666,10 @@ public class ScannerContext {
       return this.heapSize;
     }
 
+    long getBlockSize() {
+      return this.blockSize;
+    }
+
     void setDataSize(long dataSize) {
       this.dataSize = dataSize;
     }
@@ -604,9 +678,11 @@ public class ScannerContext {
       this.heapSize = heapSize;
     }
 
-    /**
-     * @return {@link LimitScope} indicating scope in which the size limit is enforced
-     */
+    void setBlockSize(long blockSize) {
+      this.blockSize = blockSize;
+    }
+
+    /** Returns {@link LimitScope} indicating scope in which the size limit is enforced */
     LimitScope getSizeScope() {
       return this.sizeScope;
     }
@@ -618,10 +694,7 @@ public class ScannerContext {
       this.sizeScope = scope;
     }
 
-    /**
-     * @param checkerScope
-     * @return true when the limit can be enforced from the scope of the checker
-     */
+    /** Returns true when the limit can be enforced from the scope of the checker */
     boolean canEnforceSizeLimitFromScope(LimitScope checkerScope) {
       return this.sizeScope.canEnforceLimitFromScope(checkerScope);
     }
@@ -634,9 +707,7 @@ public class ScannerContext {
       this.time = time;
     }
 
-    /**
-     * @return {@link LimitScope} indicating scope in which the time limit is enforced
-     */
+    /** Returns {@link LimitScope} indicating scope in which the time limit is enforced */
     LimitScope getTimeScope() {
       return this.timeScope;
     }
@@ -648,10 +719,7 @@ public class ScannerContext {
       this.timeScope = scope;
     }
 
-    /**
-     * @param checkerScope
-     * @return true when the limit can be enforced from the scope of the checker
-     */
+    /** Returns true when the limit can be enforced from the scope of the checker */
     boolean canEnforceTimeLimitFromScope(LimitScope checkerScope) {
       return this.timeScope.canEnforceLimitFromScope(checkerScope);
     }
@@ -669,6 +737,9 @@ public class ScannerContext {
 
       sb.append(", heapSize:");
       sb.append(heapSize);
+
+      sb.append(", blockSize:");
+      sb.append(blockSize);
 
       sb.append(", sizeScope:");
       sb.append(sizeScope);
@@ -698,18 +769,22 @@ public class ScannerContext {
     // The sum of heap space occupied by all tracked cells. This includes Cell POJO's overhead as
     // such AND data cells of Cells which are in on heap area.
     long heapSize = DEFAULT_SIZE;
+    // The total amount of block bytes that have been loaded in order to process cells for the
+    // request.
+    long blockSize = DEFAULT_SIZE;
 
-    ProgressFields(int batch, long size, long heapSize) {
-      setFields(batch, size, heapSize);
+    ProgressFields(int batch, long size, long heapSize, long blockSize) {
+      setFields(batch, size, heapSize, blockSize);
     }
 
     /**
      * Set all fields together.
      */
-    void setFields(int batch, long dataSize, long heapSize) {
+    void setFields(int batch, long dataSize, long heapSize, long blockSize) {
       setBatch(batch);
       setDataSize(dataSize);
       setHeapSize(heapSize);
+      setBlockSize(blockSize);
     }
 
     int getBatch() {
@@ -728,8 +803,16 @@ public class ScannerContext {
       return this.heapSize;
     }
 
+    long getBlockSize() {
+      return this.blockSize;
+    }
+
     void setDataSize(long dataSize) {
       this.dataSize = dataSize;
+    }
+
+    void setBlockSize(long blockSize) {
+      this.blockSize = blockSize;
     }
 
     void setHeapSize(long heapSize) {
@@ -749,6 +832,9 @@ public class ScannerContext {
 
       sb.append(", heapSize:");
       sb.append(heapSize);
+
+      sb.append(", blockSize:");
+      sb.append(blockSize);
 
       sb.append("}");
       return sb.toString();

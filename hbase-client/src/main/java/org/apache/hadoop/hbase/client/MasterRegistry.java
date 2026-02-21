@@ -30,10 +30,12 @@ import java.util.stream.Collectors;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.DNS.ServerType;
 import org.apache.yetus.audience.InterfaceAudience;
 
 import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
+import org.apache.hbase.thirdparty.com.google.common.base.Splitter;
 import org.apache.hbase.thirdparty.com.google.common.base.Strings;
 import org.apache.hbase.thirdparty.com.google.common.net.HostAndPort;
 
@@ -71,16 +73,31 @@ public class MasterRegistry extends AbstractRpcBasedConnectionRegistry {
   private static final String MASTER_ADDRS_CONF_SEPARATOR = ",";
 
   /**
+   * Supplies the default master port we should use given the provided configuration.
+   * @param conf Configuration to parse from.
+   */
+  private static int getDefaultMasterPort(Configuration conf) {
+    final int port = conf.getInt(HConstants.MASTER_PORT, HConstants.DEFAULT_MASTER_PORT);
+    if (port == 0) {
+      // Master port may be set to 0. We should substitute the default port in that case.
+      return HConstants.DEFAULT_MASTER_PORT;
+    }
+    return port;
+  }
+
+  /**
    * Parses the list of master addresses from the provided configuration. Supported format is comma
    * separated host[:port] values. If no port number if specified, default master port is assumed.
    * @param conf Configuration to parse from.
    */
   public static Set<ServerName> parseMasterAddrs(Configuration conf) throws UnknownHostException {
-    Set<ServerName> masterAddrs = new HashSet<>();
-    String configuredMasters = getMasterAddr(conf);
-    for (String masterAddr : configuredMasters.split(MASTER_ADDRS_CONF_SEPARATOR)) {
-      HostAndPort masterHostPort =
-        HostAndPort.fromString(masterAddr.trim()).withDefaultPort(HConstants.DEFAULT_MASTER_PORT);
+    final int defaultPort = getDefaultMasterPort(conf);
+    final Set<ServerName> masterAddrs = new HashSet<>();
+    final String configuredMasters = getMasterAddr(conf);
+    for (String masterAddr : Splitter.onPattern(MASTER_ADDRS_CONF_SEPARATOR)
+      .split(configuredMasters)) {
+      final HostAndPort masterHostPort =
+        HostAndPort.fromString(masterAddr.trim()).withDefaultPort(defaultPort);
       masterAddrs.add(ServerName.valueOf(masterHostPort.toString(), ServerName.NON_STARTCODE));
     }
     Preconditions.checkArgument(!masterAddrs.isEmpty(), "At least one master address is needed");
@@ -89,9 +106,10 @@ public class MasterRegistry extends AbstractRpcBasedConnectionRegistry {
 
   private final String connectionString;
 
-  MasterRegistry(Configuration conf) throws IOException {
-    super(conf, MASTER_REGISTRY_HEDGED_REQS_FANOUT_KEY, MASTER_REGISTRY_INITIAL_REFRESH_DELAY_SECS,
-      MASTER_REGISTRY_PERIODIC_REFRESH_INTERVAL_SECS, MASTER_REGISTRY_MIN_SECS_BETWEEN_REFRESHES);
+  MasterRegistry(Configuration conf, User user) throws IOException {
+    super(conf, user, MASTER_REGISTRY_HEDGED_REQS_FANOUT_KEY,
+      MASTER_REGISTRY_INITIAL_REFRESH_DELAY_SECS, MASTER_REGISTRY_PERIODIC_REFRESH_INTERVAL_SECS,
+      MASTER_REGISTRY_MIN_SECS_BETWEEN_REFRESHES);
     connectionString = getConnectionString(conf);
   }
 
@@ -135,7 +153,7 @@ public class MasterRegistry extends AbstractRpcBasedConnectionRegistry {
   }
 
   @RestrictedApi(explanation = "Should only be called in tests", link = "",
-    allowedOnPath = ".*/(.*/MasterRegistry.java|src/test/.*)")
+      allowedOnPath = ".*/(.*/MasterRegistry.java|src/test/.*)")
   CompletableFuture<Set<ServerName>> getMasters() {
     return this
       .<GetMastersResponse> call(

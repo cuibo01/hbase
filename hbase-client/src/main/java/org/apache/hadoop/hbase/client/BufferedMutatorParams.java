@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,12 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.client;
 
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.yetus.audience.InterfaceAudience;
+
+import org.apache.hbase.thirdparty.com.google.common.collect.Maps;
 
 /**
  * Parameters for instantiating a {@link BufferedMutator}.
@@ -40,11 +43,12 @@ public class BufferedMutatorParams implements Cloneable {
   private String implementationClassName = null;
   private int rpcTimeout = UNSET;
   private int operationTimeout = UNSET;
+  private int maxMutations = UNSET;
+  protected Map<String, byte[]> requestAttributes = Collections.emptyMap();
   private BufferedMutator.ExceptionListener listener = new BufferedMutator.ExceptionListener() {
     @Override
     public void onException(RetriesExhaustedWithDetailsException exception,
-        BufferedMutator bufferedMutator)
-        throws RetriesExhaustedWithDetailsException {
+      BufferedMutator bufferedMutator) throws RetriesExhaustedWithDetailsException {
       throw exception;
     }
   };
@@ -86,6 +90,35 @@ public class BufferedMutatorParams implements Cloneable {
 
   public int getOperationTimeout() {
     return operationTimeout;
+  }
+
+  /**
+   * Set the maximum number of mutations that this buffered mutator will buffer before flushing
+   * them. If you are talking to a cluster that uses hbase.rpc.rows.size.threshold.reject to reject
+   * large Multi requests, you may need this setting to avoid rejections. Default is no limit.
+   */
+  public BufferedMutatorParams setMaxMutations(int maxMutations) {
+    this.maxMutations = maxMutations;
+    return this;
+  }
+
+  /**
+   * The maximum number of mutations that this buffered mutator will buffer before flushing them
+   */
+  public int getMaxMutations() {
+    return maxMutations;
+  }
+
+  public BufferedMutatorParams setRequestAttribute(String key, byte[] value) {
+    if (requestAttributes.isEmpty()) {
+      requestAttributes = new HashMap<>();
+    }
+    requestAttributes.put(key, value);
+    return this;
+  }
+
+  public Map<String, byte[]> getRequestAttributes() {
+    return requestAttributes;
   }
 
   /**
@@ -145,8 +178,8 @@ public class BufferedMutatorParams implements Cloneable {
   }
 
   /**
-   *  @deprecated Since 3.0.0-alpha-2, will be removed in 4.0.0. You can not set it anymore.
-   *              BufferedMutator will use Connection's ExecutorService.
+   * @deprecated Since 3.0.0-alpha-2, will be removed in 4.0.0. You can not set it anymore.
+   *             BufferedMutator will use Connection's ExecutorService.
    */
   @Deprecated
   public ExecutorService getPool() {
@@ -154,8 +187,8 @@ public class BufferedMutatorParams implements Cloneable {
   }
 
   /**
-   * Override the default executor pool defined by the {@code hbase.htable.threads.*}
-   * configuration values.
+   * Override the default executor pool defined by the {@code hbase.htable.threads.*} configuration
+   * values.
    * @deprecated Since 3.0.0-alpha-2, will be removed in 4.0.0. You can not set it anymore.
    *             BufferedMutator will use Connection's ExecutorService.
    */
@@ -200,18 +233,20 @@ public class BufferedMutatorParams implements Cloneable {
     return this;
   }
 
-  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value="CN_IDIOM_NO_SUPER_CALL",
-    justification="The clone below is complete")
+  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "CN_IDIOM_NO_SUPER_CALL",
+      justification = "The clone below is complete")
   @Override
   public BufferedMutatorParams clone() {
     BufferedMutatorParams clone = new BufferedMutatorParams(this.tableName);
-    clone.writeBufferSize                     = this.writeBufferSize;
-    clone.writeBufferPeriodicFlushTimeoutMs   = this.writeBufferPeriodicFlushTimeoutMs;
+    clone.writeBufferSize = this.writeBufferSize;
+    clone.writeBufferPeriodicFlushTimeoutMs = this.writeBufferPeriodicFlushTimeoutMs;
     clone.writeBufferPeriodicFlushTimerTickMs = this.writeBufferPeriodicFlushTimerTickMs;
-    clone.maxKeyValueSize                     = this.maxKeyValueSize;
-    clone.pool                                = this.pool;
-    clone.listener                            = this.listener;
-    clone.implementationClassName             = this.implementationClassName;
+    clone.maxKeyValueSize = this.maxKeyValueSize;
+    clone.maxMutations = this.maxMutations;
+    clone.requestAttributes = Maps.newHashMap(this.requestAttributes);
+    clone.pool = this.pool;
+    clone.listener = this.listener;
+    clone.implementationClassName = this.implementationClassName;
     return clone;
   }
 }

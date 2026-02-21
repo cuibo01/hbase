@@ -15,10 +15,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.master.balancer;
 
+import java.util.List;
+import org.apache.hadoop.hbase.master.RegionPlan;
 import org.apache.yetus.audience.InterfaceAudience;
+
+import org.apache.hbase.thirdparty.com.google.common.collect.ImmutableList;
 
 @InterfaceAudience.Private
 class MoveRegionAction extends BalanceAction {
@@ -48,6 +51,12 @@ class MoveRegionAction extends BalanceAction {
   @Override
   public BalanceAction undoAction() {
     return new MoveRegionAction(region, toServer, fromServer);
+  }
+
+  @Override
+  List<RegionPlan> toRegionPlans(BalancerClusterState cluster) {
+    return ImmutableList.of(new RegionPlan(cluster.regions[getRegion()],
+      cluster.servers[getFromServer()], cluster.servers[getToServer()]));
   }
 
   @Override

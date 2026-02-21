@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,11 +17,9 @@
  */
 package org.apache.hadoop.hbase.io.asyncfs;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -29,25 +27,22 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ThreadLocalRandom;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.io.asyncfs.monitor.StreamSlowMonitor;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.ClassRule;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
-import org.junit.rules.TestName;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.apache.hbase.thirdparty.io.netty.buffer.ByteBuf;
 import org.apache.hbase.thirdparty.io.netty.channel.Channel;
 import org.apache.hbase.thirdparty.io.netty.channel.ChannelHandlerContext;
@@ -56,7 +51,6 @@ import org.apache.hbase.thirdparty.io.netty.channel.EventLoop;
 import org.apache.hbase.thirdparty.io.netty.channel.EventLoopGroup;
 import org.apache.hbase.thirdparty.io.netty.channel.nio.NioEventLoopGroup;
 import org.apache.hbase.thirdparty.io.netty.channel.socket.nio.NioSocketChannel;
-
 
 /**
  * Testcase for HBASE-26679, here we introduce a separate test class and not put the testcase in
@@ -67,15 +61,12 @@ import org.apache.hbase.thirdparty.io.netty.channel.socket.nio.NioSocketChannel;
  * in this test class we use the default value for timeout which is 60 seconds and it is enough for
  * this test.
  */
-@Category({ MiscTests.class, MediumTests.class })
+@Tag(MiscTests.TAG)
+@Tag(MediumTests.TAG)
 public class TestFanOutOneBlockAsyncDFSOutputHang extends AsyncFSTestBase {
 
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestFanOutOneBlockAsyncDFSOutputHang.class);
-
   private static final Logger LOG =
-      LoggerFactory.getLogger(TestFanOutOneBlockAsyncDFSOutputHang.class);
+    LoggerFactory.getLogger(TestFanOutOneBlockAsyncDFSOutputHang.class);
 
   private static DistributedFileSystem FS;
 
@@ -87,10 +78,7 @@ public class TestFanOutOneBlockAsyncDFSOutputHang extends AsyncFSTestBase {
 
   private static FanOutOneBlockAsyncDFSOutput OUT;
 
-  @Rule
-  public TestName name = new TestName();
-
-  @BeforeClass
+  @BeforeAll
   public static void setUp() throws Exception {
     startMiniDFSCluster(2);
     FS = CLUSTER.getFileSystem();
@@ -100,16 +88,16 @@ public class TestFanOutOneBlockAsyncDFSOutputHang extends AsyncFSTestBase {
     Path f = new Path("/testHang");
     EventLoop eventLoop = EVENT_LOOP_GROUP.next();
     OUT = FanOutOneBlockAsyncDFSOutputHelper.createOutput(FS, f, true, false, (short) 2,
-      FS.getDefaultBlockSize(), eventLoop, CHANNEL_CLASS, MONITOR);
+      FS.getDefaultBlockSize(), eventLoop, CHANNEL_CLASS, MONITOR, true);
   }
 
-  @AfterClass
-  public static void tearDown() throws IOException, InterruptedException {
+  @AfterAll
+  public static void tearDown() throws Exception {
     if (OUT != null) {
       OUT.recoverAndClose(null);
     }
     if (EVENT_LOOP_GROUP != null) {
-      EVENT_LOOP_GROUP.shutdownGracefully().sync();
+      EVENT_LOOP_GROUP.shutdownGracefully().get();
     }
     shutdownMiniDFSCluster();
   }
@@ -186,12 +174,14 @@ public class TestFanOutOneBlockAsyncDFSOutputHang extends AsyncFSTestBase {
         public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
           if (!(msg instanceof ByteBuf)) {
             ctx.fireChannelRead(msg);
+          } else {
+            ((ByteBuf) msg).release();
           }
         }
       });
 
       byte[] b = new byte[10];
-      ThreadLocalRandom.current().nextBytes(b);
+      Bytes.random(b);
       OUT.write(b, 0, b.length);
       CompletableFuture<Long> future = OUT.flush(false);
       /**

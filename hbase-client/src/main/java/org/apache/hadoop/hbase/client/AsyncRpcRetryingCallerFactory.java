@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,7 +23,9 @@ import static org.apache.hadoop.hbase.client.ConnectionUtils.retries2Attempts;
 import static org.apache.hbase.thirdparty.com.google.common.base.Preconditions.checkArgument;
 import static org.apache.hbase.thirdparty.com.google.common.base.Preconditions.checkNotNull;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.hbase.HRegionLocation;
@@ -58,7 +60,7 @@ class AsyncRpcRetryingCallerFactory {
 
     protected long pauseNs = conn.connConf.getPauseNs();
 
-    protected long pauseForCQTBENs = conn.connConf.getPauseForCQTBENs();
+    protected long pauseNsForServerOverloaded = conn.connConf.getPauseNsForServerOverloaded();
 
     protected int maxAttempts = retries2Attempts(conn.connConf.getMaxRetries());
 
@@ -83,6 +85,8 @@ class AsyncRpcRetryingCallerFactory {
 
     private int priority = PRIORITY_UNSET;
 
+    private Map<String, byte[]> requestAttributes = Collections.emptyMap();
+
     public SingleRequestCallerBuilder<T> table(TableName tableName) {
       this.tableName = tableName;
       return this;
@@ -93,8 +97,8 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
-    public SingleRequestCallerBuilder<T> action(
-        AsyncSingleRequestRpcRetryingCaller.Callable<T> callable) {
+    public SingleRequestCallerBuilder<T>
+      action(AsyncSingleRequestRpcRetryingCaller.Callable<T> callable) {
       this.callable = callable;
       return this;
     }
@@ -119,8 +123,8 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
-    public SingleRequestCallerBuilder<T> pauseForCQTBE(long pause, TimeUnit unit) {
-      this.pauseForCQTBENs = unit.toNanos(pause);
+    public SingleRequestCallerBuilder<T> pauseForServerOverloaded(long pause, TimeUnit unit) {
+      this.pauseNsForServerOverloaded = unit.toNanos(pause);
       return this;
     }
 
@@ -144,6 +148,12 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
+    public SingleRequestCallerBuilder<T>
+      setRequestAttributes(Map<String, byte[]> requestAttributes) {
+      this.requestAttributes = requestAttributes;
+      return this;
+    }
+
     private void preCheck() {
       checkArgument(replicaId >= 0, "invalid replica id %s", replicaId);
       checkNotNull(tableName, "tableName is null");
@@ -156,8 +166,8 @@ class AsyncRpcRetryingCallerFactory {
     public AsyncSingleRequestRpcRetryingCaller<T> build() {
       preCheck();
       return new AsyncSingleRequestRpcRetryingCaller<>(retryTimer, conn, tableName, row, replicaId,
-        locateType, callable, priority, pauseNs, pauseForCQTBENs, maxAttempts, operationTimeoutNs,
-        rpcTimeoutNs, startLogErrorsCnt);
+        locateType, callable, priority, pauseNs, pauseNsForServerOverloaded, maxAttempts,
+        operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt, requestAttributes);
     }
 
     /**
@@ -201,6 +211,8 @@ class AsyncRpcRetryingCallerFactory {
 
     private int priority = PRIORITY_UNSET;
 
+    private Map<String, byte[]> requestAttributes = Collections.emptyMap();
+
     public ScanSingleRegionCallerBuilder id(long scannerId) {
       this.scannerId = scannerId;
       return this;
@@ -243,7 +255,7 @@ class AsyncRpcRetryingCallerFactory {
     }
 
     public ScanSingleRegionCallerBuilder scannerLeaseTimeoutPeriod(long scannerLeaseTimeoutPeriod,
-        TimeUnit unit) {
+      TimeUnit unit) {
       this.scannerLeaseTimeoutPeriodNs = unit.toNanos(scannerLeaseTimeoutPeriod);
       return this;
     }
@@ -263,8 +275,8 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
-    public ScanSingleRegionCallerBuilder pauseForCQTBE(long pause, TimeUnit unit) {
-      this.pauseForCQTBENs = unit.toNanos(pause);
+    public ScanSingleRegionCallerBuilder pauseForServerOverloaded(long pause, TimeUnit unit) {
+      this.pauseNsForServerOverloaded = unit.toNanos(pause);
       return this;
     }
 
@@ -275,6 +287,12 @@ class AsyncRpcRetryingCallerFactory {
 
     public ScanSingleRegionCallerBuilder startLogErrorsCnt(int startLogErrorsCnt) {
       this.startLogErrorsCnt = startLogErrorsCnt;
+      return this;
+    }
+
+    public ScanSingleRegionCallerBuilder
+      setRequestAttributes(Map<String, byte[]> requestAttributes) {
+      this.requestAttributes = requestAttributes;
       return this;
     }
 
@@ -292,15 +310,15 @@ class AsyncRpcRetryingCallerFactory {
       preCheck();
       return new AsyncScanSingleRegionRpcRetryingCaller(retryTimer, conn, scan, scanMetrics,
         scannerId, resultCache, consumer, stub, loc, isRegionServerRemote, priority,
-        scannerLeaseTimeoutPeriodNs, pauseNs, pauseForCQTBENs, maxAttempts, scanTimeoutNs,
-        rpcTimeoutNs, startLogErrorsCnt);
+        scannerLeaseTimeoutPeriodNs, pauseNs, pauseNsForServerOverloaded, maxAttempts,
+        scanTimeoutNs, rpcTimeoutNs, startLogErrorsCnt, requestAttributes);
     }
 
     /**
      * Short cut for {@code build().start(HBaseRpcController, ScanResponse)}.
      */
     public CompletableFuture<Boolean> start(HBaseRpcController controller,
-        ScanResponse respWhenOpen) {
+      ScanResponse respWhenOpen) {
       return build().start(controller, respWhenOpen);
     }
   }
@@ -321,6 +339,8 @@ class AsyncRpcRetryingCallerFactory {
     private long operationTimeoutNs = -1L;
 
     private long rpcTimeoutNs = -1L;
+
+    private Map<String, byte[]> requestAttributes = Collections.emptyMap();
 
     public BatchCallerBuilder table(TableName tableName) {
       this.tableName = tableName;
@@ -347,8 +367,8 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
-    public BatchCallerBuilder pauseForCQTBE(long pause, TimeUnit unit) {
-      this.pauseForCQTBENs = unit.toNanos(pause);
+    public BatchCallerBuilder pauseForServerOverloaded(long pause, TimeUnit unit) {
+      this.pauseNsForServerOverloaded = unit.toNanos(pause);
       return this;
     }
 
@@ -362,9 +382,15 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
+    public BatchCallerBuilder setRequestAttributes(Map<String, byte[]> requestAttributes) {
+      this.requestAttributes = requestAttributes;
+      return this;
+    }
+
     public <T> AsyncBatchRpcRetryingCaller<T> build() {
       return new AsyncBatchRpcRetryingCaller<>(retryTimer, conn, tableName, actions, pauseNs,
-        pauseForCQTBENs, maxAttempts, operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt);
+        pauseNsForServerOverloaded, maxAttempts, operationTimeoutNs, rpcTimeoutNs,
+        startLogErrorsCnt, requestAttributes);
     }
 
     public <T> List<CompletableFuture<T>> call() {
@@ -385,8 +411,8 @@ class AsyncRpcRetryingCallerFactory {
 
     private int priority = PRIORITY_UNSET;
 
-    public MasterRequestCallerBuilder<T> action(
-        AsyncMasterRequestRpcRetryingCaller.Callable<T> callable) {
+    public MasterRequestCallerBuilder<T>
+      action(AsyncMasterRequestRpcRetryingCaller.Callable<T> callable) {
       this.callable = callable;
       return this;
     }
@@ -406,8 +432,8 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
-    public MasterRequestCallerBuilder<T> pauseForCQTBE(long pause, TimeUnit unit) {
-      this.pauseForCQTBENs = unit.toNanos(pause);
+    public MasterRequestCallerBuilder<T> pauseForServerOverloaded(long pause, TimeUnit unit) {
+      this.pauseNsForServerOverloaded = unit.toNanos(pause);
       return this;
     }
 
@@ -438,7 +464,8 @@ class AsyncRpcRetryingCallerFactory {
     public AsyncMasterRequestRpcRetryingCaller<T> build() {
       preCheck();
       return new AsyncMasterRequestRpcRetryingCaller<T>(retryTimer, conn, callable, priority,
-        pauseNs, pauseForCQTBENs, maxAttempts, operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt);
+        pauseNs, pauseNsForServerOverloaded, maxAttempts, operationTimeoutNs, rpcTimeoutNs,
+        startLogErrorsCnt);
     }
 
     /**
@@ -466,8 +493,8 @@ class AsyncRpcRetryingCallerFactory {
 
     private int priority;
 
-    public AdminRequestCallerBuilder<T> action(
-        AsyncAdminRequestRetryingCaller.Callable<T> callable) {
+    public AdminRequestCallerBuilder<T>
+      action(AsyncAdminRequestRetryingCaller.Callable<T> callable) {
       this.callable = callable;
       return this;
     }
@@ -487,8 +514,8 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
-    public AdminRequestCallerBuilder<T> pauseForCQTBE(long pause, TimeUnit unit) {
-      this.pauseForCQTBENs = unit.toNanos(pause);
+    public AdminRequestCallerBuilder<T> pauseForServerOverloaded(long pause, TimeUnit unit) {
+      this.pauseNsForServerOverloaded = unit.toNanos(pause);
       return this;
     }
 
@@ -514,8 +541,9 @@ class AsyncRpcRetryingCallerFactory {
 
     public AsyncAdminRequestRetryingCaller<T> build() {
       return new AsyncAdminRequestRetryingCaller<T>(retryTimer, conn, priority, pauseNs,
-        pauseForCQTBENs, maxAttempts, operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt,
-        checkNotNull(serverName, "serverName is null"), checkNotNull(callable, "action is null"));
+        pauseNsForServerOverloaded, maxAttempts, operationTimeoutNs, rpcTimeoutNs,
+        startLogErrorsCnt, checkNotNull(serverName, "serverName is null"),
+        checkNotNull(callable, "action is null"));
     }
 
     public CompletableFuture<T> call() {
@@ -537,8 +565,8 @@ class AsyncRpcRetryingCallerFactory {
 
     private ServerName serverName;
 
-    public ServerRequestCallerBuilder<T> action(
-        AsyncServerRequestRpcRetryingCaller.Callable<T> callable) {
+    public ServerRequestCallerBuilder<T>
+      action(AsyncServerRequestRpcRetryingCaller.Callable<T> callable) {
       this.callable = callable;
       return this;
     }
@@ -558,8 +586,8 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
-    public ServerRequestCallerBuilder<T> pauseForCQTBE(long pause, TimeUnit unit) {
-      this.pauseForCQTBENs = unit.toNanos(pause);
+    public ServerRequestCallerBuilder<T> pauseForServerOverloaded(long pause, TimeUnit unit) {
+      this.pauseNsForServerOverloaded = unit.toNanos(pause);
       return this;
     }
 
@@ -579,9 +607,10 @@ class AsyncRpcRetryingCallerFactory {
     }
 
     public AsyncServerRequestRpcRetryingCaller<T> build() {
-      return new AsyncServerRequestRpcRetryingCaller<T>(retryTimer, conn, pauseNs, pauseForCQTBENs,
-        maxAttempts, operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt,
-        checkNotNull(serverName, "serverName is null"), checkNotNull(callable, "action is null"));
+      return new AsyncServerRequestRpcRetryingCaller<T>(retryTimer, conn, pauseNs,
+        pauseNsForServerOverloaded, maxAttempts, operationTimeoutNs, rpcTimeoutNs,
+        startLogErrorsCnt, checkNotNull(serverName, "serverName is null"),
+        checkNotNull(callable, "action is null"));
     }
 
     public CompletableFuture<T> call() {

@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,21 +17,20 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.Optional;
-
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionContext;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
 /**
- * This class is a helper that allows to create a partially-implemented, stateful mocks of
- * Store. It contains a bunch of blank methods, and answers redirecting to these.
+ * This class is a helper that allows to create a partially-implemented, stateful mocks of Store. It
+ * contains a bunch of blank methods, and answers redirecting to these.
  */
 public class StatefulStoreMockMaker {
   // Add and expand the methods and answers as needed.
@@ -40,11 +38,13 @@ public class StatefulStoreMockMaker {
     return Optional.empty();
   }
 
-  public void cancelCompaction(Object originalContext) {}
+  public void cancelCompaction(Object originalContext) {
+  }
 
   public int getPriority() {
     return 0;
   }
+
   private class CancelAnswer implements Answer<Object> {
     @Override
     public CompactionContext answer(InvocationOnMock invocation) throws Throwable {

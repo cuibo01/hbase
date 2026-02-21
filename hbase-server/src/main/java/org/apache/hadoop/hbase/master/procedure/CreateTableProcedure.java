@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,9 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.master.procedure;
-
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -33,15 +31,20 @@ import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RegionReplicaUtil;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableState;
+import org.apache.hadoop.hbase.fs.ErasureCodingUtils;
 import org.apache.hadoop.hbase.master.MasterCoprocessorHost;
 import org.apache.hadoop.hbase.master.MasterFileSystem;
 import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
+import org.apache.hadoop.hbase.procedure2.ProcedureSuspendedException;
+import org.apache.hadoop.hbase.procedure2.ProcedureUtil;
+import org.apache.hadoop.hbase.regionserver.compactions.CustomCellTieredUtils;
 import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerFactory;
 import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerValidationUtils;
 import org.apache.hadoop.hbase.rsgroup.RSGroupInfo;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.FSTableDescriptors;
 import org.apache.hadoop.hbase.util.ModifyRegionUtils;
+import org.apache.hadoop.hbase.util.RetryCounter;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,28 +55,30 @@ import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.CreateTableState;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos;
 
 @InterfaceAudience.Private
-public class CreateTableProcedure
-    extends AbstractStateMachineTableProcedure<CreateTableState> {
+public class CreateTableProcedure extends AbstractStateMachineTableProcedure<CreateTableState> {
   private static final Logger LOG = LoggerFactory.getLogger(CreateTableProcedure.class);
+
+  private static final int MAX_REGION_REPLICATION = 0x10000;
 
   private TableDescriptor tableDescriptor;
   private List<RegionInfo> newRegions;
+  private RetryCounter retryCounter;
 
   public CreateTableProcedure() {
     // Required by the Procedure framework to create the procedure on replay
     super();
   }
 
-  public CreateTableProcedure(final MasterProcedureEnv env,
-      final TableDescriptor tableDescriptor, final RegionInfo[] newRegions) {
+  public CreateTableProcedure(final MasterProcedureEnv env, final TableDescriptor tableDescriptor,
+    final RegionInfo[] newRegions) {
     this(env, tableDescriptor, newRegions, null);
   }
 
-  public CreateTableProcedure(final MasterProcedureEnv env,
-      final TableDescriptor tableDescriptor, final RegionInfo[] newRegions,
-      final ProcedurePrepareLatch syncLatch) {
+  public CreateTableProcedure(final MasterProcedureEnv env, final TableDescriptor tableDescriptor,
+    final RegionInfo[] newRegions, final ProcedurePrepareLatch syncLatch) {
     super(env, syncLatch);
     this.tableDescriptor = tableDescriptor;
     this.newRegions = newRegions != null ? Lists.newArrayList(newRegions) : null;
@@ -81,16 +86,16 @@ public class CreateTableProcedure
 
   @Override
   protected Flow executeFromState(final MasterProcedureEnv env, final CreateTableState state)
-      throws InterruptedException {
+    throws InterruptedException, ProcedureSuspendedException {
     LOG.info("{} execute state={}", this, state);
     try {
       switch (state) {
         case CREATE_TABLE_PRE_OPERATION:
           // Verify if we can create the table
-          boolean exists = !prepareCreate(env);
+          boolean success = prepareCreate(env);
           releaseSyncLatch();
 
-          if (exists) {
+          if (!success) {
             assert isFailed() : "the delete should have an exception here";
             return Flow.NO_MORE_STATE;
           }
@@ -102,6 +107,16 @@ public class CreateTableProcedure
           DeleteTableProcedure.deleteFromFs(env, getTableName(), newRegions, true);
           newRegions = createFsLayout(env, tableDescriptor, newRegions);
           env.getMasterServices().getTableDescriptors().update(tableDescriptor, true);
+          if (tableDescriptor.getErasureCodingPolicy() != null) {
+            setNextState(CreateTableState.CREATE_TABLE_SET_ERASURE_CODING_POLICY);
+          } else {
+            setNextState(CreateTableState.CREATE_TABLE_ADD_TO_META);
+          }
+          break;
+        case CREATE_TABLE_SET_ERASURE_CODING_POLICY:
+          ErasureCodingUtils.setPolicy(env.getMasterFileSystem().getFileSystem(),
+            env.getMasterFileSystem().getRootDir(), getTableName(),
+            tableDescriptor.getErasureCodingPolicy());
           setNextState(CreateTableState.CREATE_TABLE_ADD_TO_META);
           break;
         case CREATE_TABLE_ADD_TO_META:
@@ -110,8 +125,8 @@ public class CreateTableProcedure
           break;
         case CREATE_TABLE_ASSIGN_REGIONS:
           setEnablingState(env, getTableName());
-          addChildProcedure(env.getAssignmentManager()
-            .createRoundRobinAssignProcedures(newRegions));
+          addChildProcedure(
+            env.getAssignmentManager().createRoundRobinAssignProcedures(newRegions));
           setNextState(CreateTableState.CREATE_TABLE_UPDATE_DESC_CACHE);
           break;
         case CREATE_TABLE_UPDATE_DESC_CACHE:
@@ -122,6 +137,7 @@ public class CreateTableProcedure
           break;
         case CREATE_TABLE_POST_OPERATION:
           postCreate(env);
+          retryCounter = null;
           return Flow.NO_MORE_STATE;
         default:
           throw new UnsupportedOperationException("unhandled state=" + state);
@@ -130,21 +146,37 @@ public class CreateTableProcedure
       if (isRollbackSupported(state)) {
         setFailure("master-create-table", e);
       } else {
-        LOG.warn("Retriable error trying to create table=" + getTableName() + " state=" + state, e);
+        if (retryCounter == null) {
+          retryCounter = ProcedureUtil.createRetryCounter(env.getMasterConfiguration());
+        }
+        long backoff = retryCounter.getBackoffTimeAndIncrementAttempts();
+        LOG.warn("Retriable error trying to create table={},state={},suspend {}secs.",
+          getTableName(), state, backoff / 1000, e);
+        throw suspend(Math.toIntExact(backoff), true);
       }
     }
+    retryCounter = null;
     return Flow.HAS_MORE_STATE;
   }
 
   @Override
+  protected synchronized boolean setTimeoutFailure(MasterProcedureEnv env) {
+    setState(ProcedureProtos.ProcedureState.RUNNABLE);
+    env.getProcedureScheduler().addFront(this);
+    return false;
+  }
+
+  @Override
   protected void rollbackState(final MasterProcedureEnv env, final CreateTableState state)
-      throws IOException {
+    throws IOException {
     if (state == CreateTableState.CREATE_TABLE_PRE_OPERATION) {
       // nothing to rollback, pre-create is just table-state checks.
       // We can fail if the table does exist or the descriptor is malformed.
       // TODO: coprocessor rollback semantic is still undefined.
-      if (hasException() /* avoid NPE */ &&
-          getException().getCause().getClass() != TableExistsException.class) {
+      if (
+        hasException()
+          /* avoid NPE */ && getException().getCause().getClass() != TableExistsException.class
+      ) {
         DeleteTableProcedure.deleteTableStates(env, getTableName());
 
         final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
@@ -197,16 +229,15 @@ public class CreateTableProcedure
   }
 
   @Override
-  protected void serializeStateData(ProcedureStateSerializer serializer)
-      throws IOException {
+  protected void serializeStateData(ProcedureStateSerializer serializer) throws IOException {
     super.serializeStateData(serializer);
 
     MasterProcedureProtos.CreateTableStateData.Builder state =
       MasterProcedureProtos.CreateTableStateData.newBuilder()
         .setUserInfo(MasterProcedureUtil.toProtoUserInfo(getUser()))
-            .setTableSchema(ProtobufUtil.toTableSchema(tableDescriptor));
+        .setTableSchema(ProtobufUtil.toTableSchema(tableDescriptor));
     if (newRegions != null) {
-      for (RegionInfo hri: newRegions) {
+      for (RegionInfo hri : newRegions) {
         state.addRegionInfo(ProtobufUtil.toRegionInfo(hri));
       }
     }
@@ -214,19 +245,18 @@ public class CreateTableProcedure
   }
 
   @Override
-  protected void deserializeStateData(ProcedureStateSerializer serializer)
-      throws IOException {
+  protected void deserializeStateData(ProcedureStateSerializer serializer) throws IOException {
     super.deserializeStateData(serializer);
 
     MasterProcedureProtos.CreateTableStateData state =
-        serializer.deserialize(MasterProcedureProtos.CreateTableStateData.class);
+      serializer.deserialize(MasterProcedureProtos.CreateTableStateData.class);
     setUser(MasterProcedureUtil.toUserInfo(state.getUserInfo()));
     tableDescriptor = ProtobufUtil.toTableDescriptor(state.getTableSchema());
     if (state.getRegionInfoCount() == 0) {
       newRegions = null;
     } else {
       newRegions = new ArrayList<>(state.getRegionInfoCount());
-      for (HBaseProtos.RegionInfo hri: state.getRegionInfoList()) {
+      for (HBaseProtos.RegionInfo hri : state.getRegionInfoList()) {
         newRegions.add(ProtobufUtil.toRegionInfo(hri));
       }
     }
@@ -234,6 +264,9 @@ public class CreateTableProcedure
 
   @Override
   protected boolean waitInitialized(MasterProcedureEnv env) {
+    if (isCriticalSystemTable()) {
+      return false;
+    }
     if (getTableName().isSystemTable()) {
       // Creating system table is part of the initialization, so only wait for meta loaded instead
       // of waiting for master fully initialized.
@@ -255,6 +288,14 @@ public class CreateTableProcedure
         "Table " + getTableName().toString() + " should have at least one column family."));
       return false;
     }
+
+    int regionReplicationCount = tableDescriptor.getRegionReplication();
+    if (regionReplicationCount > MAX_REGION_REPLICATION) {
+      setFailure("master-create-table", new IllegalArgumentException(
+        "Region Replication cannot exceed " + MAX_REGION_REPLICATION + "."));
+      return false;
+    }
+
     if (!tableName.isSystemTable()) {
       // do not check rs group for system tables as we may block the bootstrap.
       Supplier<String> forWhom = () -> "table " + tableName;
@@ -277,11 +318,12 @@ public class CreateTableProcedure
     StoreFileTrackerValidationUtils.checkForCreateTable(env.getMasterConfiguration(),
       tableDescriptor);
 
+    CustomCellTieredUtils.checkForModifyTable(tableDescriptor);
+
     return true;
   }
 
-  private void preCreate(final MasterProcedureEnv env)
-      throws IOException, InterruptedException {
+  private void preCreate(final MasterProcedureEnv env) throws IOException, InterruptedException {
     if (!getTableName().isSystemTable()) {
       ProcedureSyncWait.getMasterQuotaManager(env).checkNamespaceTableAndRegionQuota(getTableName(),
         (newRegions != null ? newRegions.size() : 0));
@@ -292,60 +334,55 @@ public class CreateTableProcedure
 
     final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
     if (cpHost != null) {
-      final RegionInfo[] regions = newRegions == null ? null :
-        newRegions.toArray(new RegionInfo[newRegions.size()]);
+      final RegionInfo[] regions =
+        newRegions == null ? null : newRegions.toArray(new RegionInfo[newRegions.size()]);
       cpHost.preCreateTableAction(tableDescriptor, regions, getUser());
     }
   }
 
-  private void postCreate(final MasterProcedureEnv env)
-      throws IOException, InterruptedException {
+  private void postCreate(final MasterProcedureEnv env) throws IOException, InterruptedException {
     final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
     if (cpHost != null) {
-      final RegionInfo[] regions = (newRegions == null) ? null :
-        newRegions.toArray(new RegionInfo[newRegions.size()]);
+      final RegionInfo[] regions =
+        (newRegions == null) ? null : newRegions.toArray(new RegionInfo[newRegions.size()]);
       cpHost.postCompletedCreateTableAction(tableDescriptor, regions, getUser());
     }
   }
 
   protected interface CreateHdfsRegions {
-    List<RegionInfo> createHdfsRegions(final MasterProcedureEnv env,
-      final Path tableRootDir, final TableName tableName,
-      final List<RegionInfo> newRegions) throws IOException;
+    List<RegionInfo> createHdfsRegions(final MasterProcedureEnv env, final Path tableRootDir,
+      final TableName tableName, final List<RegionInfo> newRegions) throws IOException;
   }
 
   protected static List<RegionInfo> createFsLayout(final MasterProcedureEnv env,
-      final TableDescriptor tableDescriptor, final List<RegionInfo> newRegions)
-      throws IOException {
+    final TableDescriptor tableDescriptor, final List<RegionInfo> newRegions) throws IOException {
     return createFsLayout(env, tableDescriptor, newRegions, new CreateHdfsRegions() {
       @Override
       public List<RegionInfo> createHdfsRegions(final MasterProcedureEnv env,
-          final Path tableRootDir, final TableName tableName,
-          final List<RegionInfo> newRegions) throws IOException {
-        RegionInfo[] regions = newRegions != null ?
-          newRegions.toArray(new RegionInfo[newRegions.size()]) : null;
-        return ModifyRegionUtils.createRegions(env.getMasterConfiguration(),
-            tableRootDir, tableDescriptor, regions, null);
+        final Path tableRootDir, final TableName tableName, final List<RegionInfo> newRegions)
+        throws IOException {
+        RegionInfo[] regions =
+          newRegions != null ? newRegions.toArray(new RegionInfo[newRegions.size()]) : null;
+        return ModifyRegionUtils.createRegions(env, tableRootDir, tableDescriptor, regions, null);
       }
     });
   }
 
   protected static List<RegionInfo> createFsLayout(final MasterProcedureEnv env,
-      final TableDescriptor tableDescriptor, List<RegionInfo> newRegions,
-      final CreateHdfsRegions hdfsRegionHandler) throws IOException {
+    final TableDescriptor tableDescriptor, List<RegionInfo> newRegions,
+    final CreateHdfsRegions hdfsRegionHandler) throws IOException {
     final MasterFileSystem mfs = env.getMasterServices().getMasterFileSystem();
 
     // 1. Create Table Descriptor
     // using a copy of descriptor, table will be created enabling first
-    final Path tableDir = CommonFSUtils.getTableDir(mfs.getRootDir(),
-      tableDescriptor.getTableName());
-    ((FSTableDescriptors)(env.getMasterServices().getTableDescriptors()))
-        .createTableDescriptorForTableDirectory(
-          tableDir, tableDescriptor, false);
+    final Path tableDir =
+      CommonFSUtils.getTableDir(mfs.getRootDir(), tableDescriptor.getTableName());
+    ((FSTableDescriptors) (env.getMasterServices().getTableDescriptors()))
+      .createTableDescriptorForTableDirectory(tableDir, tableDescriptor, false);
 
     // 2. Create Regions
     newRegions = hdfsRegionHandler.createHdfsRegions(env, mfs.getRootDir(),
-            tableDescriptor.getTableName(), newRegions);
+      tableDescriptor.getTableName(), newRegions);
 
     return newRegions;
   }
@@ -368,27 +405,26 @@ public class CreateTableProcedure
   }
 
   protected static void setEnablingState(final MasterProcedureEnv env, final TableName tableName)
-      throws IOException {
+    throws IOException {
     // Mark the table as Enabling
-    env.getMasterServices().getTableStateManager()
-      .setTableState(tableName, TableState.State.ENABLING);
+    env.getMasterServices().getTableStateManager().setTableState(tableName,
+      TableState.State.ENABLING);
   }
 
   protected static void setEnabledState(final MasterProcedureEnv env, final TableName tableName)
-      throws IOException {
+    throws IOException {
     // Enable table
-    env.getMasterServices().getTableStateManager()
-      .setTableState(tableName, TableState.State.ENABLED);
+    env.getMasterServices().getTableStateManager().setTableState(tableName,
+      TableState.State.ENABLED);
   }
 
   /**
    * Add the specified set of regions to the hbase:meta table.
    */
   private static void addRegionsToMeta(final MasterProcedureEnv env,
-      final TableDescriptor tableDescriptor,
-      final List<RegionInfo> regionInfos) throws IOException {
-    MetaTableAccessor.addRegionsToMeta(env.getMasterServices().getConnection(),
-      regionInfos, tableDescriptor.getRegionReplication());
+    final TableDescriptor tableDescriptor, final List<RegionInfo> regionInfos) throws IOException {
+    MetaTableAccessor.addRegionsToMeta(env.getMasterServices().getConnection(), regionInfos,
+      tableDescriptor.getRegionReplication());
   }
 
   @Override

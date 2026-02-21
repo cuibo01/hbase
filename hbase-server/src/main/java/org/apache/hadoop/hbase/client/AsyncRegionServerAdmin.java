@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,7 +19,7 @@ package org.apache.hadoop.hbase.client;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
-import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.ipc.HBaseRpcController;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -95,7 +95,8 @@ public class AsyncRegionServerAdmin {
     void call(AdminService.Interface stub, HBaseRpcController controller, RpcCallback<RESP> done);
   }
 
-  private <RESP> CompletableFuture<RESP> call(RpcCall<RESP> rpcCall, CellScanner cellScanner) {
+  private <RESP> CompletableFuture<RESP> call(RpcCall<RESP> rpcCall,
+    ExtendedCellScanner cellScanner) {
     CompletableFuture<RESP> future = new CompletableFuture<>();
     HBaseRpcController controller = conn.rpcControllerFactory.newController(null, cellScanner);
     try {
@@ -128,8 +129,8 @@ public class AsyncRegionServerAdmin {
     return call((stub, controller, done) -> stub.getStoreFile(controller, request, done));
   }
 
-  public CompletableFuture<GetOnlineRegionResponse> getOnlineRegion(
-      GetOnlineRegionRequest request) {
+  public CompletableFuture<GetOnlineRegionResponse>
+    getOnlineRegion(GetOnlineRegionRequest request) {
     return call((stub, controller, done) -> stub.getOnlineRegion(controller, request, done));
   }
 
@@ -149,8 +150,8 @@ public class AsyncRegionServerAdmin {
     return call((stub, controller, done) -> stub.flushRegion(controller, request, done));
   }
 
-  public CompletableFuture<CompactionSwitchResponse> compactionSwitch(
-      CompactionSwitchRequest request) {
+  public CompletableFuture<CompactionSwitchResponse>
+    compactionSwitch(CompactionSwitchRequest request) {
     return call((stub, controller, done) -> stub.compactionSwitch(controller, request, done));
   }
 
@@ -159,7 +160,7 @@ public class AsyncRegionServerAdmin {
   }
 
   public CompletableFuture<ReplicateWALEntryResponse> replicateWALEntry(
-      ReplicateWALEntryRequest request, CellScanner cellScanner, int timeout) {
+    ReplicateWALEntryRequest request, ExtendedCellScanner cellScanner, int timeout) {
     return call((stub, controller, done) -> {
       controller.setCallTimeout(timeout);
       stub.replicateWALEntry(controller, request, done);
@@ -167,7 +168,7 @@ public class AsyncRegionServerAdmin {
   }
 
   public CompletableFuture<ReplicateWALEntryResponse> replay(ReplicateWALEntryRequest request,
-      CellScanner cellScanner) {
+    ExtendedCellScanner cellScanner) {
     return call((stub, controller, done) -> stub.replay(controller, request, done), cellScanner);
   }
 
@@ -183,13 +184,13 @@ public class AsyncRegionServerAdmin {
     return call((stub, controller, done) -> stub.stopServer(controller, request, done));
   }
 
-  public CompletableFuture<UpdateFavoredNodesResponse> updateFavoredNodes(
-      UpdateFavoredNodesRequest request) {
+  public CompletableFuture<UpdateFavoredNodesResponse>
+    updateFavoredNodes(UpdateFavoredNodesRequest request) {
     return call((stub, controller, done) -> stub.updateFavoredNodes(controller, request, done));
   }
 
-  public CompletableFuture<UpdateConfigurationResponse> updateConfiguration(
-      UpdateConfigurationRequest request) {
+  public CompletableFuture<UpdateConfigurationResponse>
+    updateConfiguration(UpdateConfigurationRequest request) {
     return call((stub, controller, done) -> stub.updateConfiguration(controller, request, done));
   }
 
@@ -197,23 +198,23 @@ public class AsyncRegionServerAdmin {
     return call((stub, controller, done) -> stub.getRegionLoad(controller, request, done));
   }
 
-  public CompletableFuture<ClearCompactionQueuesResponse> clearCompactionQueues(
-      ClearCompactionQueuesRequest request) {
+  public CompletableFuture<ClearCompactionQueuesResponse>
+    clearCompactionQueues(ClearCompactionQueuesRequest request) {
     return call((stub, controller, done) -> stub.clearCompactionQueues(controller, request, done));
   }
 
-  public CompletableFuture<ClearRegionBlockCacheResponse> clearRegionBlockCache(
-      ClearRegionBlockCacheRequest request) {
+  public CompletableFuture<ClearRegionBlockCacheResponse>
+    clearRegionBlockCache(ClearRegionBlockCacheRequest request) {
     return call((stub, controller, done) -> stub.clearRegionBlockCache(controller, request, done));
   }
 
-  public CompletableFuture<GetSpaceQuotaSnapshotsResponse> getSpaceQuotaSnapshots(
-      GetSpaceQuotaSnapshotsRequest request) {
+  public CompletableFuture<GetSpaceQuotaSnapshotsResponse>
+    getSpaceQuotaSnapshots(GetSpaceQuotaSnapshotsRequest request) {
     return call((stub, controller, done) -> stub.getSpaceQuotaSnapshots(controller, request, done));
   }
 
-  public CompletableFuture<ExecuteProceduresResponse> executeProcedures(
-      ExecuteProceduresRequest request) {
+  public CompletableFuture<ExecuteProceduresResponse>
+    executeProcedures(ExecuteProceduresRequest request) {
     return call((stub, controller, done) -> stub.executeProcedures(controller, request, done));
   }
 }

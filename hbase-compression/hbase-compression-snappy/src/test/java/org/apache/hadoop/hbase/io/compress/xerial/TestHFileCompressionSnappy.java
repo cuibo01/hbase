@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hbase.io.compress.xerial;
 
+import static org.junit.Assume.assumeTrue;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
@@ -30,17 +32,18 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({IOTests.class, SmallTests.class})
+@Category({ IOTests.class, SmallTests.class })
 public class TestHFileCompressionSnappy extends HFileTestBase {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestHFileCompressionSnappy.class);
+    HBaseClassTestRule.forClass(TestHFileCompressionSnappy.class);
 
   private static Configuration conf;
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
+    assumeTrue(SnappyCodec.isLoaded());
     conf = TEST_UTIL.getConfiguration();
     conf.set(Compression.SNAPPY_CODEC_CLASS_KEY, SnappyCodec.class.getCanonicalName());
     Compression.Algorithm.SNAPPY.reload(conf);
@@ -49,8 +52,8 @@ public class TestHFileCompressionSnappy extends HFileTestBase {
 
   @Test
   public void test() throws Exception {
-    Path path = new Path(TEST_UTIL.getDataTestDir(),
-      HBaseTestingUtil.getRandomUUID().toString() + ".hfile");
+    Path path =
+      new Path(TEST_UTIL.getDataTestDir(), HBaseTestingUtil.getRandomUUID().toString() + ".hfile");
     doTest(conf, path, Compression.Algorithm.SNAPPY);
   }
 

@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,10 +19,8 @@ package org.apache.hadoop.hbase.io.encoding;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
-
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.io.WritableUtils;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -34,17 +31,16 @@ public class NoneEncoder {
   private DataOutputStream out;
   private HFileBlockDefaultEncodingContext encodingCtx;
 
-  public NoneEncoder(DataOutputStream out,
-      HFileBlockDefaultEncodingContext encodingCtx) {
+  public NoneEncoder(DataOutputStream out, HFileBlockDefaultEncodingContext encodingCtx) {
     this.out = out;
     this.encodingCtx = encodingCtx;
   }
 
-  public int write(Cell cell) throws IOException {
+  public int write(ExtendedCell cell) throws IOException {
     // We write tags seperately because though there is no tag in KV
     // if the hfilecontext says include tags we need the tags length to be
     // written
-    int size = KeyValueUtil.oswrite(cell, out, false);
+    int size = cell.write(out, false);
     // Write the additional tag into the stream
     if (encodingCtx.getHFileContext().isIncludesTags()) {
       int tagsLength = cell.getTagsLength();

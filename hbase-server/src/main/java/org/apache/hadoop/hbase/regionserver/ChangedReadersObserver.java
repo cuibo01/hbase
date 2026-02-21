@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,7 +19,6 @@ package org.apache.hadoop.hbase.regionserver;
 
 import java.io.IOException;
 import java.util.List;
-
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
@@ -29,16 +27,21 @@ import org.apache.yetus.audience.InterfaceAudience;
 @InterfaceAudience.Private
 public interface ChangedReadersObserver {
 
-  /**
-   * @return the read point of the current scan
-   */
+  /** Returns the read point of the current scan */
   long getReadPoint();
 
   /**
-   * Notify observers.
-   * @param sfs The new files
+   * Notify observers. <br/>
+   * NOTE:Before we invoke this method,{@link HStoreFile#increaseRefCount} is invoked for every
+   * {@link HStoreFile} in 'sfs' input parameter to prevent {@link HStoreFile} is archived after a
+   * concurrent compaction, and after this method is invoked,{@link HStoreFile#decreaseRefCount} is
+   * invoked.So if you open the {@link StoreFileReader} or {@link StoreFileScanner} asynchronously
+   * in this method,you may need to invoke {@link HStoreFile#increaseRefCount} or
+   * {@link HStoreFile#decreaseRefCount} by yourself to prevent the {@link HStoreFile}s be archived.
+   * @param sfs              The new files
    * @param memStoreScanners scanner of current memstore
    * @throws IOException e
    */
-  void updateReaders(List<HStoreFile> sfs, List<KeyValueScanner> memStoreScanners) throws IOException;
+  void updateReaders(List<HStoreFile> sfs, List<KeyValueScanner> memStoreScanners)
+    throws IOException;
 }

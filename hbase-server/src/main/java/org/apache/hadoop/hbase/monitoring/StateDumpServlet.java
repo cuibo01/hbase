@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,20 +20,21 @@ package org.apache.hadoop.hbase.monitoring;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.Map;
-
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
-
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.conf.ConfigRedactor;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.executor.ExecutorService;
 import org.apache.hadoop.hbase.executor.ExecutorService.ExecutorStatus;
 import org.apache.hadoop.hbase.util.VersionInfo;
+import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Private
 public abstract class StateDumpServlet extends HttpServlet {
   static final long DEFAULT_TAIL_KB = 100;
   private static final long serialVersionUID = 1L;
+  protected static final String REDACTED = "<redacted>";
+  protected static final String REDACTED_TEXT = "******";
 
   protected void dumpVersionInfo(PrintWriter out) {
     VersionInfo.writeTo(out);
@@ -42,11 +42,11 @@ public abstract class StateDumpServlet extends HttpServlet {
     out.println("Hadoop " + org.apache.hadoop.util.VersionInfo.getVersion());
     out.println("Source code repository " + org.apache.hadoop.util.VersionInfo.getUrl()
       + " revision=" + org.apache.hadoop.util.VersionInfo.getRevision());
-    out.println("Compiled by " + org.apache.hadoop.util.VersionInfo.getUser() +
-        " on " + org.apache.hadoop.util.VersionInfo.getDate());
+    out.println("Compiled by " + org.apache.hadoop.util.VersionInfo.getUser() + " on "
+      + org.apache.hadoop.util.VersionInfo.getDate());
   }
 
-  protected boolean isShowQueueDump(Configuration conf){
+  protected boolean isShowQueueDump(Configuration conf) {
     return conf.getBoolean("hbase.regionserver.servlet.show.queuedump", true);
   }
 
@@ -58,8 +58,7 @@ public abstract class StateDumpServlet extends HttpServlet {
     return Long.parseLong(param);
   }
 
-  protected void dumpExecutors(ExecutorService service, PrintWriter out)
-      throws IOException {
+  protected void dumpExecutors(ExecutorService service, PrintWriter out) throws IOException {
     if (service == null) {
       out.println("ExecutorService is not initialized");
       return;
@@ -69,5 +68,22 @@ public abstract class StateDumpServlet extends HttpServlet {
     for (ExecutorStatus status : statuses.values()) {
       status.dumpTo(out, "  ");
     }
+  }
+
+  protected Configuration getRedactedConfiguration(Configuration conf) {
+    // YARN-11308 introduced a new method signature to the overloaded Configuration.writeXml()
+    // method. Within this new method, the ConfigRedactor is used on the Configuration object if
+    // that object is not null. This allows the XML output to have sensitive content redacted
+    // automatically. However, this new method is only available in Hadoop 3.4 and later, so we are
+    // performing the redaction here manually in order to ensure backward compatibility.
+    ConfigRedactor redactor = new ConfigRedactor(conf);
+    String redactResult;
+    for (Map.Entry<String, String> entry : conf) {
+      redactResult = redactor.redact(entry.getKey(), entry.getValue());
+      if (REDACTED.equals(redactResult)) {
+        conf.set(entry.getKey(), REDACTED_TEXT);
+      }
+    }
+    return conf;
   }
 }

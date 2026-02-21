@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.master;
 
 import org.apache.hadoop.hbase.metrics.BaseSource;
@@ -55,7 +54,7 @@ public interface MetricsMasterSource extends BaseSource {
   String AVERAGE_LOAD_NAME = "averageLoad";
   String LIVE_REGION_SERVERS_NAME = "liveRegionServers";
   String DEAD_REGION_SERVERS_NAME = "deadRegionServers";
-  String DRAINING_REGION_SERVER_NAME = "draininigRegionServers";
+  String DRAINING_REGION_SERVER_NAME = "drainingRegionServers";
   String NUM_REGION_SERVERS_NAME = "numRegionServers";
   String NUM_DEAD_REGION_SERVERS_NAME = "numDeadRegionServers";
   String NUM_DRAINING_REGION_SERVERS_NAME = "numDrainingRegionServers";
@@ -71,10 +70,11 @@ public interface MetricsMasterSource extends BaseSource {
   String CLUSTER_REQUESTS_NAME = "clusterRequests";
   String CLUSTER_READ_REQUESTS_NAME = "clusterReadRequests";
   String CLUSTER_WRITE_REQUESTS_NAME = "clusterWriteRequests";
+  String OLD_WAL_DIR_SIZE_NAME = "oldWALsDirSize";
   String MASTER_ACTIVE_TIME_DESC = "Master Active Time";
   String MASTER_START_TIME_DESC = "Master Start Time";
   String MASTER_FINISHED_INITIALIZATION_TIME_DESC =
-          "Timestamp when Master has finished initializing";
+    "Timestamp when Master has finished initializing";
   String AVERAGE_LOAD_DESC = "AverageLoad";
   String LIVE_REGION_SERVERS_DESC = "Names of live RegionServers";
   String NUMBER_OF_REGION_SERVERS_DESC = "Number of RegionServers";
@@ -92,32 +92,26 @@ public interface MetricsMasterSource extends BaseSource {
   String OFFLINE_REGION_COUNT_DESC = "Number of Offline Regions";
 
   String SERVER_CRASH_METRIC_PREFIX = "serverCrash";
+  String OLD_WAL_DIR_SIZE_DESC = "size of old WALs directory in bytes";
 
   /**
    * Increment the number of requests the cluster has seen.
-   *
    * @param inc Ammount to increment the total by.
    */
   void incRequests(final long inc);
 
   /**
    * Increment the number of read requests the cluster has seen.
-   *
    * @param inc Ammount to increment the total by.
    */
   void incReadRequests(final long inc);
 
-
   /**
    * Increment the number of write requests the cluster has seen.
-   *
    * @param inc Ammount to increment the total by.
    */
   void incWriteRequests(final long inc);
 
-
-  /**
-   * @return {@link OperationMetrics} containing common metrics for server crash operation
-   */
+  /** Returns {@link OperationMetrics} containing common metrics for server crash operation */
   OperationMetrics getServerCrashMetrics();
 }

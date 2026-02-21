@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,15 +20,14 @@ package org.apache.hadoop.hbase.regionserver;
 import com.google.errorprone.annotations.RestrictedApi;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.nio.RefCnt;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * A MemStoreLAB implementation which wraps N MemStoreLABs. Its main duty is in proper managing the
  * close of the individual MemStoreLAB. This is treated as an immutable one and so do not allow to
- * add any more Cells into it. {@link #copyCellInto(Cell)} throws Exception
+ * add any more Cells into it. {@link #copyCellInto(ExtendedCell)} throws Exception
  */
 @InterfaceAudience.Private
 public class ImmutableMemStoreLAB implements MemStoreLAB {
@@ -46,41 +45,39 @@ public class ImmutableMemStoreLAB implements MemStoreLAB {
   }
 
   @Override
-  public Cell copyCellInto(Cell cell) {
+  public ExtendedCell copyCellInto(ExtendedCell cell) {
     throw new IllegalStateException("This is an Immutable MemStoreLAB.");
   }
 
   /**
-   * The process of merging assumes all cells are allocated on mslab.
-   * There is a rare case in which the first immutable segment,
-   * participating in a merge, is a CSLM.
-   * Since the CSLM hasn't been flattened yet, and there is no point in flattening it (since it is
-   * going to be merged), its big cells (for whom size > maxAlloc) must be copied into mslab.
-   * This method copies the passed cell into the first mslab in the mslabs list,
-   * returning either a new cell instance over the copied data,
-   * or null when this cell cannt be copied.
+   * The process of merging assumes all cells are allocated on mslab. There is a rare case in which
+   * the first immutable segment, participating in a merge, is a CSLM. Since the CSLM hasn't been
+   * flattened yet, and there is no point in flattening it (since it is going to be merged), its big
+   * cells (for whom size > maxAlloc) must be copied into mslab. This method copies the passed cell
+   * into the first mslab in the mslabs list, returning either a new cell instance over the copied
+   * data, or null when this cell cannt be copied.
    */
   @Override
-  public Cell forceCopyOfBigCellInto(Cell cell) {
+  public ExtendedCell forceCopyOfBigCellInto(ExtendedCell cell) {
     MemStoreLAB mslab = this.mslabs.get(0);
     return mslab.forceCopyOfBigCellInto(cell);
   }
 
-  /* Returning a new pool chunk, without replacing current chunk,
-  ** meaning MSLABImpl does not make the returned chunk as CurChunk.
-  ** The space on this chunk will be allocated externally.
-  ** The interface is only for external callers.
-  */
+  /*
+   * Returning a new pool chunk, without replacing current chunk, meaning MSLABImpl does not make
+   * the returned chunk as CurChunk. The space on this chunk will be allocated externally. The
+   * interface is only for external callers.
+   */
   @Override
   public Chunk getNewExternalChunk(ChunkCreator.ChunkType chunkType) {
     MemStoreLAB mslab = this.mslabs.get(0);
     return mslab.getNewExternalChunk(chunkType);
   }
 
-  /* Returning a new chunk, without replacing current chunk,
-   ** meaning MSLABImpl does not make the returned chunk as CurChunk.
-   ** The space on this chunk will be allocated externally.
-   ** The interface is only for external callers.
+  /*
+   * Returning a new chunk, without replacing current chunk, meaning MSLABImpl does not make the
+   * returned chunk as CurChunk. The space on this chunk will be allocated externally. The interface
+   * is only for external callers.
    */
   @Override
   public Chunk getNewExternalChunk(int size) {
@@ -150,6 +147,5 @@ public class ImmutableMemStoreLAB implements MemStoreLAB {
   boolean isClosed() {
     return this.closed.get();
   }
-
 
 }

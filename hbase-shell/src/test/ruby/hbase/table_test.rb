@@ -164,6 +164,21 @@ module Hbase
       assert_nil(res)
     end
 
+    define_test "delete should set proper cell type" do
+      del = @test_table._createdelete_internal('104', 'x:a', 1212)
+      assert_equal(del.get('x'.to_java_bytes, 'a'.to_java_bytes).get(0).getType.getCode,
+                   org.apache.hadoop.hbase::KeyValue::Type::DeleteColumn.getCode)
+      del = @test_table._createdelete_internal('104', 'x:a', 1212, [], false)
+      assert_equal(del.get('x'.to_java_bytes, 'a'.to_java_bytes).get(0).getType.getCode,
+                   org.apache.hadoop.hbase::KeyValue::Type::Delete.getCode)
+      del = @test_table._createdelete_internal('104', 'x', 1212)
+      assert_equal(del.get('x'.to_java_bytes, nil).get(0).getType.getCode,
+                   org.apache.hadoop.hbase::KeyValue::Type::DeleteFamily.getCode)
+      del = @test_table._createdelete_internal('104', 'x', 1212, [], false)
+      assert_equal(del.get('x'.to_java_bytes, nil).get(0).getType.getCode,
+                   org.apache.hadoop.hbase::KeyValue::Type::DeleteFamilyVersion.getCode)
+    end
+
     #-------------------------------------------------------------------------------
 
     define_test "deleteall should work w/o columns and timestamps" do
@@ -194,6 +209,13 @@ module Hbase
       assert_nil(res2)
     end
 
+    define_test "deleteall with row prefix in hbase:meta should not be allowed." do
+      assert_raise(ArgumentError) do
+        @meta_table = table('hbase:meta')
+        @meta_table.deleteall({ROWPREFIXFILTER => "test_meta"})
+      end
+    end
+
     define_test "append should work with value" do
       @test_table.append("123", 'x:cnt2', '123')
       assert_equal("123123", @test_table._append_internal("123", 'x:cnt2', '123'))
@@ -219,6 +241,42 @@ module Hbase
 
     define_test "get_counter should return nil for non-existent counters" do
       assert_nil(@test_table._get_counter_internal(12345, 'x:qqqq'))
+    end
+
+    define_test "should work with qualifiers with colons" do
+      rowkey = "123"
+
+      # Two columns with multiple colons in their qualifiers with the same prefix
+      col1 = "x:foo:bar:c1"
+      col2 = "x:foo:bar:c2"
+
+      # Make sure that no data is present
+      @test_table.deleteall(rowkey)
+
+      # Put two columns with colons in their qualifiers
+      @test_table.put(rowkey, col1, org.apache.hadoop.hbase.util.Bytes.toBytes(1))
+      @test_table.put(rowkey, col2, org.apache.hadoop.hbase.util.Bytes.toBytes(2))
+      assert_equal(2, @test_table._get_internal(rowkey).length)
+
+      # Increment the second column by 10 => 2 + 10 => 12
+      @test_table.incr(rowkey, col2, 10)
+      assert_equal(12, @test_table._get_counter_internal(rowkey, col2))
+
+      # Check the counter value using toLong converter
+      %w[:toLong :c(org.apache.hadoop.hbase.util.Bytes).toLong].each do |suffix|
+        res = @test_table._get_internal(rowkey, { COLUMNS => [col2 + suffix] })
+        assert_not_nil(res)
+        assert_kind_of(Hash, res)
+        assert_not_nil(/value=12/.match(res[col2]))
+      end
+
+      # Delete the first column
+      @test_table.delete(rowkey, col1)
+      assert_equal(1, @test_table._get_internal(rowkey).length)
+
+      # Append twice to the deleted column
+      @test_table.append(rowkey, col1, '123')
+      assert_equal("123123", @test_table._append_internal(rowkey, col1, '123'))
     end
   end
 
@@ -659,11 +717,15 @@ module Hbase
       create_test_table(@test_name_raw)
       @test_table = table(@test_name_raw)
 
-      # Instert test data
+      # Insert test data
       @test_table.put(1, "x:a", 1)
+      sleep(1.0/1000.0)
       @test_table.put(2, "x:raw1", 11)
+      sleep(1.0/1000.0)
       @test_table.put(2, "x:raw1", 11)
+      sleep(1.0/1000.0)
       @test_table.put(2, "x:raw1", 11)
+      sleep(1.0/1000.0)
       @test_table.put(2, "x:raw1", 11)
 
       args = {}

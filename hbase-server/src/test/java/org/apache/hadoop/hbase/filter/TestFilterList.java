@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -28,10 +28,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CompareOperator;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
@@ -51,12 +51,12 @@ import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 
-@Category({FilterTests.class, MediumTests.class})
+@Category({ FilterTests.class, MediumTests.class })
 public class TestFilterList {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestFilterList.class);
+    HBaseClassTestRule.forClass(TestFilterList.class);
 
   static final int MAX_PAGES = 2;
 
@@ -119,9 +119,9 @@ public class TestFilterList {
     } catch (IllegalArgumentException e) {
     }
   }
+
   /**
    * Test "must pass one"
-   * @throws Exception
    */
   @Test
   public void testMPONE() throws Exception {
@@ -132,33 +132,27 @@ public class TestFilterList {
     List<Filter> filters = new ArrayList<>();
     filters.add(new PageFilter(MAX_PAGES));
     filters.add(new WhileMatchFilter(new PrefixFilter(Bytes.toBytes("yyy"))));
-    Filter filterMPONE =
-      new FilterList(FilterList.Operator.MUST_PASS_ONE, filters);
+    Filter filterMPONE = new FilterList(FilterList.Operator.MUST_PASS_ONE, filters);
     return filterMPONE;
   }
 
   private void mpOneTest(Filter filterMPONE) throws Exception {
-    /* Filter must do all below steps:
-     * <ul>
-     * <li>{@link #reset()}</li>
-     * <li>{@link #filterAllRemaining()} -> true indicates scan is over, false, keep going on.</li>
-     * <li>{@link #filterRowKey(byte[],int,int)} -> true to drop this row,
-     * if false, we will also call</li>
+    /*
+     * Filter must do all below steps: <ul> <li>{@link #reset()}</li> <li>{@link
+     * #filterAllRemaining()} -> true indicates scan is over, false, keep going on.</li> <li>{@link
+     * #filterRowKey(byte[],int,int)} -> true to drop this row, if false, we will also call</li>
      * <li>{@link #filterCell(org.apache.hadoop.hbase.KeyValue)} -> true to drop this cell</li>
      * <li>{@link #filterRow()} -> last chance to drop entire row based on the sequence of
-     * filterValue() calls. Eg: filter a row if it doesn't contain a specified column.
-     * </li>
-     * </ul>
-    */
+     * filterValue() calls. Eg: filter a row if it doesn't contain a specified column. </li> </ul>
+     */
     filterMPONE.reset();
     assertFalse(filterMPONE.filterAllRemaining());
 
     /* Will pass both */
-    byte [] rowkey = Bytes.toBytes("yyyyyyyyy");
+    byte[] rowkey = Bytes.toBytes("yyyyyyyyy");
     for (int i = 0; i < MAX_PAGES - 1; i++) {
       assertFalse(filterMPONE.filterRowKey(KeyValueUtil.createFirstOnRow(rowkey)));
-      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i),
-        Bytes.toBytes(i));
+      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i), Bytes.toBytes(i));
       assertTrue(Filter.ReturnCode.INCLUDE == filterMPONE.filterCell(kv));
       assertFalse(filterMPONE.filterRow());
     }
@@ -166,18 +160,18 @@ public class TestFilterList {
     /* Only pass PageFilter */
     rowkey = Bytes.toBytes("z");
     assertFalse(filterMPONE.filterRowKey(KeyValueUtil.createFirstOnRow(rowkey)));
-    KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(0),
-        Bytes.toBytes(0));
+    KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(0), Bytes.toBytes(0));
     assertTrue(Filter.ReturnCode.INCLUDE == filterMPONE.filterCell(kv));
     assertFalse(filterMPONE.filterRow());
 
     /* reach MAX_PAGES already, should filter any rows */
     rowkey = Bytes.toBytes("yyy");
     assertTrue(filterMPONE.filterRowKey(KeyValueUtil.createFirstOnRow(rowkey)));
-    kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(0),
-        Bytes.toBytes(0));
+    kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(0), Bytes.toBytes(0));
     assertFalse(Filter.ReturnCode.INCLUDE == filterMPONE.filterCell(kv));
-    assertFalse(filterMPONE.filterRow());
+    // FilterList.filterRow() returns true because previously "z" was filtered out (return true) by
+    // PrefixFilter.filterRowKey()
+    assertTrue(filterMPONE.filterRow());
 
     /* We should filter any row */
     rowkey = Bytes.toBytes("z");
@@ -187,7 +181,6 @@ public class TestFilterList {
 
   /**
    * Test "must pass all"
-   * @throws Exception
    */
   @Test
   public void testMPALL() throws Exception {
@@ -198,31 +191,25 @@ public class TestFilterList {
     List<Filter> filters = new ArrayList<>();
     filters.add(new PageFilter(MAX_PAGES));
     filters.add(new WhileMatchFilter(new PrefixFilter(Bytes.toBytes("yyy"))));
-    Filter filterMPALL =
-      new FilterList(FilterList.Operator.MUST_PASS_ALL, filters);
+    Filter filterMPALL = new FilterList(FilterList.Operator.MUST_PASS_ALL, filters);
     return filterMPALL;
   }
 
   private void mpAllTest(Filter filterMPALL) throws Exception {
-    /* Filter must do all below steps:
-     * <ul>
-     * <li>{@link #reset()}</li>
-     * <li>{@link #filterAllRemaining()} -> true indicates scan is over, false, keep going on.</li>
-     * <li>{@link #filterRowKey(byte[],int,int)} -> true to drop this row,
-     * if false, we will also call</li>
+    /*
+     * Filter must do all below steps: <ul> <li>{@link #reset()}</li> <li>{@link
+     * #filterAllRemaining()} -> true indicates scan is over, false, keep going on.</li> <li>{@link
+     * #filterRowKey(byte[],int,int)} -> true to drop this row, if false, we will also call</li>
      * <li>{@link #filterCell(org.apache.hadoop.hbase.KeyValue)} -> true to drop this cell</li>
      * <li>{@link #filterRow()} -> last chance to drop entire row based on the sequence of
-     * filterValue() calls. Eg: filter a row if it doesn't contain a specified column.
-     * </li>
-     * </ul>
-    */
+     * filterValue() calls. Eg: filter a row if it doesn't contain a specified column. </li> </ul>
+     */
     filterMPALL.reset();
     assertFalse(filterMPALL.filterAllRemaining());
-    byte [] rowkey = Bytes.toBytes("yyyyyyyyy");
+    byte[] rowkey = Bytes.toBytes("yyyyyyyyy");
     for (int i = 0; i < MAX_PAGES - 1; i++) {
       assertFalse(filterMPALL.filterRowKey(KeyValueUtil.createFirstOnRow(rowkey)));
-      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i),
-        Bytes.toBytes(i));
+      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i), Bytes.toBytes(i));
       assertTrue(Filter.ReturnCode.INCLUDE == filterMPALL.filterCell(kv));
     }
     filterMPALL.reset();
@@ -235,7 +222,6 @@ public class TestFilterList {
 
   /**
    * Test list ordering
-   * @throws Exception
    */
   @Test
   public void testOrdering() throws Exception {
@@ -246,34 +232,28 @@ public class TestFilterList {
     List<Filter> filters = new ArrayList<>();
     filters.add(new PrefixFilter(Bytes.toBytes("yyy")));
     filters.add(new PageFilter(MAX_PAGES));
-    Filter filterMPONE =
-      new FilterList(FilterList.Operator.MUST_PASS_ONE, filters);
+    Filter filterMPONE = new FilterList(FilterList.Operator.MUST_PASS_ONE, filters);
     return filterMPONE;
   }
 
   public void orderingTest(Filter filterMPONE) throws Exception {
-    /* Filter must do all below steps:
-     * <ul>
-     * <li>{@link #reset()}</li>
-     * <li>{@link #filterAllRemaining()} -> true indicates scan is over, false, keep going on.</li>
-     * <li>{@link #filterRowKey(byte[],int,int)} -> true to drop this row,
-     * if false, we will also call</li>
+    /*
+     * Filter must do all below steps: <ul> <li>{@link #reset()}</li> <li>{@link
+     * #filterAllRemaining()} -> true indicates scan is over, false, keep going on.</li> <li>{@link
+     * #filterRowKey(byte[],int,int)} -> true to drop this row, if false, we will also call</li>
      * <li>{@link #filterCell(org.apache.hadoop.hbase.KeyValue)} -> true to drop this key/value</li>
      * <li>{@link #filterRow()} -> last chance to drop entire row based on the sequence of
-     * filterValue() calls. Eg: filter a row if it doesn't contain a specified column.
-     * </li>
-     * </ul>
-    */
+     * filterValue() calls. Eg: filter a row if it doesn't contain a specified column. </li> </ul>
+     */
     filterMPONE.reset();
     assertFalse(filterMPONE.filterAllRemaining());
 
     /* We should be able to fill MAX_PAGES without incrementing page counter */
-    byte [] rowkey = Bytes.toBytes("yyyyyyyy");
+    byte[] rowkey = Bytes.toBytes("yyyyyyyy");
     for (int i = 0; i < MAX_PAGES; i++) {
       assertFalse(filterMPONE.filterRowKey(KeyValueUtil.createFirstOnRow(rowkey)));
-      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i),
-          Bytes.toBytes(i));
-        assertTrue(Filter.ReturnCode.INCLUDE == filterMPONE.filterCell(kv));
+      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i), Bytes.toBytes(i));
+      assertTrue(Filter.ReturnCode.INCLUDE == filterMPONE.filterCell(kv));
       assertFalse(filterMPONE.filterRow());
     }
 
@@ -281,9 +261,8 @@ public class TestFilterList {
     rowkey = Bytes.toBytes("xxxxxxx");
     for (int i = 0; i < MAX_PAGES; i++) {
       assertFalse(filterMPONE.filterRowKey(KeyValueUtil.createFirstOnRow(rowkey)));
-      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i),
-          Bytes.toBytes(i));
-        assertTrue(Filter.ReturnCode.INCLUDE == filterMPONE.filterCell(kv));
+      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i), Bytes.toBytes(i));
+      assertTrue(Filter.ReturnCode.INCLUDE == filterMPONE.filterCell(kv));
       assertFalse(filterMPONE.filterRow());
     }
 
@@ -291,17 +270,15 @@ public class TestFilterList {
     rowkey = Bytes.toBytes("yyy");
     for (int i = 0; i < MAX_PAGES; i++) {
       assertFalse(filterMPONE.filterRowKey(KeyValueUtil.createFirstOnRow(rowkey)));
-      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i),
-          Bytes.toBytes(i));
-        assertTrue(Filter.ReturnCode.INCLUDE == filterMPONE.filterCell(kv));
+      KeyValue kv = new KeyValue(rowkey, rowkey, Bytes.toBytes(i), Bytes.toBytes(i));
+      assertTrue(Filter.ReturnCode.INCLUDE == filterMPONE.filterCell(kv));
       assertFalse(filterMPONE.filterRow());
     }
   }
 
   /**
-   * When we do a "MUST_PASS_ONE" (a logical 'OR') of the above two filters
-   * we expect to get the same result as the 'prefix' only result.
-   * @throws Exception
+   * When we do a "MUST_PASS_ONE" (a logical 'OR') of the above two filters we expect to get the
+   * same result as the 'prefix' only result.
    */
   @Test
   public void testFilterListTwoFiltersMustPassOne() throws Exception {
@@ -332,9 +309,8 @@ public class TestFilterList {
   }
 
   /**
-   * When we do a "MUST_PASS_ONE" (a logical 'OR') of the two filters
-   * we expect to get the same result as the inclusive stop result.
-   * @throws Exception
+   * When we do a "MUST_PASS_ONE" (a logical 'OR') of the two filters we expect to get the same
+   * result as the inclusive stop result.
    */
   @Test
   public void testFilterListWithInclusiveStopFilterMustPassOne() throws Exception {
@@ -365,22 +341,20 @@ public class TestFilterList {
     }
 
     public static AlwaysNextColFilter parseFrom(final byte[] pbBytes)
-        throws DeserializationException {
+      throws DeserializationException {
       return new AlwaysNextColFilter();
     }
   }
 
   /**
    * Test serialization
-   * @throws Exception
    */
   @Test
   public void testSerialization() throws Exception {
     List<Filter> filters = new ArrayList<>();
     filters.add(new PageFilter(MAX_PAGES));
     filters.add(new WhileMatchFilter(new PrefixFilter(Bytes.toBytes("yyy"))));
-    Filter filterMPALL =
-      new FilterList(FilterList.Operator.MUST_PASS_ALL, filters);
+    Filter filterMPALL = new FilterList(FilterList.Operator.MUST_PASS_ALL, filters);
 
     // Decompose filterMPALL to bytes.
     byte[] buffer = filterMPALL.toByteArray();
@@ -396,7 +370,6 @@ public class TestFilterList {
 
   /**
    * Test filterCell logic.
-   * @throws Exception
    */
   @Test
   public void testFilterCell() throws Exception {
@@ -412,8 +385,8 @@ public class TestFilterList {
 
       @Override
       public Filter.ReturnCode filterCell(final Cell v) {
-        Filter.ReturnCode returnCode = returnInclude ? Filter.ReturnCode.INCLUDE :
-                                                       Filter.ReturnCode.SKIP;
+        Filter.ReturnCode returnCode =
+          returnInclude ? Filter.ReturnCode.INCLUDE : Filter.ReturnCode.SKIP;
         returnInclude = !returnInclude;
         return returnCode;
       }
@@ -424,8 +397,8 @@ public class TestFilterList {
 
       @Override
       public Filter.ReturnCode filterCell(final Cell v) {
-        Filter.ReturnCode returnCode = returnIncludeOnly ? Filter.ReturnCode.INCLUDE :
-                                                           Filter.ReturnCode.INCLUDE_AND_NEXT_COL;
+        Filter.ReturnCode returnCode =
+          returnIncludeOnly ? Filter.ReturnCode.INCLUDE : Filter.ReturnCode.INCLUDE_AND_NEXT_COL;
         returnIncludeOnly = !returnIncludeOnly;
         return returnCode;
       }
@@ -433,7 +406,7 @@ public class TestFilterList {
 
     // Check must pass one filter.
     FilterList mpOnefilterList = new FilterList(Operator.MUST_PASS_ONE,
-        Arrays.asList(new Filter[] { includeFilter, alternateIncludeFilter, alternateFilter }));
+      Arrays.asList(new Filter[] { includeFilter, alternateIncludeFilter, alternateFilter }));
     // INCLUDE, INCLUDE, INCLUDE_AND_NEXT_COL.
     assertEquals(ReturnCode.INCLUDE, mpOnefilterList.filterCell(null));
     // INCLUDE, SKIP, INCLUDE.
@@ -441,7 +414,7 @@ public class TestFilterList {
 
     // Check must pass all filter.
     FilterList mpAllfilterList = new FilterList(Operator.MUST_PASS_ALL,
-        Arrays.asList(new Filter[] { includeFilter, alternateIncludeFilter, alternateFilter }));
+      Arrays.asList(new Filter[] { includeFilter, alternateIncludeFilter, alternateFilter }));
     // INCLUDE, INCLUDE, INCLUDE_AND_NEXT_COL.
     assertEquals(Filter.ReturnCode.INCLUDE_AND_NEXT_COL, mpAllfilterList.filterCell(null));
     // INCLUDE, SKIP, INCLUDE.
@@ -455,12 +428,11 @@ public class TestFilterList {
   public void testHintPassThru() throws Exception {
 
     final KeyValue minKeyValue = new KeyValue(Bytes.toBytes(0L), null, null);
-    final KeyValue maxKeyValue = new KeyValue(Bytes.toBytes(Long.MAX_VALUE),
-        null, null);
+    final KeyValue maxKeyValue = new KeyValue(Bytes.toBytes(Long.MAX_VALUE), null, null);
 
     Filter filterNoHint = new FilterBase() {
       @Override
-      public byte [] toByteArray() {
+      public byte[] toByteArray() {
         return null;
       }
 
@@ -482,7 +454,9 @@ public class TestFilterList {
       }
 
       @Override
-      public byte [] toByteArray() {return null;}
+      public byte[] toByteArray() {
+        return null;
+      }
     };
 
     Filter filterMaxHint = new FilterBase() {
@@ -497,7 +471,9 @@ public class TestFilterList {
       }
 
       @Override
-      public byte [] toByteArray() {return null;}
+      public byte[] toByteArray() {
+        return null;
+      }
     };
 
     CellComparator comparator = CellComparator.getInstance();
@@ -505,86 +481,90 @@ public class TestFilterList {
 
     // Should take the min if given two hints
     FilterList filterList = new FilterList(Operator.MUST_PASS_ONE,
-        Arrays.asList(new Filter [] { filterMinHint, filterMaxHint } ));
+      Arrays.asList(new Filter[] { filterMinHint, filterMaxHint }));
     assertEquals(0, comparator.compare(filterList.getNextCellHint(null), minKeyValue));
 
     // Should have no hint if any filter has no hint
     filterList = new FilterList(Operator.MUST_PASS_ONE,
-        Arrays.asList(
-            new Filter [] { filterMinHint, filterMaxHint, filterNoHint } ));
+      Arrays.asList(new Filter[] { filterMinHint, filterMaxHint, filterNoHint }));
     assertNull(filterList.getNextCellHint(null));
     filterList = new FilterList(Operator.MUST_PASS_ONE,
-        Arrays.asList(new Filter [] { filterNoHint, filterMaxHint } ));
+      Arrays.asList(new Filter[] { filterNoHint, filterMaxHint }));
     assertNull(filterList.getNextCellHint(null));
 
     // Should give max hint if its the only one
     filterList = new FilterList(Operator.MUST_PASS_ONE,
-        Arrays.asList(new Filter[] { filterMaxHint, filterMaxHint }));
+      Arrays.asList(new Filter[] { filterMaxHint, filterMaxHint }));
     assertEquals(0, comparator.compare(filterList.getNextCellHint(null), maxKeyValue));
 
     // MUST PASS ALL
 
     // Should take the first hint
     filterList = new FilterList(Operator.MUST_PASS_ALL,
-        Arrays.asList(new Filter [] { filterMinHint, filterMaxHint } ));
+      Arrays.asList(new Filter[] { filterMinHint, filterMaxHint }));
     filterList.filterCell(null);
     assertEquals(0, comparator.compare(filterList.getNextCellHint(null), minKeyValue));
 
     filterList = new FilterList(Operator.MUST_PASS_ALL,
-        Arrays.asList(new Filter [] { filterMaxHint, filterMinHint } ));
+      Arrays.asList(new Filter[] { filterMaxHint, filterMinHint }));
     filterList.filterCell(null);
     assertEquals(0, comparator.compare(filterList.getNextCellHint(null), maxKeyValue));
 
     // Should have first hint even if a filter has no hint
     filterList = new FilterList(Operator.MUST_PASS_ALL,
-        Arrays.asList(new Filter[] { filterNoHint, filterMinHint, filterMaxHint }));
+      Arrays.asList(new Filter[] { filterNoHint, filterMinHint, filterMaxHint }));
     filterList.filterCell(null);
     assertEquals(0, comparator.compare(filterList.getNextCellHint(null), minKeyValue));
     filterList = new FilterList(Operator.MUST_PASS_ALL,
-        Arrays.asList(new Filter[] { filterNoHint, filterMaxHint }));
+      Arrays.asList(new Filter[] { filterNoHint, filterMaxHint }));
     filterList.filterCell(null);
     assertEquals(0, comparator.compare(filterList.getNextCellHint(null), maxKeyValue));
     filterList = new FilterList(Operator.MUST_PASS_ALL,
-        Arrays.asList(new Filter[] { filterNoHint, filterMinHint }));
+      Arrays.asList(new Filter[] { filterNoHint, filterMinHint }));
     filterList.filterCell(null);
     assertEquals(0, comparator.compare(filterList.getNextCellHint(null), minKeyValue));
   }
 
   /**
-   * Tests the behavior of transform() in a hierarchical filter.
-   *
-   * transform() only applies after a filterCell() whose return-code includes the KeyValue.
-   * Lazy evaluation of AND
+   * Tests the behavior of transform() in a hierarchical filter. transform() only applies after a
+   * filterCell() whose return-code includes the KeyValue. Lazy evaluation of AND
    */
   @Test
   public void testTransformMPO() throws Exception {
     // Apply the following filter:
-    //     (family=fam AND qualifier=qual1 AND KeyOnlyFilter)
-    //  OR (family=fam AND qualifier=qual2)
-    final FilterList flist = new FilterList(Operator.MUST_PASS_ONE, Lists.<Filter>newArrayList(
-        new FilterList(Operator.MUST_PASS_ALL, Lists.<Filter>newArrayList(
+    // (family=fam AND qualifier=qual1 AND KeyOnlyFilter)
+    // OR (family=fam AND qualifier=qual2)
+    final FilterList flist = new FilterList(Operator.MUST_PASS_ONE,
+      Lists.<Filter> newArrayList(
+        new FilterList(Operator.MUST_PASS_ALL,
+          Lists.<Filter> newArrayList(
             new FamilyFilter(CompareOperator.EQUAL, new BinaryComparator(Bytes.toBytes("fam"))),
-            new QualifierFilter(CompareOperator.EQUAL, new BinaryComparator(Bytes.toBytes("qual1"))),
+            new QualifierFilter(CompareOperator.EQUAL,
+              new BinaryComparator(Bytes.toBytes("qual1"))),
             new KeyOnlyFilter())),
-        new FilterList(Operator.MUST_PASS_ALL, Lists.<Filter>newArrayList(
+        new FilterList(Operator.MUST_PASS_ALL,
+          Lists.<Filter> newArrayList(
             new FamilyFilter(CompareOperator.EQUAL, new BinaryComparator(Bytes.toBytes("fam"))),
-            new QualifierFilter(CompareOperator.EQUAL, new BinaryComparator(Bytes.toBytes("qual2")))))));
+            new QualifierFilter(CompareOperator.EQUAL,
+              new BinaryComparator(Bytes.toBytes("qual2")))))));
 
-    final KeyValue kvQual1 = new KeyValue(
-        Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("qual1"), Bytes.toBytes("value"));
-    final KeyValue kvQual2 = new KeyValue(
-        Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("qual2"), Bytes.toBytes("value"));
-    final KeyValue kvQual3 = new KeyValue(
-        Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("qual3"), Bytes.toBytes("value"));
+    final KeyValue kvQual1 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"),
+      Bytes.toBytes("qual1"), Bytes.toBytes("value"));
+    final KeyValue kvQual2 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"),
+      Bytes.toBytes("qual2"), Bytes.toBytes("value"));
+    final KeyValue kvQual3 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"),
+      Bytes.toBytes("qual3"), Bytes.toBytes("value"));
 
     // Value for fam:qual1 should be stripped:
     assertEquals(Filter.ReturnCode.INCLUDE, flist.filterCell(kvQual1));
-    final KeyValue transformedQual1 = KeyValueUtil.ensureKeyValue(flist.transformCell(kvQual1));
+    final KeyValue transformedQual1 =
+      KeyValueUtil.ensureKeyValue((ExtendedCell) flist.transformCell(kvQual1));
     assertEquals(0, transformedQual1.getValueLength());
 
     // Value for fam:qual2 should not be stripped:
     assertEquals(Filter.ReturnCode.INCLUDE, flist.filterCell(kvQual2));
-    final KeyValue transformedQual2 = KeyValueUtil.ensureKeyValue(flist.transformCell(kvQual2));
+    final KeyValue transformedQual2 =
+      KeyValueUtil.ensureKeyValue((ExtendedCell) flist.transformCell(kvQual2));
     assertEquals("value", Bytes.toString(transformedQual2.getValueArray(),
       transformedQual2.getValueOffset(), transformedQual2.getValueLength()));
 
@@ -595,21 +575,21 @@ public class TestFilterList {
   @Test
   public void testWithMultiVersionsInSameRow() throws Exception {
     FilterList filterList01 =
-        new FilterList(Operator.MUST_PASS_ONE, new ColumnPaginationFilter(1, 0));
+      new FilterList(Operator.MUST_PASS_ONE, new ColumnPaginationFilter(1, 0));
 
     KeyValue kv1 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("qual"),
-        1, Bytes.toBytes("value"));
+      1, Bytes.toBytes("value"));
     KeyValue kv2 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("qual"),
-        2, Bytes.toBytes("value"));
+      2, Bytes.toBytes("value"));
     KeyValue kv3 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("qual"),
-        3, Bytes.toBytes("value"));
+      3, Bytes.toBytes("value"));
 
     assertEquals(ReturnCode.INCLUDE_AND_NEXT_COL, filterList01.filterCell(kv1));
     assertEquals(ReturnCode.NEXT_COL, filterList01.filterCell(kv2));
     assertEquals(ReturnCode.NEXT_COL, filterList01.filterCell(kv3));
 
     FilterList filterList11 =
-        new FilterList(Operator.MUST_PASS_ONE, new ColumnPaginationFilter(1, 1));
+      new FilterList(Operator.MUST_PASS_ONE, new ColumnPaginationFilter(1, 1));
 
     assertEquals(ReturnCode.NEXT_COL, filterList11.filterCell(kv1));
     assertEquals(ReturnCode.NEXT_COL, filterList11.filterCell(kv2));
@@ -620,16 +600,16 @@ public class TestFilterList {
   public void testMPONEWithSeekNextUsingHint() throws Exception {
     byte[] col = Bytes.toBytes("c");
     FilterList filterList =
-        new FilterList(Operator.MUST_PASS_ONE, new ColumnPaginationFilter(1, col));
+      new FilterList(Operator.MUST_PASS_ONE, new ColumnPaginationFilter(1, col));
 
     KeyValue kv1 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("a"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv2 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("b"), 2,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv3 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("c"), 3,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv4 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("c"), 4,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
 
     assertEquals(ReturnCode.SEEK_NEXT_USING_HINT, filterList.filterCell(kv1));
     assertEquals(ReturnCode.SEEK_NEXT_USING_HINT, filterList.filterCell(kv2));
@@ -653,13 +633,13 @@ public class TestFilterList {
 
     @Override
     public boolean equals(Object obj) {
-      if(obj == null || !(obj instanceof  MockFilter)){
+      if (obj == null || !(obj instanceof MockFilter)) {
         return false;
       }
-      if(obj == this){
+      if (obj == this) {
         return true;
       }
-      MockFilter f = (MockFilter)obj;
+      MockFilter f = (MockFilter) obj;
       return this.targetRetCode.equals(f.targetRetCode);
     }
 
@@ -669,16 +649,22 @@ public class TestFilterList {
     }
   }
 
+  private static class HintingMockFilter extends MockFilter implements HintingFilter {
+    public HintingMockFilter(ReturnCode targetRetCode) {
+      super(targetRetCode);
+    }
+  }
+
   @Test
   public void testShouldPassCurrentCellToFilter() throws IOException {
     KeyValue kv1 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("a"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv2 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("a"), 2,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv3 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("b"), 3,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv4 = new KeyValue(Bytes.toBytes("row1"), Bytes.toBytes("fam"), Bytes.toBytes("c"), 4,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
 
     MockFilter mockFilter = new MockFilter(ReturnCode.NEXT_COL);
     FilterList filter = new FilterList(Operator.MUST_PASS_ONE, mockFilter);
@@ -748,13 +734,13 @@ public class TestFilterList {
   @Test
   public void testTheMaximalRule() throws IOException {
     KeyValue kv1 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("a"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     MockFilter filter1 = new MockFilter(ReturnCode.INCLUDE);
     MockFilter filter2 = new MockFilter(ReturnCode.INCLUDE_AND_NEXT_COL);
     MockFilter filter3 = new MockFilter(ReturnCode.INCLUDE_AND_SEEK_NEXT_ROW);
     MockFilter filter4 = new MockFilter(ReturnCode.NEXT_COL);
     MockFilter filter5 = new MockFilter(ReturnCode.SKIP);
-    MockFilter filter6 = new MockFilter(ReturnCode.SEEK_NEXT_USING_HINT);
+    MockFilter filter6 = new HintingMockFilter(ReturnCode.SEEK_NEXT_USING_HINT);
     MockFilter filter7 = new MockFilter(ReturnCode.NEXT_ROW);
 
     FilterList filterList = new FilterList(Operator.MUST_PASS_ALL, filter1, filter2);
@@ -764,10 +750,10 @@ public class TestFilterList {
     assertEquals(ReturnCode.INCLUDE_AND_SEEK_NEXT_ROW, filterList.filterCell(kv1));
 
     filterList = new FilterList(Operator.MUST_PASS_ALL, filter4, filter5, filter6);
-    assertEquals(ReturnCode.NEXT_COL, filterList.filterCell(kv1));
+    assertEquals(ReturnCode.SEEK_NEXT_USING_HINT, filterList.filterCell(kv1));
 
     filterList = new FilterList(Operator.MUST_PASS_ALL, filter4, filter6);
-    assertEquals(ReturnCode.NEXT_COL, filterList.filterCell(kv1));
+    assertEquals(ReturnCode.SEEK_NEXT_USING_HINT, filterList.filterCell(kv1));
 
     filterList = new FilterList(Operator.MUST_PASS_ALL, filter3, filter1);
     assertEquals(ReturnCode.INCLUDE_AND_SEEK_NEXT_ROW, filterList.filterCell(kv1));
@@ -776,7 +762,7 @@ public class TestFilterList {
     assertEquals(ReturnCode.NEXT_ROW, filterList.filterCell(kv1));
 
     filterList = new FilterList(Operator.MUST_PASS_ALL, filter2,
-        new FilterList(Operator.MUST_PASS_ALL, filter3, filter4));
+      new FilterList(Operator.MUST_PASS_ALL, filter3, filter4));
     assertEquals(ReturnCode.NEXT_ROW, filterList.filterCell(kv1));
 
     filterList = new FilterList(Operator.MUST_PASS_ALL, filter3, filter7);
@@ -786,13 +772,13 @@ public class TestFilterList {
   @Test
   public void testTheMinimalRule() throws IOException {
     KeyValue kv1 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam"), Bytes.toBytes("a"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     MockFilter filter1 = new MockFilter(ReturnCode.INCLUDE);
     MockFilter filter2 = new MockFilter(ReturnCode.INCLUDE_AND_NEXT_COL);
     MockFilter filter3 = new MockFilter(ReturnCode.INCLUDE_AND_SEEK_NEXT_ROW);
     MockFilter filter4 = new MockFilter(ReturnCode.NEXT_COL);
     MockFilter filter5 = new MockFilter(ReturnCode.SKIP);
-    MockFilter filter6 = new MockFilter(ReturnCode.SEEK_NEXT_USING_HINT);
+    MockFilter filter6 = new HintingMockFilter(ReturnCode.SEEK_NEXT_USING_HINT);
     FilterList filterList = new FilterList(Operator.MUST_PASS_ONE, filter1, filter2);
     assertEquals(ReturnCode.INCLUDE, filterList.filterCell(kv1));
 
@@ -812,11 +798,11 @@ public class TestFilterList {
     assertEquals(ReturnCode.INCLUDE, filterList.filterCell(kv1));
 
     filterList = new FilterList(Operator.MUST_PASS_ONE, filter2,
-        new FilterList(Operator.MUST_PASS_ONE, filter3, filter4));
+      new FilterList(Operator.MUST_PASS_ONE, filter3, filter4));
     assertEquals(ReturnCode.INCLUDE_AND_NEXT_COL, filterList.filterCell(kv1));
 
     filterList = new FilterList(Operator.MUST_PASS_ONE, filter2,
-        new FilterList(Operator.MUST_PASS_ONE, filter3, filter4));
+      new FilterList(Operator.MUST_PASS_ONE, filter3, filter4));
     assertEquals(ReturnCode.INCLUDE_AND_NEXT_COL, filterList.filterCell(kv1));
 
     filterList = new FilterList(Operator.MUST_PASS_ONE, filter6, filter6);
@@ -842,13 +828,13 @@ public class TestFilterList {
 
     @Override
     public boolean equals(Object obj) {
-      if(obj == null || !(obj instanceof  MockSeekHintFilter)){
+      if (obj == null || !(obj instanceof MockSeekHintFilter)) {
         return false;
       }
-      if(obj == this){
+      if (obj == this) {
         return true;
       }
-      MockSeekHintFilter f = (MockSeekHintFilter)obj;
+      MockSeekHintFilter f = (MockSeekHintFilter) obj;
       return this.returnCell.equals(f.returnCell);
     }
 
@@ -861,11 +847,11 @@ public class TestFilterList {
   @Test
   public void testReversedFilterListWithMockSeekHintFilter() throws IOException {
     KeyValue kv1 = new KeyValue(Bytes.toBytes("row1"), Bytes.toBytes("fam"), Bytes.toBytes("a"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv2 = new KeyValue(Bytes.toBytes("row2"), Bytes.toBytes("fam"), Bytes.toBytes("a"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv3 = new KeyValue(Bytes.toBytes("row3"), Bytes.toBytes("fam"), Bytes.toBytes("a"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     Filter filter1 = new MockSeekHintFilter(kv1);
     filter1.setReversed(true);
     Filter filter2 = new MockSeekHintFilter(kv2);
@@ -932,18 +918,18 @@ public class TestFilterList {
   public void testKeyOnlyFilterTransformCell() throws IOException {
     Cell c;
     KeyValue kv1 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("cf"), Bytes.toBytes("column1"),
-        1, Bytes.toBytes("value1"));
+      1, Bytes.toBytes("value1"));
     KeyValue kv2 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("cf"), Bytes.toBytes("column1"),
-        2, Bytes.toBytes("value2"));
+      2, Bytes.toBytes("value2"));
 
     Filter filter1 = new SingleColumnValueFilter(Bytes.toBytes("cf"), Bytes.toBytes("column1"),
-        CompareOperator.EQUAL, Bytes.toBytes("value1"));
+      CompareOperator.EQUAL, Bytes.toBytes("value1"));
     Filter filter2 = new SingleColumnValueFilter(Bytes.toBytes("cf"), Bytes.toBytes("column1"),
-        CompareOperator.EQUAL, Bytes.toBytes("value2"));
+      CompareOperator.EQUAL, Bytes.toBytes("value2"));
     FilterList internalFilterList = new FilterList(Operator.MUST_PASS_ONE, filter1, filter2);
 
     FilterList keyOnlyFilterFirst =
-        new FilterList(Operator.MUST_PASS_ALL, new KeyOnlyFilter(), internalFilterList);
+      new FilterList(Operator.MUST_PASS_ALL, new KeyOnlyFilter(), internalFilterList);
 
     assertEquals(ReturnCode.INCLUDE, keyOnlyFilterFirst.filterCell(kv1));
     c = keyOnlyFilterFirst.transformCell(kv1);
@@ -954,7 +940,7 @@ public class TestFilterList {
 
     internalFilterList.reset();
     FilterList keyOnlyFilterLast =
-        new FilterList(Operator.MUST_PASS_ALL, new KeyOnlyFilter(), internalFilterList);
+      new FilterList(Operator.MUST_PASS_ALL, new KeyOnlyFilter(), internalFilterList);
     assertEquals(ReturnCode.INCLUDE, keyOnlyFilterLast.filterCell(kv1));
     c = keyOnlyFilterLast.transformCell(kv1);
     assertEquals(0, c.getValueLength());
@@ -966,7 +952,7 @@ public class TestFilterList {
   @Test
   public void testEmptyFilterListTransformCell() throws IOException {
     KeyValue kv = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("cf"), Bytes.toBytes("column1"),
-        1, Bytes.toBytes("value"));
+      1, Bytes.toBytes("value"));
     FilterList filterList = new FilterList(Operator.MUST_PASS_ALL);
     assertEquals(ReturnCode.INCLUDE, filterList.filterCell(kv));
     assertEquals(kv, filterList.transformCell(kv));
@@ -993,9 +979,9 @@ public class TestFilterList {
   @Test
   public void testRowCountFilter() throws IOException {
     KeyValue kv1 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam1"), Bytes.toBytes("a"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv2 = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("fam2"), Bytes.toBytes("a"), 2,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     MockNextRowFilter mockNextRowFilter = new MockNextRowFilter();
     FilterList filter = new FilterList(Operator.MUST_PASS_ONE, mockNextRowFilter);
     filter.filterCell(kv1);
@@ -1028,13 +1014,13 @@ public class TestFilterList {
 
     @Override
     public boolean equals(Object obj) {
-      if(!(obj instanceof  TransformFilter)){
+      if (!(obj instanceof TransformFilter)) {
         return false;
       }
       if (obj == this) {
         return true;
       }
-      TransformFilter f = (TransformFilter)obj;
+      TransformFilter f = (TransformFilter) obj;
       return this.targetRetCode.equals(f.targetRetCode);
     }
 
@@ -1046,9 +1032,8 @@ public class TestFilterList {
 
   @Test
   public void testTransformCell() throws IOException {
-    KeyValue kv =
-        new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("cf"), Bytes.toBytes("column1"), 1,
-            Bytes.toBytes("value"));
+    KeyValue kv = new KeyValue(Bytes.toBytes("row"), Bytes.toBytes("cf"), Bytes.toBytes("column1"),
+      1, Bytes.toBytes("value"));
 
     // case MUST_PASS_ONE
     TransformFilter filter1 = new TransformFilter(ReturnCode.INCLUDE);
@@ -1078,13 +1063,13 @@ public class TestFilterList {
   public void testFilterListWithORWhenPassingCellMismatchPreviousRC() throws IOException {
     // Mainly test FilterListWithOR#calculateReturnCodeByPrevCellAndRC method with two sub-filters.
     KeyValue kv1 = new KeyValue(Bytes.toBytes("row1"), Bytes.toBytes("fam"), Bytes.toBytes("a"),
-        100, Bytes.toBytes("value"));
+      100, Bytes.toBytes("value"));
     KeyValue kv2 = new KeyValue(Bytes.toBytes("row1"), Bytes.toBytes("fam"), Bytes.toBytes("a"), 99,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv3 = new KeyValue(Bytes.toBytes("row1"), Bytes.toBytes("fam"), Bytes.toBytes("b"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     KeyValue kv4 = new KeyValue(Bytes.toBytes("row1"), Bytes.toBytes("fan"), Bytes.toBytes("a"), 1,
-        Bytes.toBytes("value"));
+      Bytes.toBytes("value"));
     Filter subFilter1 = Mockito.mock(FilterBase.class);
     Mockito.when(subFilter1.filterCell(kv1)).thenReturn(ReturnCode.INCLUDE_AND_NEXT_COL);
     Mockito.when(subFilter1.filterCell(kv2)).thenReturn(ReturnCode.NEXT_COL);
@@ -1123,4 +1108,3 @@ public class TestFilterList {
     Assert.assertEquals(ReturnCode.SEEK_NEXT_USING_HINT, filterList.filterCell(kv1));
   }
 }
-

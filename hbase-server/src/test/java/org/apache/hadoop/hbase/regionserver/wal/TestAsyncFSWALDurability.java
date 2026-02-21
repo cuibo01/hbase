@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -24,6 +24,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.io.asyncfs.monitor.StreamSlowMonitor;
 import org.apache.hadoop.hbase.regionserver.RegionServerServices;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.wal.WALProvider.AsyncWriter;
@@ -52,12 +53,12 @@ public class TestAsyncFSWALDurability extends WALDurabilityTestBase<CustomAsyncF
   }
 
   @AfterClass
-  public static void tearDownAfterClass() {
-    GROUP.shutdownGracefully();
+  public static void tearDownAfterClass() throws Exception {
+    GROUP.shutdownGracefully().get();
   }
 
   @Override
-  protected CustomAsyncFSWAL getWAL(FileSystem fs, Path root, String logDir, Configuration conf)
+  protected CustomAsyncFSWAL getWAL0(FileSystem fs, Path root, String logDir, Configuration conf)
     throws IOException {
     CustomAsyncFSWAL wal =
       new CustomAsyncFSWAL(fs, root, logDir, conf, GROUP, NioSocketChannel.class);
@@ -90,13 +91,14 @@ class CustomAsyncFSWAL extends AsyncFSWAL {
   public CustomAsyncFSWAL(FileSystem fs, Path rootDir, String logDir, Configuration conf,
     EventLoopGroup eventLoopGroup, Class<? extends Channel> channelClass)
     throws FailedLogCloseException, IOException {
-    super(fs, rootDir, logDir, HConstants.HREGION_OLDLOGDIR_NAME, conf, null, true, null, null,
-      eventLoopGroup, channelClass);
+    super(fs, null, rootDir, logDir, HConstants.HREGION_OLDLOGDIR_NAME, conf, null, true, null,
+      null, null, null, eventLoopGroup, channelClass,
+      StreamSlowMonitor.create(conf, "monitorForSuffix"));
   }
 
   @Override
-  protected AsyncWriter createWriterInstance(Path path) throws IOException {
-    AsyncWriter writer = super.createWriterInstance(path);
+  protected AsyncWriter createWriterInstance(FileSystem fs, Path path) throws IOException {
+    AsyncWriter writer = super.createWriterInstance(fs, path);
     return new AsyncWriter() {
 
       @Override

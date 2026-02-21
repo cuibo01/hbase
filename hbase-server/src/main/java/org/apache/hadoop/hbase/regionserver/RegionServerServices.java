@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -33,6 +32,7 @@ import org.apache.hadoop.hbase.client.locking.EntityLock;
 import org.apache.hadoop.hbase.executor.ExecutorService;
 import org.apache.hadoop.hbase.io.hfile.BlockCache;
 import org.apache.hadoop.hbase.ipc.RpcServerInterface;
+import org.apache.hadoop.hbase.keymeta.KeyManagementService;
 import org.apache.hadoop.hbase.mob.MobFileCache;
 import org.apache.hadoop.hbase.quotas.RegionServerRpcQuotaManager;
 import org.apache.hadoop.hbase.quotas.RegionServerSpaceQuotaManager;
@@ -50,21 +50,18 @@ import org.apache.hbase.thirdparty.com.google.protobuf.Service;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition.TransitionCode;
 
 /**
- * A curated subset of services provided by {@link HRegionServer}.
- * For use internally only. Passed to Managers, Services and Chores so can pass less-than-a
- * full-on HRegionServer at test-time. Be judicious adding API. Changes cause ripples through
- * the code base.
+ * A curated subset of services provided by {@link HRegionServer}. For use internally only. Passed
+ * to Managers, Services and Chores so can pass less-than-a full-on HRegionServer at test-time. Be
+ * judicious adding API. Changes cause ripples through the code base.
  */
 @InterfaceAudience.Private
-public interface RegionServerServices extends Server, MutableOnlineRegions, FavoredNodesForRegion {
+public interface RegionServerServices
+  extends Server, MutableOnlineRegions, FavoredNodesForRegion, KeyManagementService {
 
-  /** @return the WAL for a particular region. Pass null for getting the
-   * default (common) WAL */
+  /** Returns the WAL for a particular region. Pass null for getting the default (common) WAL */
   WAL getWAL(RegionInfo regionInfo) throws IOException;
 
-  /** @return the List of WALs that are used by this server
-   *  Doesn't include the meta WAL
-   */
+  /** Returns the List of WALs that are used by this server Doesn't include the meta WAL */
   List<WAL> getWALs() throws IOException;
 
   /**
@@ -79,24 +76,16 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
    */
   CompactionRequester getCompactionRequestor();
 
-  /**
-   * @return the RegionServerAccounting for this Region Server
-   */
+  /** Returns the RegionServerAccounting for this Region Server */
   RegionServerAccounting getRegionServerAccounting();
 
-  /**
-   * @return RegionServer's instance of {@link RegionServerRpcQuotaManager}
-   */
+  /** Returns RegionServer's instance of {@link RegionServerRpcQuotaManager} */
   RegionServerRpcQuotaManager getRegionServerRpcQuotaManager();
 
-  /**
-   * @return RegionServer's instance of {@link SecureBulkLoadManager}
-   */
+  /** Returns RegionServer's instance of {@link SecureBulkLoadManager} */
   SecureBulkLoadManager getSecureBulkLoadManager();
 
-  /**
-   * @return RegionServer's instance of {@link RegionServerSpaceQuotaManager}
-   */
+  /** Returns RegionServer's instance of {@link RegionServerSpaceQuotaManager} */
   RegionServerSpaceQuotaManager getRegionServerSpaceQuotaManager();
 
   /**
@@ -106,11 +95,14 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
     private final HRegion region;
     private final long openProcId;
     private final long masterSystemTime;
+    private final long initiatingMasterActiveTime;
 
-    public PostOpenDeployContext(HRegion region, long openProcId, long masterSystemTime) {
+    public PostOpenDeployContext(HRegion region, long openProcId, long masterSystemTime,
+      long initiatingMasterActiveTime) {
       this.region = region;
       this.openProcId = openProcId;
       this.masterSystemTime = masterSystemTime;
+      this.initiatingMasterActiveTime = initiatingMasterActiveTime;
     }
 
     public HRegion getRegion() {
@@ -124,6 +116,10 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
     public long getMasterSystemTime() {
       return masterSystemTime;
     }
+
+    public long getInitiatingMasterActiveTime() {
+      return initiatingMasterActiveTime;
+    }
   }
 
   /**
@@ -136,23 +132,26 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
     private final TransitionCode code;
     private final long openSeqNum;
     private final long masterSystemTime;
+    private final long initiatingMasterActiveTime;
     private final long[] procIds;
     private final RegionInfo[] hris;
 
     public RegionStateTransitionContext(TransitionCode code, long openSeqNum, long masterSystemTime,
-        RegionInfo... hris) {
+      long initiatingMasterActiveTime, RegionInfo... hris) {
       this.code = code;
       this.openSeqNum = openSeqNum;
       this.masterSystemTime = masterSystemTime;
+      this.initiatingMasterActiveTime = initiatingMasterActiveTime;
       this.hris = hris;
       this.procIds = new long[hris.length];
     }
 
     public RegionStateTransitionContext(TransitionCode code, long openSeqNum, long procId,
-        long masterSystemTime, RegionInfo hri) {
+      long masterSystemTime, RegionInfo hri, long initiatingMasterActiveTime) {
       this.code = code;
       this.openSeqNum = openSeqNum;
       this.masterSystemTime = masterSystemTime;
+      this.initiatingMasterActiveTime = initiatingMasterActiveTime;
       this.hris = new RegionInfo[] { hri };
       this.procIds = new long[] { procId };
     }
@@ -176,6 +175,10 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
     public long[] getProcIds() {
       return procIds;
     }
+
+    public long getInitiatingMasterActiveTime() {
+      return initiatingMasterActiveTime;
+    }
   }
 
   /**
@@ -194,14 +197,10 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
    */
   ConcurrentMap<byte[], Boolean> getRegionsInTransitionInRS();
 
-  /**
-   * @return The RegionServer's "Leases" service
-   */
+  /** Returns The RegionServer's "Leases" service */
   LeaseManager getLeaseManager();
 
-  /**
-   * @return hbase executor service
-   */
+  /** Returns hbase executor service */
   ExecutorService getExecutorService();
 
   /**
@@ -218,9 +217,7 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
    */
   boolean registerService(Service service);
 
-  /**
-   * @return heap memory manager instance
-   */
+  /** Returns heap memory manager instance */
   HeapMemoryManager getHeapMemoryManager();
 
   /**
@@ -231,9 +228,7 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
    */
   double getCompactionPressure();
 
-  /**
-   * @return the controller to avoid flush too fast
-   */
+  /** Returns the controller to avoid flush too fast */
   ThroughputController getFlushThroughputController();
 
   /**
@@ -244,16 +239,14 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
   @Deprecated
   double getFlushPressure();
 
-  /**
-   * @return the metrics tracker for the region server
-   */
+  /** Returns the metrics tracker for the region server */
   MetricsRegionServer getMetrics();
 
   /**
    * Master based locks on namespaces/tables/regions.
    */
-  EntityLock regionLock(List<RegionInfo> regionInfos, String description,
-      Abortable abort) throws IOException;
+  EntityLock regionLock(List<RegionInfo> regionInfos, String description, Abortable abort)
+    throws IOException;
 
   /**
    * Unassign the given region from the current regionserver and assign it randomly. Could still be
@@ -267,7 +260,6 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
 
   /**
    * Reports the provided Region sizes hosted by this RegionServer to the active Master.
-   *
    * @param sizeStore The sizes for Regions locally hosted.
    * @return {@code false} if reporting should be temporarily paused, {@code true} otherwise.
    */
@@ -276,47 +268,32 @@ public interface RegionServerServices extends Server, MutableOnlineRegions, Favo
   /**
    * Reports a collection of files, and their sizes, that belonged to the given {@code table} were
    * just moved to the archive directory.
-   *
-   * @param tableName The name of the table that files previously belonged to
+   * @param tableName     The name of the table that files previously belonged to
    * @param archivedFiles Files and their sizes that were moved to archive
    * @return {@code true} if the files were successfully reported, {@code false} otherwise.
    */
-  boolean reportFileArchivalForQuotas(
-      TableName tableName, Collection<Entry<String,Long>> archivedFiles);
+  boolean reportFileArchivalForQuotas(TableName tableName,
+    Collection<Entry<String, Long>> archivedFiles);
 
-  /**
-   * @return True if cluster is up; false if cluster is not up (we are shutting down).
-   */
+  /** Returns True if cluster is up; false if cluster is not up (we are shutting down). */
   boolean isClusterUp();
 
-  /**
-   * @return Return the object that implements the replication source executorService.
-   */
+  /** Returns Return the object that implements the replication source executorService. */
   ReplicationSourceService getReplicationSourceService();
 
-  /**
-   * @return Return table descriptors implementation.
-   */
+  /** Returns Return table descriptors implementation. */
   TableDescriptors getTableDescriptors();
 
-  /**
-   * @return The block cache instance.
-   */
+  /** Returns The block cache instance. */
   Optional<BlockCache> getBlockCache();
 
-  /**
-   * @return The cache for mob files.
-   */
+  /** Returns The cache for mob files. */
   Optional<MobFileCache> getMobFileCache();
 
-  /**
-   * @return the {@link AccessChecker}
-   */
+  /** Returns the {@link AccessChecker} */
   AccessChecker getAccessChecker();
 
-  /**
-   * @return {@link ZKPermissionWatcher}
-   */
+  /** Returns {@link ZKPermissionWatcher} */
   ZKPermissionWatcher getZKPermissionWatcher();
 
   RegionReplicationBufferManager getRegionReplicationBufferManager();

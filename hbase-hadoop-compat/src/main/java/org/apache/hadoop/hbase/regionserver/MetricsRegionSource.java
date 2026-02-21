@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver;
 
 import org.apache.yetus.audience.InterfaceAudience;
@@ -45,10 +44,10 @@ public interface MetricsRegionSource extends Comparable<MetricsRegionSource> {
   String MAX_COMPACTION_QUEUE_DESC = "Max number of compactions queued for this region";
   String FLUSHES_QUEUED_DESC = "Number flushes requested/queued for this region";
   String MAX_FLUSH_QUEUE_DESC = "Max number of flushes queued for this region";
-  String  NUM_BYTES_COMPACTED_DESC =
-      "Sum of filesize on all files entering a finished, successful or aborted, compaction";
+  String NUM_BYTES_COMPACTED_DESC =
+    "Sum of filesize on all files entering a finished, successful or aborted, compaction";
   String NUM_FILES_COMPACTED_DESC =
-      "Number of files that were input for finished, successful or aborted, compactions";
+    "Number of files that were input for finished, successful or aborted, compactions";
   String COPROCESSOR_EXECUTION_STATISTICS = "coprocessorExecutionStatistics";
   String COPROCESSOR_EXECUTION_STATISTICS_DESC = "Statistics for coprocessor execution times";
   String REPLICA_ID = "replicaid";
@@ -57,6 +56,8 @@ public interface MetricsRegionSource extends Comparable<MetricsRegionSource> {
   String ROW_READS_ONLY_ON_MEMSTORE_DESC = "Row reads happening completely out of memstore";
   String MIXED_ROW_READS = "mixedRowReadsCount";
   String MIXED_ROW_READS_ON_STORE_DESC = "Row reads happening out of files and memstore on store";
+  String TABLE_DESCRIPTOR_HASH = "tableDescriptorHash";
+  String TABLE_DESCRIPTOR_HASH_DESC = "The hash of the current table descriptor";
 
   /**
    * Close the region's metrics as this region is closing.
@@ -74,15 +75,14 @@ public interface MetricsRegionSource extends Comparable<MetricsRegionSource> {
   void updateDelete();
 
   /**
-   * Update time of gets
-   * @param mills time for this get operation.
+   * Update related counts of gets
    */
-  void updateGet(long mills);
+  void updateGet();
 
   /**
-   * Update time used of resultScanner.next().
-   * */
-  void updateScanTime(long mills);
+   * Update related counts of resultScanner.next().
+   */
+  void updateScan();
 
   /**
    * Update related counts of increments.
@@ -98,6 +98,5 @@ public interface MetricsRegionSource extends Comparable<MetricsRegionSource> {
    * Get the aggregate source to which this reports.
    */
   MetricsRegionAggregateSource getAggregateSource();
-
 
 }

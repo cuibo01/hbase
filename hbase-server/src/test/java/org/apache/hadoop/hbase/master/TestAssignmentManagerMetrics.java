@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -55,11 +55,11 @@ public class TestAssignmentManagerMetrics {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestAssignmentManagerMetrics.class);
+    HBaseClassTestRule.forClass(TestAssignmentManagerMetrics.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestAssignmentManagerMetrics.class);
-  private static final MetricsAssertHelper METRICS_HELPER = CompatibilityFactory
-      .getInstance(MetricsAssertHelper.class);
+  private static final MetricsAssertHelper METRICS_HELPER =
+    CompatibilityFactory.getInstance(MetricsAssertHelper.class);
 
   private static SingleProcessHBaseCluster CLUSTER;
   private static HMaster MASTER;
@@ -74,8 +74,8 @@ public class TestAssignmentManagerMetrics {
     LOG.info("Starting cluster");
     Configuration conf = TEST_UTIL.getConfiguration();
 
-    // Disable sanity check for coprocessor
-    conf.setBoolean(TableDescriptorChecker.TABLE_SANITY_CHECKS, false);
+    // Enable sanity check for coprocessor, so that region reopen fails on the RS
+    conf.setBoolean(TableDescriptorChecker.TABLE_SANITY_CHECKS, true);
 
     // set RIT stuck warning threshold to a small value
     conf.setInt(HConstants.METRICS_RIT_STUCK_WARNING_THRESHOLD, 20);
@@ -100,6 +100,8 @@ public class TestAssignmentManagerMetrics {
     TEST_UTIL.startMiniCluster(1);
     CLUSTER = TEST_UTIL.getHBaseCluster();
     MASTER = CLUSTER.getMaster();
+    // Disable sanity check for coprocessor, so that modify table runs on the HMaster
+    MASTER.getConfiguration().setBoolean(TableDescriptorChecker.TABLE_SANITY_CHECKS, false);
   }
 
   @AfterClass
@@ -112,7 +114,7 @@ public class TestAssignmentManagerMetrics {
   public void testRITAssignmentManagerMetrics() throws Exception {
     final TableName TABLENAME = TableName.valueOf(name.getMethodName());
     final byte[] FAMILY = Bytes.toBytes("family");
-    try (Table table = TEST_UTIL.createTable(TABLENAME, FAMILY)){
+    try (Table table = TEST_UTIL.createTable(TABLENAME, FAMILY)) {
       final byte[] row = Bytes.toBytes("row");
       final byte[] qualifier = Bytes.toBytes("qualifier");
       final byte[] value = Bytes.toBytes("value");
@@ -126,22 +128,18 @@ public class TestAssignmentManagerMetrics {
 
       // check the RIT is 0
       MetricsAssignmentManagerSource amSource =
-          MASTER.getAssignmentManager().getAssignmentManagerMetrics().getMetricsProcSource();
+        MASTER.getAssignmentManager().getAssignmentManagerMetrics().getMetricsProcSource();
 
       METRICS_HELPER.assertGauge(MetricsAssignmentManagerSource.RIT_COUNT_NAME, 0, amSource);
       METRICS_HELPER.assertGauge(MetricsAssignmentManagerSource.RIT_COUNT_OVER_THRESHOLD_NAME, 0,
-          amSource);
+        amSource);
 
       // alter table with a non-existing coprocessor
-
       TableDescriptor htd = TableDescriptorBuilder.newBuilder(TABLENAME)
         .setColumnFamily(ColumnFamilyDescriptorBuilder.of(FAMILY))
         .setCoprocessor(CoprocessorDescriptorBuilder.newBuilder("com.foo.FooRegionObserver")
-          .setJarPath("hdfs:///foo.jar")
-          .setPriority(1001)
-          .setProperty("arg1", "1")
-          .setProperty("arg2", "2")
-          .build())
+          .setJarPath("hdfs:///foo.jar").setPriority(1001).setProperty("arg1", "1")
+          .setProperty("arg2", "2").build())
         .build();
       try {
         TEST_UTIL.getAdmin().modifyTable(htd);
@@ -156,13 +154,13 @@ public class TestAssignmentManagerMetrics {
       // Sleep 5 seconds, wait for doMetrics chore catching up
       // the rit count consists of rit and failed opens. see RegionInTransitionStat#update
       // Waiting for the completion of rit makes the assert stable.
-      TEST_UTIL.waitUntilNoRegionsInTransition();
+      TEST_UTIL.waitUntilNoRegionTransitScheduled();
       Thread.sleep(MSG_INTERVAL * 5);
       METRICS_HELPER.assertGauge(MetricsAssignmentManagerSource.RIT_COUNT_NAME, 1, amSource);
       METRICS_HELPER.assertGauge(MetricsAssignmentManagerSource.RIT_COUNT_OVER_THRESHOLD_NAME, 1,
         amSource);
-      METRICS_HELPER.assertCounter(MetricsAssignmentManagerSource.ASSIGN_METRIC_PREFIX
-        + "SubmittedCount", 2, amSource);
+      METRICS_HELPER.assertCounter(
+        MetricsAssignmentManagerSource.ASSIGN_METRIC_PREFIX + "SubmittedCount", 2, amSource);
     }
   }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,12 +25,12 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
 
 /**
- * Base class for file cleaners which allows subclasses to implement a simple
- * isFileDeletable method (which used to be the FileCleanerDelegate contract).
+ * Base class for file cleaners which allows subclasses to implement a simple isFileDeletable method
+ * (which used to be the FileCleanerDelegate contract).
  */
 @InterfaceAudience.Private
 public abstract class BaseFileCleanerDelegate extends BaseConfigurable
-implements FileCleanerDelegate {
+  implements FileCleanerDelegate {
 
   @Override
   public Iterable<FileStatus> getDeletableFiles(Iterable<FileStatus> files) {
@@ -44,6 +44,10 @@ implements FileCleanerDelegate {
 
   /**
    * Should the master delete the file or keep it?
+   * <p>
+   * This method can be called concurrently by multiple threads. Implementations must be thread
+   * safe.
+   * </p>
    * @param fStat file status of the file to check
    * @return <tt>true</tt> if the file is deletable, <tt>false</tt> if not
    */

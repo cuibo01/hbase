@@ -221,10 +221,11 @@ under the License.
    limitations under the License.
 
 ## Special cases, for e.g. ASL2.0 licensed works that bundle additional third party works
-#set($bundled-jquery = ${bundled-jquery.equalsIgnoreCase("true")})
-#set($bundled-logo = ${bundled-logo.equalsIgnoreCase("true")})
-#set($bundled-dependencies = ${bundled-dependencies.equalsIgnoreCase("true")})
-#if($bundled-jquery || $bundled-logo || $bundled-dependencies)
+#set($bundled_jquery_enabled = ${bundled_jquery.equalsIgnoreCase("true")})
+#set($bundled_vega_enabled = ${bundled_vega.equalsIgnoreCase("true")})
+#set($bundled_logo_enabled = ${bundled_logo.equalsIgnoreCase("true")})
+#set($bundled_dependencies_enabled = ${bundled_dependencies.equalsIgnoreCase("true")})
+#if($bundled_jquery_enabled || $bundled_vega_enabled || $bundled_logo_enabled || $bundled_dependencies_enabled)
 ====
 ${project.name} contained works
 
@@ -260,6 +261,40 @@ This project bundles a copy of the JQuery minified javascript library version
     OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
     WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+#end
+#macro(vega_license)
+This project bundles a copy of the Vega minified javascript library version
+5.19.1, the Vega-Lite minified javascript library version 5.0.0, and the
+Vega-Embed minified javascript library version 6.15.1. All three are
+available under the following '3-clause BSD' license.
+
+Copyright (c) 2015-2018, University of Washington Interactive Data Lab
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software
+without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #end
 #macro(orca_logo_license)
 ----
@@ -1306,15 +1341,18 @@ You can redistribute it and/or modify it under either the terms of the
      PURPOSE.
 #end
 ## modules with bundled works in source
-#if(${bundled-jquery})
+#if(${bundled_jquery_enabled})
 #jquery_license()
 #end
-#if(${bundled-logo})
+#if(${bundled_vega_enabled})
+#vega_license()
+#end
+#if(${bundled_logo_enabled})
 #orca_logo_license()
 #end
 ## when true, we're in a module that makes a binary dist with
 ## bundled works.
-#if(${bundled-dependencies})
+#if(${bundled_dependencies_enabled})
 ====
 ## gather up CDDL licensed works
 #set($cddl_1_0 = [])
@@ -1331,7 +1369,7 @@ You can redistribute it and/or modify it under either the terms of the
 ## gather up EDL works
 #set($edl_1_0 = [])
 ## track commons-math
-#set($commons-math = false)
+#set($commons_math = false)
 ## track if we need jruby additionals.
 #set($jruby = false)
 ## track hadoops
@@ -1343,7 +1381,7 @@ You can redistribute it and/or modify it under either the terms of the
 ## See this FAQ link for justifications: https://www.apache.org/legal/resolved.html
 ##
 ## NB: This list is later compared as lower-case. New entries must also be all lower-case
-#set($non_aggregate_fine = [ 'public domain', 'new bsd license', 'bsd license', 'bsd', 'bsd 2-clause license', 'mozilla public license version 1.1', 'mozilla public license version 2.0', 'creative commons attribution license, version 2.5', 'apache-2.0' ])
+#set($non_aggregate_fine = [ 'public domain', 'new bsd license', 'bsd license', 'bsd', 'bsd 2-clause license', 'mozilla public license version 1.1', 'mozilla public license version 2.0', 'creative commons attribution license, version 2.5' ])
 ## include LICENSE sections for anything not under ASL2.0
 #foreach( ${dep} in ${projects} )
 ## if there are no licenses we'll fail the build later, so
@@ -1356,7 +1394,7 @@ g:${dep.groupId} AND a:${dep.artifactId} AND v:${dep.version}
 Until hbase-resource-bundle/src/main/resources/supplemental-models.xml
 is updated, the build should fail.
 #end
-#if(${debug-print-included-work-info.equalsIgnoreCase("true")})
+#if(${debug_print_included_work_info.equalsIgnoreCase("true")})
 =====
 Check license for included work
 
@@ -1379,7 +1417,7 @@ ${dep.scm.url}
 #set($aggregated=false)
 ## Check for our set of known dependencies that require manual LICENSE additions.
 #if($dep.artifactId.equals("commons-math3"))
-#set($commons-math=true)
+#set($commons_math=true)
 #end
 #if($dep.artifactId.equals("jruby-complete"))
 #set($jruby=true)
@@ -1427,11 +1465,21 @@ project website
 ${dep.url}
 project source
 ${dep.scm.url}
-#elseif( !(${dep.licenses[0].name.contains("Apache License, Version 2.0")} || ${dep.licenses[0].name.contains("The Apache Software License, Version 2.0")}) )
+#*
+  "Apache License, Version 2.0" is the official name in the past
+  "The Apache Software License, Version 2.0" is the official name in the past too
+  "Apache Software License - Version 2.0" is what jetty uses in pom
+  "Apache-2.0" is the new short official name
+*#
+#elseif( !(${dep.licenses[0].name.contains("Apache License, Version 2.0")}
+  || ${dep.licenses[0].name.contains("The Apache Software License, Version 2.0")}
+  || ${dep.licenses[0].name.contains("Apache Software License - Version 2.0")}
+  || ${dep.licenses[0].name.contains("Apache-2.0")}) )
 #if( ${dep.licenses[0].name.contains("CDDL")} )
 #if( ${dep.licenses[0].name.contains("1.0")} )
 #set($aggregated = $cddl_1_0.add($dep))
-#elseif( ${dep.licenses[0].name.contains("1.1")} )
+#elseif( ${dep.licenses[0].name.contains("1.1")}
+  || ${dep.licenses[0].name.contains("CDDL+GPL")} )
 #set($aggregated = $cddl_1_1.add($dep))
 #end
 #end
@@ -1444,14 +1492,14 @@ ${dep.scm.url}
 #if(${dep.licenses[0].name.equals("Common Public License Version 1.0")})
 #set($aggregated = $cpl.add($dep))
 #end
-#if( ${dep.licenses[0].name.contains("Eclipse Public License")} )
+#if( ${dep.licenses[0].name.contains("Eclipse Public License")} || ${dep.licenses[0].name.contains("EPL")} )
 #if( ${dep.licenses[0].name.contains("1.0")} )
 #set($aggregated = $epl_1_0.add($dep))
 #elseif( ${dep.licenses[0].name.contains("2.0")} )
 #set($aggregated = $epl_2_0.add($dep))
 #end
 #end
-#if( ${dep.licenses[0].name.contains("Eclipse Distribution License")} )
+#if( ${dep.licenses[0].name.contains("Eclipse Distribution License")} || ${dep.licenses[0].name.contains("EDL")} )
 #if( ${dep.licenses[0].name.contains("1.0")} )
 #set($aggregated = $edl_1_0.add($dep))
 #end
@@ -1491,7 +1539,7 @@ ${dep.scm.url}
 #if($hadoop)
 #hadoop_license()
 #end
-#if($commons-math)
+#if($commons_math)
 #commons_math_license()
 #end
 #if(!(${mit.isEmpty()}))

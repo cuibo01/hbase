@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -30,23 +29,25 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantLock;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
+import org.apache.hadoop.hbase.regionserver.StoreContext;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTracker;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerFactory;
 import org.apache.hadoop.hbase.util.IdLock;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.google.common.hash.Hashing;
 import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 /**
- * The cache for mob files.
- * This cache doesn't cache the mob file blocks. It only caches the references of mob files.
- * We are doing this to avoid opening and closing mob files all the time. We just keep
- * references open.
+ * The cache for mob files. This cache doesn't cache the mob file blocks. It only caches the
+ * references of mob files. We are doing this to avoid opening and closing mob files all the time.
+ * We just keep references open.
  */
 @InterfaceAudience.Private
 public class MobFileCache {
@@ -54,9 +55,8 @@ public class MobFileCache {
   private static final Logger LOG = LoggerFactory.getLogger(MobFileCache.class);
 
   /*
-   * Eviction and statistics thread. Periodically run to print the statistics and
-   * evict the lru cached mob files when the count of the cached files is larger
-   * than the threshold.
+   * Eviction and statistics thread. Periodically run to print the statistics and evict the lru
+   * cached mob files when the count of the cached files is larger than the threshold.
    */
   static class EvictionThread extends Thread {
     MobFileCache lru;
@@ -87,11 +87,11 @@ public class MobFileCache {
   // the method evictFile is not sync by this lock, the ConcurrentHashMap does the sync there.
   private final ReentrantLock evictionLock = new ReentrantLock(true);
 
-  //stripes lock on each mob file based on its hash. Sync the openFile/closeFile operations.
+  // stripes lock on each mob file based on its hash. Sync the openFile/closeFile operations.
   private final IdLock keyLock = new IdLock();
 
   private final ScheduledExecutorService scheduleThreadPool = Executors.newScheduledThreadPool(1,
-      new ThreadFactoryBuilder().setNameFormat("MobFileCache #%d").setDaemon(true).build());
+    new ThreadFactoryBuilder().setNameFormat("MobFileCache #%d").setDaemon(true).build());
   private final Configuration conf;
 
   // the count of the cached references to mob files
@@ -101,15 +101,15 @@ public class MobFileCache {
 
   public MobFileCache(Configuration conf) {
     this.conf = conf;
-    this.mobFileMaxCacheSize = conf.getInt(MobConstants.MOB_FILE_CACHE_SIZE_KEY,
-        MobConstants.DEFAULT_MOB_FILE_CACHE_SIZE);
+    this.mobFileMaxCacheSize =
+      conf.getInt(MobConstants.MOB_FILE_CACHE_SIZE_KEY, MobConstants.DEFAULT_MOB_FILE_CACHE_SIZE);
     isCacheEnabled = (mobFileMaxCacheSize > 0);
     map = new ConcurrentHashMap<>(mobFileMaxCacheSize);
     if (isCacheEnabled) {
       long period = conf.getLong(MobConstants.MOB_CACHE_EVICT_PERIOD,
-          MobConstants.DEFAULT_MOB_CACHE_EVICT_PERIOD); // in seconds
+        MobConstants.DEFAULT_MOB_CACHE_EVICT_PERIOD); // in seconds
       evictRemainRatio = conf.getFloat(MobConstants.MOB_CACHE_EVICT_REMAIN_RATIO,
-          MobConstants.DEFAULT_EVICT_REMAIN_RATIO);
+        MobConstants.DEFAULT_EVICT_REMAIN_RATIO);
       if (evictRemainRatio < 0.0) {
         evictRemainRatio = 0.0f;
         LOG.warn(MobConstants.MOB_CACHE_EVICT_REMAIN_RATIO + " is less than 0.0, 0.0 is used.");
@@ -118,11 +118,11 @@ public class MobFileCache {
         LOG.warn(MobConstants.MOB_CACHE_EVICT_REMAIN_RATIO + " is larger than 1.0, 1.0 is used.");
       }
       this.scheduleThreadPool.scheduleAtFixedRate(new EvictionThread(this), period, period,
-          TimeUnit.SECONDS);
+        TimeUnit.SECONDS);
 
       if (LOG.isDebugEnabled()) {
-        LOG.debug("MobFileCache enabled with cacheSize=" + mobFileMaxCacheSize +
-          ", evictPeriods=" +  period + "sec, evictRemainRatio=" + evictRemainRatio);
+        LOG.debug("MobFileCache enabled with cacheSize=" + mobFileMaxCacheSize + ", evictPeriods="
+          + period + "sec, evictRemainRatio=" + evictRemainRatio);
       }
     } else {
       LOG.info("MobFileCache disabled");
@@ -130,8 +130,8 @@ public class MobFileCache {
   }
 
   /**
-   * Evicts the lru cached mob files when the count of the cached files is larger
-   * than the threshold.
+   * Evicts the lru cached mob files when the count of the cached files is larger than the
+   * threshold.
    */
   public void evict() {
     if (isCacheEnabled) {
@@ -178,7 +178,7 @@ public class MobFileCache {
       IdLock.Entry lockEntry = null;
       try {
         // obtains the lock to close the cached file.
-        lockEntry = keyLock.getLockEntry(fileName.hashCode());
+        lockEntry = keyLock.getLockEntry(hashFileName(fileName));
         CachedMobFile evictedFile = map.remove(fileName);
         if (evictedFile != null) {
           evictedFile.close();
@@ -196,21 +196,22 @@ public class MobFileCache {
 
   /**
    * Opens a mob file.
-   * @param fs The current file system.
-   * @param path The file path.
+   * @param fs        The current file system.
+   * @param path      The file path.
    * @param cacheConf The current MobCacheConfig
    * @return A opened mob file.
-   * @throws IOException
    */
-  public MobFile openFile(FileSystem fs, Path path, CacheConfig cacheConf) throws IOException {
+  public MobFile openFile(FileSystem fs, Path path, CacheConfig cacheConf,
+    StoreContext storeContext) throws IOException {
+    StoreFileTracker sft = StoreFileTrackerFactory.create(conf, false, storeContext);
     if (!isCacheEnabled) {
-      MobFile mobFile = MobFile.create(fs, path, conf, cacheConf);
+      MobFile mobFile = MobFile.create(fs, path, conf, cacheConf, sft);
       mobFile.open();
       return mobFile;
     } else {
       String fileName = path.getName();
       CachedMobFile cached = map.get(fileName);
-      IdLock.Entry lockEntry = keyLock.getLockEntry(fileName.hashCode());
+      IdLock.Entry lockEntry = keyLock.getLockEntry(hashFileName(fileName));
       try {
         if (cached == null) {
           cached = map.get(fileName);
@@ -218,7 +219,7 @@ public class MobFileCache {
             if (map.size() > mobFileMaxCacheSize) {
               evict();
             }
-            cached = CachedMobFile.create(fs, path, conf, cacheConf);
+            cached = CachedMobFile.create(fs, path, conf, cacheConf, sft);
             cached.open();
             map.put(fileName, cached);
             miss.increment();
@@ -243,7 +244,7 @@ public class MobFileCache {
       if (!isCacheEnabled) {
         file.close();
       } else {
-        lockEntry = keyLock.getLockEntry(file.getFileName().hashCode());
+        lockEntry = keyLock.getLockEntry(hashFileName(file.getFileName()));
         file.close();
       }
     } catch (IOException e) {
@@ -324,10 +325,19 @@ public class MobFileCache {
     long evicted = evictedFileCount.sum() - lastEvictedFileCount;
     int hitRatio = access == 0 ? 0 : (int) (((float) (access - missed)) / (float) access * 100);
     LOG.info("MobFileCache Statistics, access: " + access + ", miss: " + missed + ", hit: "
-        + (access - missed) + ", hit ratio: " + hitRatio + "%, evicted files: " + evicted);
+      + (access - missed) + ", hit ratio: " + hitRatio + "%, evicted files: " + evicted);
     lastAccess += access;
     lastMiss += missed;
     lastEvictedFileCount += evicted;
   }
 
+  /**
+   * Use murmurhash to reduce the conflicts of hashed file names. We should notice that the hash
+   * conflicts may bring deadlocks, when opening mob files with evicting some other files, as
+   * described in HBASE-28047.
+   */
+  private long hashFileName(String fileName) {
+    return Hashing.murmur3_128().hashString(fileName, java.nio.charset.StandardCharsets.UTF_8)
+      .asLong();
+  }
 }

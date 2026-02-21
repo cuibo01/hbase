@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,15 +17,6 @@
  */
 package org.apache.hadoop.hbase.util;
 
-import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.HBaseCommonTestingUtil;
-import org.apache.hadoop.hbase.HBaseTestingUtil;
-import org.junit.ClassRule;
-
-// this is deliberately not in the o.a.h.h.regionserver package
-
-// in order to make sure all required classes/method are available
-
 import static org.junit.Assert.assertEquals;
 
 import java.io.IOException;
@@ -35,10 +26,13 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Predicate;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.HBaseCommonTestingUtil;
+import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Get;
@@ -66,6 +60,7 @@ import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.wal.WALEdit;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
@@ -78,7 +73,7 @@ public class TestCoprocessorScanPolicy {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCoprocessorScanPolicy.class);
+    HBaseClassTestRule.forClass(TestCoprocessorScanPolicy.class);
 
   protected final static HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static final byte[] F = Bytes.toBytes("fam");
@@ -104,7 +99,7 @@ public class TestCoprocessorScanPolicy {
 
   public TestCoprocessorScanPolicy(boolean parallelSeekEnable) {
     TEST_UTIL.getMiniHBaseCluster().getConf()
-        .setBoolean(StoreScanner.STORESCANNER_PARALLEL_SEEK_ENABLE, parallelSeekEnable);
+      .setBoolean(StoreScanner.STORESCANNER_PARALLEL_SEEK_ENABLE, parallelSeekEnable);
   }
 
   @Test
@@ -232,8 +227,8 @@ public class TestCoprocessorScanPolicy {
     // lame way to communicate with the coprocessor,
     // since it is loaded by a different class loader
     @Override
-    public void prePut(final ObserverContext<RegionCoprocessorEnvironment> c, final Put put,
-        final WALEdit edit, final Durability durability) throws IOException {
+    public void prePut(final ObserverContext<? extends RegionCoprocessorEnvironment> c,
+      final Put put, final WALEdit edit, final Durability durability) throws IOException {
       if (put.getAttribute("ttl") != null) {
         Cell cell = put.getFamilyCellMap().values().stream().findFirst().get().get(0);
         ttls.put(
@@ -292,7 +287,8 @@ public class TestCoprocessorScanPolicy {
         }
 
         @Override
-        public boolean next(List<Cell> result, ScannerContext scannerContext) throws IOException {
+        public boolean next(List<? super ExtendedCell> result, ScannerContext scannerContext)
+          throws IOException {
           boolean moreRows = scanner.next(result, scannerContext);
           if (result.isEmpty()) {
             return moreRows;
@@ -303,7 +299,7 @@ public class TestCoprocessorScanPolicy {
             predicate = checkTtl(now, ttl);
           }
           if (version != null) {
-            Predicate<Cell> vp = checkVersion(result.get(0), version);
+            Predicate<Cell> vp = checkVersion((Cell) result.get(0), version);
             if (predicate != null) {
               predicate = predicate.and(vp);
             } else {
@@ -311,7 +307,7 @@ public class TestCoprocessorScanPolicy {
             }
           }
           if (predicate != null) {
-            result.removeIf(predicate);
+            ((List<Cell>) result).removeIf(predicate);
           }
           return moreRows;
         }
@@ -319,21 +315,21 @@ public class TestCoprocessorScanPolicy {
     }
 
     @Override
-    public InternalScanner preFlush(ObserverContext<RegionCoprocessorEnvironment> c, Store store,
-        InternalScanner scanner, FlushLifeCycleTracker tracker) throws IOException {
+    public InternalScanner preFlush(ObserverContext<? extends RegionCoprocessorEnvironment> c,
+      Store store, InternalScanner scanner, FlushLifeCycleTracker tracker) throws IOException {
       return wrap(store, scanner);
     }
 
     @Override
-    public InternalScanner preCompact(ObserverContext<RegionCoprocessorEnvironment> c, Store store,
-        InternalScanner scanner, ScanType scanType, CompactionLifeCycleTracker tracker,
-        CompactionRequest request) throws IOException {
+    public InternalScanner preCompact(ObserverContext<? extends RegionCoprocessorEnvironment> c,
+      Store store, InternalScanner scanner, ScanType scanType, CompactionLifeCycleTracker tracker,
+      CompactionRequest request) throws IOException {
       return wrap(store, scanner);
     }
 
     @Override
-    public void preGetOp(ObserverContext<RegionCoprocessorEnvironment> c, Get get,
-        List<Cell> result) throws IOException {
+    public void preGetOp(ObserverContext<? extends RegionCoprocessorEnvironment> c, Get get,
+      List<Cell> result) throws IOException {
       TableName tableName = c.getEnvironment().getRegion().getTableDescriptor().getTableName();
       Long ttl = this.ttls.get(tableName);
       if (ttl != null) {
@@ -346,8 +342,8 @@ public class TestCoprocessorScanPolicy {
     }
 
     @Override
-    public void preScannerOpen(ObserverContext<RegionCoprocessorEnvironment> c, Scan scan)
-        throws IOException {
+    public void preScannerOpen(ObserverContext<? extends RegionCoprocessorEnvironment> c, Scan scan)
+      throws IOException {
       Region region = c.getEnvironment().getRegion();
       TableName tableName = region.getTableDescriptor().getTableName();
       Long ttl = this.ttls.get(tableName);

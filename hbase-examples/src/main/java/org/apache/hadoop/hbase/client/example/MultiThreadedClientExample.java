@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -24,14 +23,14 @@ import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.Cell.Type;
 import org.apache.hadoop.hbase.CellBuilderFactory;
 import org.apache.hadoop.hbase.CellBuilderType;
 import org.apache.hadoop.hbase.TableName;
@@ -54,41 +53,30 @@ import org.slf4j.LoggerFactory;
 import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 /**
- * Example on how to use HBase's {@link Connection} and {@link Table} in a
- * multi-threaded environment. Each table is a light weight object
- * that is created and thrown away. Connections are heavy weight objects
- * that hold on to zookeeper connections, async processes, and other state.
+ * Example on how to use HBase's {@link Connection} and {@link Table} in a multi-threaded
+ * environment. Each table is a light weight object that is created and thrown away. Connections are
+ * heavy weight objects that hold on to zookeeper connections, async processes, and other state.
  *
  * <pre>
  * Usage:
  * bin/hbase org.apache.hadoop.hbase.client.example.MultiThreadedClientExample testTableName 500000
  * </pre>
- *
  * <p>
- * The table should already be created before running the command.
- * This example expects one column family named d.
+ * The table should already be created before running the command. This example expects one column
+ * family named d.
  * </p>
  * <p>
- * This is meant to show different operations that are likely to be
- * done in a real world application. These operations are:
+ * This is meant to show different operations that are likely to be done in a real world
+ * application. These operations are:
  * </p>
- *
  * <ul>
- *   <li>
- *     30% of all operations performed are batch writes.
- *     30 puts are created and sent out at a time.
- *     The response for all puts is waited on.
- *   </li>
- *   <li>
- *     20% of all operations are single writes.
- *     A single put is sent out and the response is waited for.
- *   </li>
- *   <li>
- *     50% of all operations are scans.
- *     These scans start at a random place and scan up to 100 rows.
- *   </li>
+ * <li>30% of all operations performed are batch writes. 30 puts are created and sent out at a time.
+ * The response for all puts is waited on.</li>
+ * <li>20% of all operations are single writes. A single put is sent out and the response is waited
+ * for.</li>
+ * <li>50% of all operations are scans. These scans start at a random place and scan up to 100 rows.
+ * </li>
  * </ul>
- *
  */
 @InterfaceAudience.Private
 public class MultiThreadedClientExample extends Configured implements Tool {
@@ -96,9 +84,7 @@ public class MultiThreadedClientExample extends Configured implements Tool {
   private static final int DEFAULT_NUM_OPERATIONS = 500000;
 
   /**
-   * The name of the column family.
-   *
-   * d for default.
+   * The name of the column family. d for default.
    */
   private static final byte[] FAMILY = Bytes.toBytes("d");
 
@@ -118,9 +104,8 @@ public class MultiThreadedClientExample extends Configured implements Tool {
     this.threads = Runtime.getRuntime().availableProcessors() * 4;
 
     // Daemon threads are great for things that get shut down.
-    ThreadFactory threadFactory = new ThreadFactoryBuilder()
-        .setDaemon(true).setNameFormat("internal-pol-%d").build();
-
+    ThreadFactory threadFactory =
+      new ThreadFactoryBuilder().setDaemon(true).setNameFormat("internal-pol-%d").build();
 
     this.internalPool = Executors.newFixedThreadPool(threads, threadFactory);
   }
@@ -145,7 +130,8 @@ public class MultiThreadedClientExample extends Configured implements Tool {
     //
     // We don't want to mix hbase and business logic.
     //
-    ExecutorService service = new ForkJoinPool(threads * 2);
+    ThreadPoolExecutor service = new ThreadPoolExecutor(threads * 2, threads * 2, 60L,
+      TimeUnit.SECONDS, new LinkedBlockingQueue<>());
 
     // Create two different connections showing how it's possible to
     // separate different types of requests onto different connections
@@ -191,9 +177,8 @@ public class MultiThreadedClientExample extends Configured implements Tool {
 
   private void warmUpConnectionCache(Connection connection, TableName tn) throws IOException {
     try (RegionLocator locator = connection.getRegionLocator(tn)) {
-      LOG.info(
-          "Warmed up region location cache for " + tn
-              + " got " + locator.getAllRegionLocations().size());
+      LOG.info("Warmed up region location cache for " + tn + " got "
+        + locator.getAllRegionLocations().size());
     }
   }
 
@@ -223,14 +208,9 @@ public class MultiThreadedClientExample extends Configured implements Tool {
         for (int i = 0; i < 30; i++) {
           byte[] rk = Bytes.toBytes(ThreadLocalRandom.current().nextLong());
           Put p = new Put(rk);
-          p.add(CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY)
-                .setRow(rk)
-                .setFamily(FAMILY)
-                .setQualifier(QUAL)
-                .setTimestamp(p.getTimestamp())
-                .setType(Cell.Type.Put)
-                .setValue(value)
-                .build());
+          p.add(CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY).setRow(rk).setFamily(FAMILY)
+            .setQualifier(QUAL).setTimestamp(p.getTimestamp()).setType(Cell.Type.Put)
+            .setValue(value).build());
           puts.add(p);
         }
 
@@ -260,20 +240,14 @@ public class MultiThreadedClientExample extends Configured implements Tool {
         byte[] value = Bytes.toBytes(Double.toString(ThreadLocalRandom.current().nextDouble()));
         byte[] rk = Bytes.toBytes(ThreadLocalRandom.current().nextLong());
         Put p = new Put(rk);
-        p.add(CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY)
-                .setRow(rk)
-                .setFamily(FAMILY)
-                .setQualifier(QUAL)
-                .setTimestamp(p.getTimestamp())
-                .setType(Type.Put)
-                .setValue(value)
-                .build());
+        p.add(CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY).setRow(rk).setFamily(FAMILY)
+          .setQualifier(QUAL).setTimestamp(p.getTimestamp()).setType(Cell.Type.Put).setValue(value)
+          .build());
         t.put(p);
       }
       return true;
     }
   }
-
 
   /**
    * Class to show how to scan some rows starting at a random location.
@@ -329,7 +303,7 @@ public class MultiThreadedClientExample extends Configured implements Tool {
             // reading the entire table so this break
             // simulates small to medium size scans,
             // without needing to know an end row.
-            if (toRead <= 0)  {
+            if (toRead <= 0) {
               break;
             }
           }

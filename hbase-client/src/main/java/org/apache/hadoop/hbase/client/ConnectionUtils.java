@@ -24,8 +24,6 @@ import static org.apache.hadoop.hbase.util.FutureUtils.addListener;
 
 import java.io.IOException;
 import java.lang.reflect.UndeclaredThrowableException;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.List;
@@ -41,6 +39,7 @@ import java.util.function.Supplier;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.PrivateCellUtil;
@@ -48,6 +47,7 @@ import org.apache.hadoop.hbase.RegionLocations;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.metrics.ScanMetrics;
+import org.apache.hadoop.hbase.ipc.FatalConnectionException;
 import org.apache.hadoop.hbase.ipc.HBaseRpcController;
 import org.apache.hadoop.hbase.ipc.ServerRpcController;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -111,11 +111,11 @@ public final class ConnectionUtils {
   /**
    * Changes the configuration to set the number of retries needed when using Connection internally,
    * e.g. for updating catalog tables, etc. Call this method before we create any Connections.
-   * @param c The Configuration instance to set the retries into.
+   * @param c   The Configuration instance to set the retries into.
    * @param log Used to log what we set in here.
    */
   public static void setServerSideHConnectionRetriesConfig(final Configuration c, final String sn,
-      final Logger log) {
+    final Logger log) {
     // TODO: Fix this. Not all connections from server side should have 10 times the retries.
     int hcRetries = c.getInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER,
       HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER);
@@ -198,13 +198,17 @@ public final class ConnectionUtils {
     return Bytes.equals(row, EMPTY_END_ROW);
   }
 
-  static void resetController(HBaseRpcController controller, long timeoutNs, int priority) {
+  static void resetController(HBaseRpcController controller, long timeoutNs, int priority,
+    TableName tableName) {
     controller.reset();
     if (timeoutNs >= 0) {
       controller.setCallTimeout(
         (int) Math.min(Integer.MAX_VALUE, TimeUnit.NANOSECONDS.toMillis(timeoutNs)));
     }
     controller.setPriority(priority);
+    if (tableName != null) {
+      controller.setTableName(tableName);
+    }
   }
 
   static Throwable translateException(Throwable t) {
@@ -229,7 +233,7 @@ public final class ConnectionUtils {
     return estimatedHeapSizeOfResult;
   }
 
-  static Result filterCells(Result result, Cell keepCellsAfter) {
+  static Result filterCells(Result result, ExtendedCell keepCellsAfter) {
     if (keepCellsAfter == null) {
       // do not need to filter
       return result;
@@ -238,7 +242,7 @@ public final class ConnectionUtils {
     if (!PrivateCellUtil.matchingRows(keepCellsAfter, result.getRow(), 0, result.getRow().length)) {
       return result;
     }
-    Cell[] rawCells = result.rawCells();
+    ExtendedCell[] rawCells = result.rawExtendedCells();
     int index = Arrays.binarySearch(rawCells, keepCellsAfter,
       CellComparator.getInstance()::compareWithoutRow);
     if (index < 0) {
@@ -257,7 +261,7 @@ public final class ConnectionUtils {
   }
 
   // Add a delta to avoid timeout immediately after a retry sleeping.
-  static final long SLEEP_DELTA_NS = TimeUnit.MILLISECONDS.toNanos(1);
+  public static final long SLEEP_DELTA_NS = TimeUnit.MILLISECONDS.toNanos(1);
 
   static Get toCheckExistenceOnly(Get get) {
     if (get.isCheckExistenceOnly()) {
@@ -308,11 +312,6 @@ public final class ConnectionUtils {
     return Bytes.compareTo(info.getStartKey(), scan.getStopRow()) <= 0;
   }
 
-  static <T> CompletableFuture<List<T>> allOf(List<CompletableFuture<T>> futures) {
-    return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-      .thenApply(v -> futures.stream().map(f -> f.getNow(null)).collect(toList()));
-  }
-
   public static ScanResultCache createScanResultCache(Scan scan) {
     if (scan.getAllowPartialResults()) {
       return new AllowPartialScanResultCache();
@@ -342,9 +341,9 @@ public final class ConnectionUtils {
     if (scanMetrics == null) {
       return;
     }
-    scanMetrics.countOfRPCcalls.incrementAndGet();
+    scanMetrics.addToCounter(ScanMetrics.RPC_CALLS_METRIC_NAME, 1);
     if (isRegionServerRemote) {
-      scanMetrics.countOfRemoteRPCcalls.incrementAndGet();
+      scanMetrics.addToCounter(ScanMetrics.REMOTE_RPC_CALLS_METRIC_NAME, 1);
     }
   }
 
@@ -352,14 +351,14 @@ public final class ConnectionUtils {
     if (scanMetrics == null) {
       return;
     }
-    scanMetrics.countOfRPCRetries.incrementAndGet();
+    scanMetrics.addToCounter(ScanMetrics.RPC_RETRIES_METRIC_NAME, 1);
     if (isRegionServerRemote) {
-      scanMetrics.countOfRemoteRPCRetries.incrementAndGet();
+      scanMetrics.addToCounter(ScanMetrics.REMOTE_RPC_RETRIES_METRIC_NAME, 1);
     }
   }
 
   static void updateResultsMetrics(ScanMetrics scanMetrics, Result[] rrs,
-      boolean isRegionServerRemote) {
+    boolean isRegionServerRemote) {
     if (scanMetrics == null || rrs == null || rrs.length == 0) {
       return;
     }
@@ -369,9 +368,9 @@ public final class ConnectionUtils {
         resultSize += PrivateCellUtil.estimatedSerializedSizeOf(cell);
       }
     }
-    scanMetrics.countOfBytesInResults.addAndGet(resultSize);
+    scanMetrics.addToCounter(ScanMetrics.BYTES_IN_RESULTS_METRIC_NAME, resultSize);
     if (isRegionServerRemote) {
-      scanMetrics.countOfBytesInRemoteResults.addAndGet(resultSize);
+      scanMetrics.addToCounter(ScanMetrics.BYTES_IN_REMOTE_RESULTS_METRIC_NAME, resultSize);
     }
   }
 
@@ -391,7 +390,7 @@ public final class ConnectionUtils {
     if (scanMetrics == null) {
       return;
     }
-    scanMetrics.countOfRegions.incrementAndGet();
+    scanMetrics.addToCounter(ScanMetrics.REGIONS_SCANNED_METRIC_NAME, 1);
   }
 
   /**
@@ -402,7 +401,7 @@ public final class ConnectionUtils {
    * increase the hedge read related metrics.
    */
   private static <T> void connect(CompletableFuture<T> srcFuture, CompletableFuture<T> dstFuture,
-      Optional<MetricsConnection> metrics) {
+    Optional<MetricsConnection> metrics) {
     addListener(srcFuture, (r, e) -> {
       if (e != null) {
         dstFuture.completeExceptionally(e);
@@ -421,8 +420,8 @@ public final class ConnectionUtils {
   }
 
   private static <T> void sendRequestsToSecondaryReplicas(
-      Function<Integer, CompletableFuture<T>> requestReplica, RegionLocations locs,
-      CompletableFuture<T> future, Optional<MetricsConnection> metrics) {
+    Function<Integer, CompletableFuture<T>> requestReplica, RegionLocations locs,
+    CompletableFuture<T> future, Optional<MetricsConnection> metrics) {
     if (future.isDone()) {
       // do not send requests to secondary replicas if the future is done, i.e, the primary request
       // has already been finished.
@@ -436,9 +435,9 @@ public final class ConnectionUtils {
   }
 
   static <T> CompletableFuture<T> timelineConsistentRead(AsyncRegionLocator locator,
-      TableName tableName, Query query, byte[] row, RegionLocateType locateType,
-      Function<Integer, CompletableFuture<T>> requestReplica, long rpcTimeoutNs,
-      long primaryCallTimeoutNs, Timer retryTimer, Optional<MetricsConnection> metrics) {
+    TableName tableName, Query query, byte[] row, RegionLocateType locateType,
+    Function<Integer, CompletableFuture<T>> requestReplica, long rpcTimeoutNs,
+    long primaryCallTimeoutNs, Timer retryTimer, Optional<MetricsConnection> metrics) {
     if (query.getConsistency() != Consistency.TIMELINE) {
       return requestReplica.apply(RegionReplicaUtil.DEFAULT_REPLICA_ID);
     }
@@ -458,8 +457,8 @@ public final class ConnectionUtils {
       (locs, error) -> {
         if (error != null) {
           LOG.warn(
-            "Failed to locate all the replicas for table={}, row='{}', locateType={}" +
-              " give up timeline consistent read",
+            "Failed to locate all the replicas for table={}, row='{}', locateType={}"
+              + " give up timeline consistent read",
             tableName, Bytes.toStringBinary(row), locateType, error);
           return;
         }
@@ -481,13 +480,20 @@ public final class ConnectionUtils {
     return future;
   }
 
-  // validate for well-formedness
-  static void validatePut(Put put, int maxKeyValueSize) {
-    if (put.isEmpty()) {
-      throw new IllegalArgumentException("No columns to insert");
+  // Validate individual Mutation
+  static void validateMutation(Mutation mutation, int maxKeyValueSize) {
+    // Skip Delete
+    if (mutation instanceof Delete) return;
+
+    // 1. Check if empty
+    if (mutation.isEmpty()) {
+      throw new IllegalArgumentException(
+        "No columns to " + mutation.getClass().getSimpleName().toLowerCase());
     }
+
+    // 2. Check if size exceeds maxKeyValueSize
     if (maxKeyValueSize > 0) {
-      for (List<Cell> list : put.getFamilyCellMap().values()) {
+      for (List<Cell> list : mutation.getFamilyCellMap().values()) {
         for (Cell cell : list) {
           if (cell.getSerializedSize() > maxKeyValueSize) {
             throw new IllegalArgumentException("KeyValue size too large");
@@ -497,11 +503,10 @@ public final class ConnectionUtils {
     }
   }
 
-  static void validatePutsInRowMutations(RowMutations rowMutations, int maxKeyValueSize) {
+  // Validate RowMutations
+  static void validateRowMutations(RowMutations rowMutations, int maxKeyValueSize) {
     for (Mutation mutation : rowMutations.getMutations()) {
-      if (mutation instanceof Put) {
-        validatePut((Put) mutation, maxKeyValueSize);
-      }
+      validateMutation(mutation, maxKeyValueSize);
     }
   }
 
@@ -514,7 +519,7 @@ public final class ConnectionUtils {
    * <li>For system table, use {@link HConstants#SYSTEMTABLE_QOS}.</li>
    * <li>For other tables, use {@link HConstants#NORMAL_QOS}.</li>
    * </ol>
-   * @param priority the priority set by user, can be {@link HConstants#PRIORITY_UNSET}.
+   * @param priority  the priority set by user, can be {@link HConstants#PRIORITY_UNSET}.
    * @param tableName the table we operate on
    */
   static int calcPriority(int priority, TableName tableName) {
@@ -534,8 +539,8 @@ public final class ConnectionUtils {
   }
 
   static <T> CompletableFuture<T> getOrFetch(AtomicReference<T> cacheRef,
-      AtomicReference<CompletableFuture<T>> futureRef, boolean reload,
-      Supplier<CompletableFuture<T>> fetch, Predicate<T> validator, String type) {
+    AtomicReference<CompletableFuture<T>> futureRef, boolean reload,
+    Supplier<CompletableFuture<T>> fetch, Predicate<T> validator, String type) {
     for (;;) {
       if (!reload) {
         T value = cacheRef.get();
@@ -578,7 +583,7 @@ public final class ConnectionUtils {
   }
 
   static void updateStats(Optional<ServerStatisticTracker> optStats,
-      Optional<MetricsConnection> optMetrics, ServerName serverName, MultiResponse resp) {
+    Optional<MetricsConnection> optMetrics, ServerName serverName, MultiResponse resp) {
     if (!optStats.isPresent() && !optMetrics.isPresent()) {
       // ServerStatisticTracker and MetricsConnection are both not present, just return
       return;
@@ -586,8 +591,10 @@ public final class ConnectionUtils {
     resp.getResults().forEach((regionName, regionResult) -> {
       ClientProtos.RegionLoadStats stat = regionResult.getStat();
       if (stat == null) {
-        LOG.error("No ClientProtos.RegionLoadStats found for server={}, region={}", serverName,
-          Bytes.toStringBinary(regionName));
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("No ClientProtos.RegionLoadStats found for server={}, region={}", serverName,
+            Bytes.toStringBinary(regionName));
+        }
         return;
       }
       RegionLoadStats regionLoadStats = ProtobufUtil.createRegionLoadStats(stat);
@@ -606,13 +613,13 @@ public final class ConnectionUtils {
   @FunctionalInterface
   interface RpcCall<RESP, REQ> {
     void call(ClientService.Interface stub, HBaseRpcController controller, REQ req,
-        RpcCallback<RESP> done);
+      RpcCallback<RESP> done);
   }
 
   static <REQ, PREQ, PRESP, RESP> CompletableFuture<RESP> call(HBaseRpcController controller,
-      HRegionLocation loc, ClientService.Interface stub, REQ req,
-      Converter<PREQ, byte[], REQ> reqConvert, RpcCall<PRESP, PREQ> rpcCall,
-      Converter<RESP, HBaseRpcController, PRESP> respConverter) {
+    HRegionLocation loc, ClientService.Interface stub, REQ req,
+    Converter<PREQ, byte[], REQ> reqConvert, RpcCall<PRESP, PREQ> rpcCall,
+    Converter<RESP, HBaseRpcController, PRESP> respConverter) {
     CompletableFuture<RESP> future = new CompletableFuture<>();
     try {
       rpcCall.call(stub, controller, reqConvert.convert(loc.getRegion().getRegionName(), req),
@@ -663,5 +670,14 @@ public final class ConnectionUtils {
     } else {
       controller.setFailed(error.toString());
     }
+  }
+
+  public static boolean isUnexpectedPreambleHeaderException(IOException e) {
+    if (!(e instanceof RemoteException)) {
+      return false;
+    }
+    RemoteException re = (RemoteException) e;
+    return FatalConnectionException.class.getName().equals(re.getClassName())
+      && re.getMessage().startsWith("Expected HEADER=");
   }
 }

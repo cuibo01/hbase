@@ -15,18 +15,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.master.cleaner;
-
 
 import java.io.IOException;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.ScheduledChore;
 import org.apache.hadoop.hbase.Stoppable;
 import org.apache.hadoop.hbase.master.snapshot.SnapshotManager;
+import org.apache.hadoop.hbase.snapshot.SnapshotDescriptionUtils;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -46,21 +43,21 @@ public class SnapshotCleanerChore extends ScheduledChore {
   private static final String SNAPSHOT_CLEANER_INTERVAL = "hbase.master.cleaner.snapshot.interval";
   private static final int SNAPSHOT_CLEANER_DEFAULT_INTERVAL = 1800 * 1000; // Default 30 min
   private static final String DELETE_SNAPSHOT_EVENT =
-          "Eligible Snapshot for cleanup due to expired TTL.";
+    "Eligible Snapshot for cleanup due to expired TTL.";
 
   private final SnapshotManager snapshotManager;
 
   /**
    * Construct Snapshot Cleaner Chore with parameterized constructor
-   *
-   * @param stopper When {@link Stoppable#isStopped()} is true, this chore will cancel and cleanup
-   * @param configuration The configuration to set
+   * @param stopper         When {@link Stoppable#isStopped()} is true, this chore will cancel and
+   *                        cleanup
+   * @param configuration   The configuration to set
    * @param snapshotManager SnapshotManager instance to manage lifecycle of snapshot
    */
   public SnapshotCleanerChore(Stoppable stopper, Configuration configuration,
-          SnapshotManager snapshotManager) {
-    super(SNAPSHOT_CLEANER_CHORE_NAME, stopper, configuration.getInt(SNAPSHOT_CLEANER_INTERVAL,
-            SNAPSHOT_CLEANER_DEFAULT_INTERVAL));
+    SnapshotManager snapshotManager) {
+    super(SNAPSHOT_CLEANER_CHORE_NAME, stopper,
+      configuration.getInt(SNAPSHOT_CLEANER_INTERVAL, SNAPSHOT_CLEANER_DEFAULT_INTERVAL));
     this.snapshotManager = snapshotManager;
   }
 
@@ -71,24 +68,18 @@ public class SnapshotCleanerChore extends ScheduledChore {
     }
     try {
       List<SnapshotProtos.SnapshotDescription> completedSnapshotsList =
-              this.snapshotManager.getCompletedSnapshots();
+        this.snapshotManager.getCompletedSnapshots();
       for (SnapshotProtos.SnapshotDescription snapshotDescription : completedSnapshotsList) {
         long snapshotCreatedTime = snapshotDescription.getCreationTime();
         long snapshotTtl = snapshotDescription.getTtl();
-        /*
-         * Backward compatibility after the patch deployment on HMaster
-         * Any snapshot with ttl 0 is to be considered as snapshot to keep FOREVER
-         * Default ttl value specified by {@HConstants.DEFAULT_SNAPSHOT_TTL}
-         */
-        if (snapshotCreatedTime > 0 && snapshotTtl > 0 &&
-                snapshotTtl < TimeUnit.MILLISECONDS.toSeconds(Long.MAX_VALUE)) {
-          long currentTime = EnvironmentEdgeManager.currentTime();
-          if ((snapshotCreatedTime + TimeUnit.SECONDS.toMillis(snapshotTtl)) < currentTime) {
-            LOG.info("Event: {} Name: {}, CreatedTime: {}, TTL: {}, currentTime: {}",
-                    DELETE_SNAPSHOT_EVENT, snapshotDescription.getName(), snapshotCreatedTime,
-                    snapshotTtl, currentTime);
-            deleteExpiredSnapshot(snapshotDescription);
-          }
+        long currentTime = EnvironmentEdgeManager.currentTime();
+        if (
+          SnapshotDescriptionUtils.isExpiredSnapshot(snapshotTtl, snapshotCreatedTime, currentTime)
+        ) {
+          LOG.info("Event: {} Name: {}, CreatedTime: {}, TTL: {}, currentTime: {}",
+            DELETE_SNAPSHOT_EVENT, snapshotDescription.getName(), snapshotCreatedTime, snapshotTtl,
+            currentTime);
+          deleteExpiredSnapshot(snapshotDescription);
         }
       }
     } catch (IOException e) {

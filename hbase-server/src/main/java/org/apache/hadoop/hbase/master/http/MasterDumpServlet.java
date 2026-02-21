@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,9 +18,10 @@
 package org.apache.hadoop.hbase.master.http;
 
 import java.io.IOException;
-import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.Map;
 import javax.servlet.http.HttpServletRequest;
@@ -29,6 +29,7 @@ import javax.servlet.http.HttpServletResponse;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.ServerMetrics;
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.http.HttpServer;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.ServerManager;
 import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
@@ -42,21 +43,22 @@ import org.apache.yetus.audience.InterfaceAudience;
 @InterfaceAudience.Private
 public class MasterDumpServlet extends StateDumpServlet {
   private static final long serialVersionUID = 1L;
-  private static final String LINE =
-    "===========================================================";
+  private static final String LINE = "===========================================================";
 
   @Override
-  public void doGet(HttpServletRequest request, HttpServletResponse response)
-      throws IOException {
+  public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+    if (!HttpServer.isInstrumentationAccessAllowed(getServletContext(), request, response)) {
+      return;
+    }
     HMaster master = (HMaster) getServletContext().getAttribute(HMaster.MASTER);
     assert master != null : "No Master in context!";
 
     response.setContentType("text/plain");
-    OutputStream os = response.getOutputStream();
+    OutputStreamWriter os =
+      new OutputStreamWriter(response.getOutputStream(), StandardCharsets.UTF_8);
     try (PrintWriter out = new PrintWriter(os)) {
 
-      out.println("Master status for " + master.getServerName()
-        + " as of " + new Date());
+      out.println("Master status for " + master.getServerName() + " as of " + new Date());
 
       out.println("\n\nVersion Info:");
       out.println(LINE);
@@ -81,15 +83,15 @@ public class MasterDumpServlet extends StateDumpServlet {
       out.println("\n\nStacks:");
       out.println(LINE);
       out.flush();
-      PrintStream ps = new PrintStream(response.getOutputStream(), false, "UTF-8");
+      PrintStream ps = new PrintStream(response.getOutputStream(), false, StandardCharsets.UTF_8);
       Threads.printThreadInfo(ps, "");
       ps.flush();
 
       out.println("\n\nMaster configuration:");
       out.println(LINE);
-      Configuration conf = master.getConfiguration();
+      Configuration redactedConf = getRedactedConfiguration(master.getConfiguration());
       out.flush();
-      conf.writeXml(os);
+      redactedConf.writeXml(os);
       os.flush();
 
       out.println("\n\nRecent regionserver aborts:");
@@ -104,7 +106,6 @@ public class MasterDumpServlet extends StateDumpServlet {
       out.flush();
     }
   }
-
 
   private void dumpRIT(HMaster master, PrintWriter out) {
     AssignmentManager am = master.getAssignmentManager();

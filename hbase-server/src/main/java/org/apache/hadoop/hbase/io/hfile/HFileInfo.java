@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,7 +22,6 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.SequenceInputStream;
-import java.security.Key;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -37,11 +35,11 @@ import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.io.crypto.Cipher;
-import org.apache.hadoop.hbase.io.crypto.Encryption;
 import org.apache.hadoop.hbase.protobuf.ProtobufMagic;
-import org.apache.hadoop.hbase.security.EncryptionUtil;
+import org.apache.hadoop.hbase.security.SecurityUtil;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -60,8 +58,8 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.HFileProtos;
  * key seen, comparator used writing the file, etc. Clients can add their own attributes via
  * {@link #append(byte[], byte[], boolean)} and they'll be persisted and available at read time.
  * Reader creates the HFileInfo on open by reading the tail of the HFile. The parse of the HFile
- * trailer also creates a {@link HFileContext}, a read-only data structure that includes bulk of
- * the HFileInfo and extras that is safe to pass around when working on HFiles.
+ * trailer also creates a {@link HFileContext}, a read-only data structure that includes bulk of the
+ * HFileInfo and extras that is safe to pass around when working on HFiles.
  * @see HFileContext
  */
 @InterfaceAudience.Private
@@ -71,13 +69,15 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
 
   static final String RESERVED_PREFIX = "hfile.";
   static final byte[] RESERVED_PREFIX_BYTES = Bytes.toBytes(RESERVED_PREFIX);
-  static final byte [] LASTKEY = Bytes.toBytes(RESERVED_PREFIX + "LASTKEY");
-  static final byte [] AVG_KEY_LEN = Bytes.toBytes(RESERVED_PREFIX + "AVG_KEY_LEN");
-  static final byte [] AVG_VALUE_LEN = Bytes.toBytes(RESERVED_PREFIX + "AVG_VALUE_LEN");
-  static final byte [] CREATE_TIME_TS = Bytes.toBytes(RESERVED_PREFIX + "CREATE_TIME_TS");
-  static final byte [] TAGS_COMPRESSED = Bytes.toBytes(RESERVED_PREFIX + "TAGS_COMPRESSED");
-  public static final byte [] MAX_TAGS_LEN = Bytes.toBytes(RESERVED_PREFIX + "MAX_TAGS_LEN");
-  private final SortedMap<byte [], byte []> map = new TreeMap<>(Bytes.BYTES_COMPARATOR);
+  static final byte[] LASTKEY = Bytes.toBytes(RESERVED_PREFIX + "LASTKEY");
+  static final byte[] AVG_KEY_LEN = Bytes.toBytes(RESERVED_PREFIX + "AVG_KEY_LEN");
+  static final byte[] AVG_VALUE_LEN = Bytes.toBytes(RESERVED_PREFIX + "AVG_VALUE_LEN");
+  static final byte[] CREATE_TIME_TS = Bytes.toBytes(RESERVED_PREFIX + "CREATE_TIME_TS");
+  static final byte[] TAGS_COMPRESSED = Bytes.toBytes(RESERVED_PREFIX + "TAGS_COMPRESSED");
+  static final byte[] KEY_OF_BIGGEST_CELL = Bytes.toBytes(RESERVED_PREFIX + "KEY_OF_BIGGEST_CELL");
+  static final byte[] LEN_OF_BIGGEST_CELL = Bytes.toBytes(RESERVED_PREFIX + "LEN_OF_BIGGEST_CELL");
+  public static final byte[] MAX_TAGS_LEN = Bytes.toBytes(RESERVED_PREFIX + "MAX_TAGS_LEN");
+  private final SortedMap<byte[], byte[]> map = new TreeMap<>(Bytes.BYTES_COMPARATOR);
 
   /**
    * We can read files whose major version is v2 IFF their minor version is at least 3.
@@ -90,24 +90,28 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
   static final int MAX_MINOR_VERSION = 3;
 
   /** Last key in the file. Filled in when we read in the file info */
-  private Cell lastKeyCell = null;
+  private ExtendedCell lastKeyCell = null;
   /** Average key length read from file info */
   private int avgKeyLen = -1;
   /** Average value length read from file info */
   private int avgValueLen = -1;
+  /** Biggest Cell in the file, key only. Filled in when we read in the file info */
+  private Cell biggestCell = null;
+  /** Length of the biggest Cell */
+  private long lenOfBiggestCell = -1;
   private boolean includesMemstoreTS = false;
   private boolean decodeMemstoreTS = false;
 
   /**
-   * Blocks read from the load-on-open section, excluding data root index, meta
-   * index, and file info.
+   * Blocks read from the load-on-open section, excluding data root index, meta index, and file
+   * info.
    */
   private List<HFileBlock> loadOnOpenBlocks = new ArrayList<>();
 
   /**
    * The iterator will track all blocks in load-on-open section, since we use the
-   * {@link org.apache.hadoop.hbase.io.ByteBuffAllocator} to manage the ByteBuffers in block now,
-   * so we must ensure that deallocate all ByteBuffers in the end.
+   * {@link org.apache.hadoop.hbase.io.ByteBuffAllocator} to manage the ByteBuffers in block now, so
+   * we must ensure that deallocate all ByteBuffers in the end.
    */
   private HFileBlock.BlockIterator blockIter;
 
@@ -116,6 +120,7 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
 
   private FixedFileTrailer trailer;
   private HFileContext hfileContext;
+  private boolean initialized = false;
 
   public HFileInfo() {
     super();
@@ -126,25 +131,22 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
   }
 
   /**
-   * Append the given key/value pair to the file info, optionally checking the
-   * key prefix.
-   *
-   * @param k key to add
-   * @param v value to add
-   * @param checkPrefix whether to check that the provided key does not start
-   *          with the reserved prefix
+   * Append the given key/value pair to the file info, optionally checking the key prefix.
+   * @param k           key to add
+   * @param v           value to add
+   * @param checkPrefix whether to check that the provided key does not start with the reserved
+   *                    prefix
    * @return this file info object
-   * @throws IOException if the key or value is invalid
+   * @throws IOException          if the key or value is invalid
    * @throws NullPointerException if {@code key} or {@code value} is {@code null}
    */
-  public HFileInfo append(final byte[] k, final byte[] v,
-      final boolean checkPrefix) throws IOException {
+  public HFileInfo append(final byte[] k, final byte[] v, final boolean checkPrefix)
+    throws IOException {
     Objects.requireNonNull(k, "key cannot be null");
     Objects.requireNonNull(v, "value cannot be null");
 
     if (checkPrefix && isReservedFileInfoKey(k)) {
-      throw new IOException("Keys with a " + HFileInfo.RESERVED_PREFIX
-          + " are reserved");
+      throw new IOException("Keys with a " + HFileInfo.RESERVED_PREFIX + " are reserved");
     }
     put(k, v);
     return this;
@@ -256,13 +258,12 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
   }
 
   /**
-   * Write out this instance on the passed in <code>out</code> stream.
-   * We write it as a protobuf.
+   * Write out this instance on the passed in <code>out</code> stream. We write it as a protobuf.
    * @see #read(DataInputStream)
    */
   void write(final DataOutputStream out) throws IOException {
     HFileProtos.FileInfoProto.Builder builder = HFileProtos.FileInfoProto.newBuilder();
-    for (Map.Entry<byte [], byte[]> e: this.map.entrySet()) {
+    for (Map.Entry<byte[], byte[]> e : this.map.entrySet()) {
       HBaseProtos.BytesBytesPair.Builder bbpBuilder = HBaseProtos.BytesBytesPair.newBuilder();
       bbpBuilder.setFirst(UnsafeByteOperations.unsafeWrap(e.getKey()));
       bbpBuilder.setSecond(UnsafeByteOperations.unsafeWrap(e.getValue()));
@@ -273,14 +274,14 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
   }
 
   /**
-   * Populate this instance with what we find on the passed in <code>in</code> stream.
-   * Can deserialize protobuf of old Writables format.
+   * Populate this instance with what we find on the passed in <code>in</code> stream. Can
+   * deserialize protobuf of old Writables format.
    * @see #write(DataOutputStream)
    */
   void read(final DataInputStream in) throws IOException {
     // This code is tested over in TestHFileReaderV1 where we read an old hfile w/ this new code.
     int pblen = ProtobufUtil.lengthOfPBMagic();
-    byte [] pbuf = new byte[pblen];
+    byte[] pbuf = new byte[pblen];
     if (in.markSupported()) {
       in.mark(pblen);
     }
@@ -298,7 +299,7 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
         // We cannot use BufferedInputStream, it consumes more than we read from the underlying IS
         ByteArrayInputStream bais = new ByteArrayInputStream(pbuf);
         SequenceInputStream sis = new SequenceInputStream(bais, in); // Concatenate input streams
-        // TODO: Am I leaking anything here wrapping the passed in stream?  We are not calling
+        // TODO: Am I leaking anything here wrapping the passed in stream? We are not calling
         // close on the wrapped streams but they should be let go after we leave this context?
         // I see that we keep a reference to the passed in inputstream but since we no longer
         // have a reference to this after we leave, we should be ok.
@@ -308,10 +309,9 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
   }
 
   /**
-   * Now parse the old Writable format.  It was a list of Map entries.  Each map entry was a
-   * key and a value of a byte [].  The old map format had a byte before each entry that held
-   * a code which was short for the key or value type.  We know it was a byte [] so in below
-   * we just read and dump it.
+   * Now parse the old Writable format. It was a list of Map entries. Each map entry was a key and a
+   * value of a byte []. The old map format had a byte before each entry that held a code which was
+   * short for the key or value type. We know it was a byte [] so in below we just read and dump it.
    */
   void parseWritable(final DataInputStream in) throws IOException {
     // First clear the map.
@@ -321,11 +321,11 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
     int entries = in.readInt();
     // Then read each key/value pair
     for (int i = 0; i < entries; i++) {
-      byte [] key = Bytes.readByteArray(in);
+      byte[] key = Bytes.readByteArray(in);
       // We used to read a byte that encoded the class type.
       // Read and ignore it because it is always byte [] in hfile
       in.readByte();
-      byte [] value = Bytes.readByteArray(in);
+      byte[] value = Bytes.readByteArray(in);
       this.map.put(key, value);
     }
   }
@@ -336,7 +336,7 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
    */
   void parsePB(final HFileProtos.FileInfoProto fip) {
     this.map.clear();
-    for (BytesBytesPair pair: fip.getMapEntryList()) {
+    for (BytesBytesPair pair : fip.getMapEntryList()) {
       this.map.put(pair.getFirst().toByteArray(), pair.getSecond().toByteArray());
     }
   }
@@ -344,17 +344,17 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
   public void initTrailerAndContext(ReaderContext context, Configuration conf) throws IOException {
     try {
       boolean isHBaseChecksum = context.getInputStreamWrapper().shouldUseHBaseChecksum();
-      trailer = FixedFileTrailer.readFromStream(context.getInputStreamWrapper()
-          .getStream(isHBaseChecksum), context.getFileSize());
+      trailer = FixedFileTrailer.readFromStream(
+        context.getInputStreamWrapper().getStream(isHBaseChecksum), context.getFileSize());
       Path path = context.getFilePath();
       checkFileVersion(path);
-      this.hfileContext = createHFileContext(path, trailer, conf);
+      this.hfileContext = createHFileContext(context, path, trailer, conf);
       context.getInputStreamWrapper().unbuffer();
     } catch (Throwable t) {
       IOUtils.closeQuietly(context.getInputStreamWrapper(),
         e -> LOG.warn("failed to close input stream wrapper", e));
-      throw new CorruptHFileException("Problem reading HFile Trailer from file "
-          + context.getFilePath(), t);
+      throw new CorruptHFileException(
+        "Problem reading HFile Trailer from file " + context.getFilePath(), t);
     }
   }
 
@@ -362,25 +362,33 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
    * should be called after initTrailerAndContext
    */
   public void initMetaAndIndex(HFile.Reader reader) throws IOException {
+    if (initialized) {
+      return;
+    }
+
     ReaderContext context = reader.getContext();
     try {
       HFileBlock.FSReader blockReader = reader.getUncachedBlockReader();
       // Initialize an block iterator, and parse load-on-open blocks in the following.
       blockIter = blockReader.blockRange(trailer.getLoadOnOpenDataOffset(),
-          context.getFileSize() - trailer.getTrailerSize());
+        context.getFileSize() - trailer.getTrailerSize());
       // Data index. We also read statistics about the block index written after
       // the root level.
-      this.dataIndexReader =
-        new HFileBlockIndex.CellBasedKeyBlockIndexReader(trailer.createComparator(), trailer.getNumDataIndexLevels());
-      dataIndexReader
-        .readMultiLevelIndexRoot(blockIter.nextBlockWithBlockType(BlockType.ROOT_INDEX), trailer.getDataIndexCount());
+      HFileBlock dataBlockRootIndex = blockIter.nextBlockWithBlockType(BlockType.ROOT_INDEX);
+      HFileBlock metaBlockIndex = blockIter.nextBlockWithBlockType(BlockType.ROOT_INDEX);
+      loadMetaInfo(blockIter, hfileContext);
+
+      HFileIndexBlockEncoder indexBlockEncoder =
+        HFileIndexBlockEncoderImpl.createFromFileInfo(this);
+      this.dataIndexReader = new HFileBlockIndex.CellBasedKeyBlockIndexReaderV2(
+        trailer.createComparator(), trailer.getNumDataIndexLevels(), indexBlockEncoder);
+      dataIndexReader.readMultiLevelIndexRoot(dataBlockRootIndex, trailer.getDataIndexCount());
       reader.setDataBlockIndexReader(dataIndexReader);
       // Meta index.
       this.metaIndexReader = new HFileBlockIndex.ByteArrayKeyBlockIndexReader(1);
-      metaIndexReader.readRootIndex(blockIter.nextBlockWithBlockType(BlockType.ROOT_INDEX),
-        trailer.getMetaIndexCount());
+      metaIndexReader.readRootIndex(metaBlockIndex, trailer.getMetaIndexCount());
       reader.setMetaBlockIndexReader(metaIndexReader);
-      loadMetaInfo(blockIter, hfileContext);
+
       reader.setDataBlockEncoder(HFileDataBlockEncoderImpl.createFromFileInfo(this));
       // Load-On-Open info
       HFileBlock b;
@@ -395,40 +403,26 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
       throw new CorruptHFileException(
         "Problem reading data index and meta index from file " + context.getFilePath(), t);
     }
+    initialized = true;
   }
 
-  private HFileContext createHFileContext(Path path,
-      FixedFileTrailer trailer, Configuration conf) throws IOException {
-    HFileContextBuilder builder = new HFileContextBuilder()
-      .withHBaseCheckSum(true)
-      .withHFileName(path.getName())
+  private HFileContext createHFileContext(ReaderContext readerContext, Path path,
+    FixedFileTrailer trailer, Configuration conf) throws IOException {
+    return new HFileContextBuilder().withHBaseCheckSum(true).withHFileName(path.getName())
       .withCompression(trailer.getCompressionCodec())
-      .withCellComparator(FixedFileTrailer.createComparator(trailer.getComparatorClassName()));
-    // Check for any key material available
-    byte[] keyBytes = trailer.getEncryptionKey();
-    if (keyBytes != null) {
-      Encryption.Context cryptoContext = Encryption.newContext(conf);
-      Key key = EncryptionUtil.unwrapKey(conf, keyBytes);
-      // Use the algorithm the key wants
-      Cipher cipher = Encryption.getCipher(conf, key.getAlgorithm());
-      if (cipher == null) {
-        throw new IOException("Cipher '" + key.getAlgorithm() + "' is not available"
-            + ", path=" + path);
-      }
-      cryptoContext.setCipher(cipher);
-      cryptoContext.setKey(key);
-      builder.withEncryptionContext(cryptoContext);
-    }
-    HFileContext context = builder.build();
-    return context;
+      .withDecompressionContext(
+        trailer.getCompressionCodec().getHFileDecompressionContextForConfiguration(conf))
+      .withCellComparator(FixedFileTrailer.createComparator(trailer.getComparatorClassName()))
+      .withEncryptionContext(SecurityUtil.createEncryptionContext(conf, path, trailer,
+        readerContext.getManagedKeyDataCache(), readerContext.getSystemKeyCache()))
+      .build();
   }
 
   private void loadMetaInfo(HFileBlock.BlockIterator blockIter, HFileContext hfileContext)
-      throws IOException {
+    throws IOException {
     read(blockIter.nextBlockWithBlockType(BlockType.FILE_INFO).getByteStream());
     byte[] creationTimeBytes = get(HFileInfo.CREATE_TIME_TS);
-    hfileContext.setFileCreateTime(creationTimeBytes == null ?
-        0 : Bytes.toLong(creationTimeBytes));
+    hfileContext.setFileCreateTime(creationTimeBytes == null ? 0 : Bytes.toLong(creationTimeBytes));
     byte[] tmp = get(HFileInfo.MAX_TAGS_LEN);
     // max tag length is not present in the HFile means tags were not at all written to file.
     if (tmp != null) {
@@ -442,11 +436,15 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
     if (get(HFileInfo.LASTKEY) != null) {
       lastKeyCell = new KeyValue.KeyOnlyKeyValue(get(HFileInfo.LASTKEY));
     }
+    if (get(HFileInfo.KEY_OF_BIGGEST_CELL) != null) {
+      biggestCell = new KeyValue.KeyOnlyKeyValue(get(HFileInfo.KEY_OF_BIGGEST_CELL));
+      lenOfBiggestCell = Bytes.toLong(get(HFileInfo.LEN_OF_BIGGEST_CELL));
+    }
     avgKeyLen = Bytes.toInt(get(HFileInfo.AVG_KEY_LEN));
     avgValueLen = Bytes.toInt(get(HFileInfo.AVG_VALUE_LEN));
-    byte [] keyValueFormatVersion = get(HFileWriterImpl.KEY_VALUE_VERSION);
-    includesMemstoreTS = keyValueFormatVersion != null &&
-        Bytes.toInt(keyValueFormatVersion) == HFileWriterImpl.KEY_VALUE_VER_WITH_MEMSTORE;
+    byte[] keyValueFormatVersion = get(HFileWriterImpl.KEY_VALUE_VERSION);
+    includesMemstoreTS = keyValueFormatVersion != null
+      && Bytes.toInt(keyValueFormatVersion) == HFileWriterImpl.KEY_VALUE_VER_WITH_MEMSTORE;
     hfileContext.setIncludesMvcc(includesMemstoreTS);
     if (includesMemstoreTS) {
       decodeMemstoreTS = Bytes.toLong(get(HFileWriterImpl.MAX_MEMSTORE_TS_KEY)) > 0;
@@ -467,9 +465,9 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
       return;
     }
     // We can read v3 or v2 versions of hfile.
-    throw new IllegalArgumentException("Invalid HFile version: major=" +
-      trailer.getMajorVersion() + ", minor=" + trailer.getMinorVersion() + ": expected at least " +
-      "major=2 and minor=" + MAX_MINOR_VERSION + ", path=" + path);
+    throw new IllegalArgumentException("Invalid HFile version: major=" + trailer.getMajorVersion()
+      + ", minor=" + trailer.getMinorVersion() + ": expected at least " + "major=2 and minor="
+      + MAX_MINOR_VERSION + ", path=" + path);
   }
 
   public void close() {
@@ -506,7 +504,7 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
     return loadOnOpenBlocks;
   }
 
-  public Cell getLastKeyCell() {
+  public ExtendedCell getLastKeyCell() {
     return lastKeyCell;
   }
 
@@ -516,6 +514,14 @@ public class HFileInfo implements SortedMap<byte[], byte[]> {
 
   public int getAvgValueLen() {
     return avgValueLen;
+  }
+
+  public String getKeyOfBiggestCell() {
+    return CellUtil.toString(biggestCell, false);
+  }
+
+  public long getLenOfBiggestCell() {
+    return lenOfBiggestCell;
   }
 
   public boolean shouldIncludeMemStoreTS() {

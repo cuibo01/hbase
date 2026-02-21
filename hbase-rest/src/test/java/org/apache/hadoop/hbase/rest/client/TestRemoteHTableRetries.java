@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,10 +17,10 @@
  */
 package org.apache.hadoop.hbase.rest.client;
 
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyString;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -30,7 +30,6 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.regex.Pattern;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Get;
@@ -40,20 +39,17 @@ import org.apache.hadoop.hbase.testclassification.RestTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 
 /**
  * Test RemoteHTable retries.
  */
-@Category({RestTests.class, SmallTests.class})
+@Tag(RestTests.TAG)
+@Tag(SmallTests.TAG)
 public class TestRemoteHTableRetries {
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestRemoteHTableRetries.class);
 
   private static final int SLEEP_TIME = 50;
   private static final int RETRIES = 3;
@@ -69,26 +65,23 @@ public class TestRemoteHTableRetries {
   private Client client;
   private RemoteHTable remoteTable;
 
-  @Before
+  @BeforeEach
   public void setup() throws Exception {
     client = mock(Client.class);
     Response response = new Response(509);
     when(client.get(anyString(), anyString())).thenReturn(response);
     when(client.delete(anyString())).thenReturn(response);
-    when(client.put(anyString(), anyString(), any())).thenReturn(
-        response);
-    when(client.post(anyString(), anyString(), any())).thenReturn(
-        response);
+    when(client.put(anyString(), anyString(), any())).thenReturn(response);
+    when(client.post(anyString(), anyString(), any())).thenReturn(response);
 
     Configuration configuration = TEST_UTIL.getConfiguration();
     configuration.setInt("hbase.rest.client.max.retries", RETRIES);
     configuration.setInt("hbase.rest.client.sleep", SLEEP_TIME);
 
-    remoteTable = new RemoteHTable(client, TEST_UTIL.getConfiguration(),
-        "MyTable");
+    remoteTable = new RemoteHTable(client, TEST_UTIL.getConfiguration(), "MyTable");
   }
 
-  @After
+  @AfterEach
   public void tearDownAfterClass() throws Exception {
     remoteTable.close();
   }
@@ -156,8 +149,8 @@ public class TestRemoteHTableRetries {
       public void run() throws Exception {
         Put put = new Put(ROW_1);
         put.addColumn(COLUMN_1, QUALIFIER_1, VALUE_1);
-        remoteTable.checkAndMutate(ROW_1, COLUMN_1).qualifier(QUALIFIER_1)
-            .ifEquals(VALUE_1).thenPut(put);
+        remoteTable.checkAndMutate(ROW_1, COLUMN_1).qualifier(QUALIFIER_1).ifEquals(VALUE_1)
+          .thenPut(put);
       }
     });
     verify(client, times(RETRIES)).put(anyString(), anyString(), any());
@@ -170,9 +163,9 @@ public class TestRemoteHTableRetries {
       public void run() throws Exception {
         Put put = new Put(ROW_1);
         put.addColumn(COLUMN_1, QUALIFIER_1, VALUE_1);
-        Delete delete= new Delete(ROW_1);
-        remoteTable.checkAndMutate(ROW_1, COLUMN_1).qualifier(QUALIFIER_1)
-            .ifEquals(VALUE_1).thenDelete(delete);
+        Delete delete = new Delete(ROW_1);
+        remoteTable.checkAndMutate(ROW_1, COLUMN_1).qualifier(QUALIFIER_1).ifEquals(VALUE_1)
+          .thenDelete(delete);
       }
     });
   }

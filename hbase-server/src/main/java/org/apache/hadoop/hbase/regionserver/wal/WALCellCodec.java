@@ -21,14 +21,13 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
-import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValueUtil;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.codec.BaseDecoder;
 import org.apache.hadoop.hbase.codec.BaseEncoder;
 import org.apache.hadoop.hbase.codec.Codec;
@@ -43,20 +42,19 @@ import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ReflectionUtils;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.yetus.audience.InterfaceAudience;
 
 import org.apache.hbase.thirdparty.com.google.protobuf.ByteString;
 import org.apache.hbase.thirdparty.com.google.protobuf.UnsafeByteOperations;
 
-
 /**
- * Compression in this class is lifted off Compressor/KeyValueCompression.
- * This is a pure coincidence... they are independent and don't have to be compatible.
- *
- * This codec is used at server side for writing cells to WAL as well as for sending edits
- * as part of the distributed splitting process.
+ * Compression in this class is lifted off Compressor/KeyValueCompression. This is a pure
+ * coincidence... they are independent and don't have to be compatible. This codec is used at server
+ * side for writing cells to WAL as well as for sending edits as part of the distributed splitting
+ * process.
  */
-@InterfaceAudience.LimitedPrivate({HBaseInterfaceAudience.COPROC,
-  HBaseInterfaceAudience.PHOENIX, HBaseInterfaceAudience.CONFIG})
+@InterfaceAudience.LimitedPrivate({ HBaseInterfaceAudience.COPROC, HBaseInterfaceAudience.PHOENIX,
+  HBaseInterfaceAudience.CONFIG })
 public class WALCellCodec implements Codec {
   /** Configuration key for the class to use when encoding cells in the WAL */
   public static final String WAL_CELL_CODEC_CLASS_KEY = "hbase.regionserver.wal.codec";
@@ -73,9 +71,9 @@ public class WALCellCodec implements Codec {
   /**
    * Default constructor - <b>all subclasses must implement a constructor with this signature </b>
    * if they are to be dynamically loaded from the {@link Configuration}.
-   * @param conf configuration to configure <tt>this</tt>
+   * @param conf        configuration to configure <tt>this</tt>
    * @param compression compression the codec should support, can be <tt>null</tt> to indicate no
-   *          compression
+   *                    compression
    */
   public WALCellCodec(Configuration conf, CompressionContext compression) {
     this.compression = compression;
@@ -87,42 +85,41 @@ public class WALCellCodec implements Codec {
 
   /**
    * Create and setup a {@link WALCellCodec} from the {@code cellCodecClsName} and
-   * CompressionContext, if {@code cellCodecClsName} is specified.
-   * Otherwise Cell Codec classname is read from {@link Configuration}.
-   * Fully prepares the codec for use.
-   * @param conf {@link Configuration} to read for the user-specified codec. If none is specified,
-   *          uses a {@link WALCellCodec}.
+   * CompressionContext, if {@code cellCodecClsName} is specified. Otherwise Cell Codec classname is
+   * read from {@link Configuration}. Fully prepares the codec for use.
+   * @param conf             {@link Configuration} to read for the user-specified codec. If none is
+   *                         specified, uses a {@link WALCellCodec}.
    * @param cellCodecClsName name of codec
-   * @param compression compression the codec should use
+   * @param compression      compression the codec should use
    * @return a {@link WALCellCodec} ready for use.
    * @throws UnsupportedOperationException if the codec cannot be instantiated
    */
 
   public static WALCellCodec create(Configuration conf, String cellCodecClsName,
-      CompressionContext compression) throws UnsupportedOperationException {
+    CompressionContext compression) throws UnsupportedOperationException {
     if (cellCodecClsName == null) {
       cellCodecClsName = getWALCellCodecClass(conf).getName();
     }
-    return ReflectionUtils.instantiateWithCustomCtor(cellCodecClsName, new Class[]
-        { Configuration.class, CompressionContext.class }, new Object[] { conf, compression });
+    return ReflectionUtils.instantiateWithCustomCtor(cellCodecClsName,
+      new Class[] { Configuration.class, CompressionContext.class },
+      new Object[] { conf, compression });
   }
 
   /**
-   * Create and setup a {@link WALCellCodec} from the
-   * CompressionContext.
-   * Cell Codec classname is read from {@link Configuration}.
-   * Fully prepares the codec for use.
-   * @param conf {@link Configuration} to read for the user-specified codec. If none is specified,
-   *          uses a {@link WALCellCodec}.
+   * Create and setup a {@link WALCellCodec} from the CompressionContext. Cell Codec classname is
+   * read from {@link Configuration}. Fully prepares the codec for use.
+   * @param conf        {@link Configuration} to read for the user-specified codec. If none is
+   *                    specified, uses a {@link WALCellCodec}.
    * @param compression compression the codec should use
    * @return a {@link WALCellCodec} ready for use.
    * @throws UnsupportedOperationException if the codec cannot be instantiated
    */
-  public static WALCellCodec create(Configuration conf,
-      CompressionContext compression) throws UnsupportedOperationException {
+  public static WALCellCodec create(Configuration conf, CompressionContext compression)
+    throws UnsupportedOperationException {
     String cellCodecClsName = getWALCellCodecClass(conf).getName();
-    return ReflectionUtils.instantiateWithCustomCtor(cellCodecClsName, new Class[]
-        { Configuration.class, CompressionContext.class }, new Object[] { conf, compression });
+    return ReflectionUtils.instantiateWithCustomCtor(cellCodecClsName,
+      new Class[] { Configuration.class, CompressionContext.class },
+      new Object[] { conf, compression });
   }
 
   public interface ByteStringCompressor {
@@ -152,6 +149,7 @@ public class WALCellCodec implements Codec {
     public BaosAndCompressor(CompressionContext compressionContext) {
       this.compressionContext = compressionContext;
     }
+
     public ByteString toByteString() {
       // We need this copy to create the ByteString as the byte[] 'buf' is not immutable. We reuse
       // them.
@@ -200,18 +198,20 @@ public class WALCellCodec implements Codec {
 
   private static byte[] uncompressByteString(ByteString bs, Dictionary dict) throws IOException {
     InputStream in = bs.newInput();
-    byte status = (byte)in.read();
+    byte status = StreamUtils.readByte(in);
     if (status == Dictionary.NOT_IN_DICTIONARY) {
       byte[] arr = new byte[StreamUtils.readRawVarint32(in)];
       int bytesRead = in.read(arr);
       if (bytesRead != arr.length) {
         throw new IOException("Cannot read; wanted " + arr.length + ", but got " + bytesRead);
       }
-      if (dict != null) dict.addEntry(arr, 0, arr.length);
+      if (dict != null) {
+        dict.addEntry(arr, 0, arr.length);
+      }
       return arr;
     } else {
       // Status here is the higher-order byte of index of the dictionary entry.
-      short dictIdx = StreamUtils.toShort(status, (byte)in.read());
+      short dictIdx = StreamUtils.toShort(status, StreamUtils.readByte(in));
       byte[] entry = dict.getEntry(dictIdx);
       if (entry == null) {
         throw new IOException("Missing dictionary entry for index " + dictIdx);
@@ -224,6 +224,7 @@ public class WALCellCodec implements Codec {
     private final CompressionContext compression;
     private final boolean hasValueCompression;
     private final boolean hasTagCompression;
+
     public CompressedKvEncoder(OutputStream out, CompressionContext compression) {
       super(out);
       this.compression = compression;
@@ -232,7 +233,7 @@ public class WALCellCodec implements Codec {
     }
 
     @Override
-    public void write(Cell cell) throws IOException {
+    public void write(ExtendedCell cell) throws IOException {
       // We first write the KeyValue infrastructure as VInts.
       StreamUtils.writeRawVInt32(out, KeyValueUtil.keyLength(cell));
       StreamUtils.writeRawVInt32(out, cell.getValueLength());
@@ -278,6 +279,7 @@ public class WALCellCodec implements Codec {
     private final CompressionContext compression;
     private final boolean hasValueCompression;
     private final boolean hasTagCompression;
+
     public CompressedKvDecoder(InputStream in, CompressionContext compression) {
       super(in);
       this.compression = compression;
@@ -286,12 +288,12 @@ public class WALCellCodec implements Codec {
     }
 
     @Override
-    protected Cell parseCell() throws IOException {
+    protected ExtendedCell parseCell() throws IOException {
       int keylength = StreamUtils.readRawVarint32(in);
       int vlength = StreamUtils.readRawVarint32(in);
       int tagsLength = StreamUtils.readRawVarint32(in);
       int length = 0;
-      if(tagsLength == 0) {
+      if (tagsLength == 0) {
         length = KeyValue.KEYVALUE_INFRASTRUCTURE_SIZE + keylength + vlength;
       } else {
         length = KeyValue.KEYVALUE_WITH_TAGS_INFRASTRUCTURE_SIZE + keylength + vlength + tagsLength;
@@ -306,14 +308,14 @@ public class WALCellCodec implements Codec {
       int elemLen = readIntoArray(backingArray, pos + Bytes.SIZEOF_SHORT,
         compression.getDictionary(CompressionContext.DictionaryIndex.ROW));
       checkLength(elemLen, Short.MAX_VALUE);
-      pos = Bytes.putShort(backingArray, pos, (short)elemLen);
+      pos = Bytes.putShort(backingArray, pos, (short) elemLen);
       pos += elemLen;
 
       // family
       elemLen = readIntoArray(backingArray, pos + Bytes.SIZEOF_BYTE,
         compression.getDictionary(CompressionContext.DictionaryIndex.FAMILY));
       checkLength(elemLen, Byte.MAX_VALUE);
-      pos = Bytes.putByte(backingArray, pos, (byte)elemLen);
+      pos = Bytes.putByte(backingArray, pos, (byte) elemLen);
       pos += elemLen;
 
       // qualifier
@@ -329,7 +331,7 @@ public class WALCellCodec implements Codec {
       if (tagsLength > 0) {
         typeValLen = typeValLen - tagsLength - KeyValue.TAGS_LENGTH_SIZE;
       }
-      pos = Bytes.putByte(backingArray, pos, (byte)in.read());
+      pos = Bytes.putByte(backingArray, pos, (byte) in.read());
       int valLen = typeValLen - 1;
       if (hasValueCompression) {
         readCompressedValue(in, backingArray, pos, valLen);
@@ -351,7 +353,7 @@ public class WALCellCodec implements Codec {
     }
 
     private int readIntoArray(byte[] to, int offset, Dictionary dict) throws IOException {
-      byte status = (byte)in.read();
+      byte status = StreamUtils.readByte(in);
       if (status == Dictionary.NOT_IN_DICTIONARY) {
         // status byte indicating that data to be read is not in dictionary.
         // if this isn't in the dictionary, we need to add to the dictionary.
@@ -361,7 +363,7 @@ public class WALCellCodec implements Codec {
         return length;
       } else {
         // the status byte also acts as the higher order byte of the dictionary entry.
-        short dictIdx = StreamUtils.toShort(status, (byte)in.read());
+        short dictIdx = StreamUtils.toShort(status, StreamUtils.readByte(in));
         byte[] entry = dict.getEntry(dictIdx);
         if (entry == null) {
           throw new IOException("Missing dictionary entry for index " + dictIdx);
@@ -379,34 +381,32 @@ public class WALCellCodec implements Codec {
     }
 
     private void readCompressedValue(InputStream in, byte[] outArray, int outOffset,
-        int expectedLength) throws IOException {
+      int expectedLength) throws IOException {
       int compressedLen = StreamUtils.readRawVarint32(in);
-      int read = compression.getValueCompressor().decompress(in, compressedLen, outArray,
-        outOffset, expectedLength);
-      if (read != expectedLength) {
-        throw new IOException("ValueCompressor state error: short read");
-      }
+      compression.getValueCompressor().decompress(in, compressedLen, outArray, outOffset,
+        expectedLength);
     }
-
   }
 
   public static class EnsureKvEncoder extends BaseEncoder {
     public EnsureKvEncoder(OutputStream out) {
       super(out);
     }
+
     @Override
-    public void write(Cell cell) throws IOException {
+    public void write(ExtendedCell cell) throws IOException {
       checkFlushed();
       // Make sure to write tags into WAL
-      ByteBufferUtils.putInt(this.out, KeyValueUtil.getSerializedSize(cell, true));
-      KeyValueUtil.oswrite(cell, this.out, true);
+      ByteBufferUtils.putInt(this.out, cell.getSerializedSize(true));
+      cell.write(out, true);
     }
   }
 
   @Override
   public Decoder getDecoder(InputStream is) {
     return (compression == null)
-        ? new KeyValueCodecWithTags.KeyValueDecoder(is) : new CompressedKvDecoder(is, compression);
+      ? new KeyValueCodecWithTags.KeyValueDecoder(is)
+      : new CompressedKvDecoder(is, compression);
   }
 
   @Override
@@ -416,8 +416,7 @@ public class WALCellCodec implements Codec {
 
   @Override
   public Encoder getEncoder(OutputStream os) {
-    os = (os instanceof ByteBufferWriter) ? os
-        : new ByteBufferWriterOutputStream(os);
+    os = (os instanceof ByteBufferWriter) ? os : new ByteBufferWriterOutputStream(os);
     if (compression == null) {
       return new EnsureKvEncoder(os);
     }

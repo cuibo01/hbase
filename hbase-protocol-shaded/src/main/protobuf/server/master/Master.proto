@@ -137,6 +137,16 @@ message SplitTableRegionResponse {
   optional uint64 proc_id = 1;
 }
 
+message TruncateRegionRequest {
+  required RegionInfo region_info = 1;
+  optional uint64 nonce_group = 2 [default = 0];
+  optional uint64 nonce = 3 [default = 0];
+}
+
+message TruncateRegionResponse {
+  optional uint64 proc_id = 1;
+}
+
 message CreateTableRequest {
   required TableSchema table_schema = 1;
   repeated bytes split_keys = 2;
@@ -194,9 +204,32 @@ message ModifyTableRequest {
   required TableSchema table_schema = 2;
   optional uint64 nonce_group = 3 [default = 0];
   optional uint64 nonce = 4 [default = 0];
+  optional bool reopen_regions = 5 [default = true];
 }
 
 message ModifyTableResponse {
+  optional uint64 proc_id = 1;
+}
+
+message ReopenTableRegionsRequest {
+  required TableName table_name = 1;
+  repeated bytes region_names = 2;  // empty = all regions
+  optional uint64 nonce_group = 3 [default = 0];
+  optional uint64 nonce = 4 [default = 0];
+}
+
+message ReopenTableRegionsResponse {
+  optional uint64 proc_id = 1;
+}
+
+message FlushTableRequest {
+  required TableName table_name = 1;
+  repeated bytes column_family = 2;
+  optional uint64 nonce_group = 3 [default = 0];
+  optional uint64 nonce = 4 [default = 0];
+}
+
+message FlushTableResponse {
   optional uint64 proc_id = 1;
 }
 
@@ -437,10 +470,13 @@ message IsCleanerChoreEnabledResponse {
 
 message SnapshotRequest {
   required SnapshotDescription snapshot = 1;
+  optional uint64 nonce_group = 2 [default = 0];
+  optional uint64 nonce = 3 [default = 0];
 }
 
 message SnapshotResponse {
   required int64 expected_timeout = 1;
+  optional int64 proc_id = 2;
 }
 
 message GetCompletedSnapshotsRequest {
@@ -509,6 +545,14 @@ message GetTableDescriptorsResponse {
   repeated TableSchema table_schema = 1;
 }
 
+message ListTableDescriptorsByStateRequest {
+  required bool is_enabled = 1;
+}
+
+message ListTableDescriptorsByStateResponse {
+  repeated TableSchema table_schema = 1;
+}
+
 message GetTableNamesRequest {
   optional string regex = 1;
   optional bool include_sys_tables = 2 [default=false];
@@ -516,6 +560,14 @@ message GetTableNamesRequest {
 }
 
 message GetTableNamesResponse {
+  repeated TableName table_names = 1;
+}
+
+message ListTableNamesByStateRequest {
+  required bool is_enabled = 1;
+}
+
+message ListTableNamesByStateResponse {
   repeated TableName table_names = 1;
 }
 
@@ -755,6 +807,18 @@ message ModifyColumnStoreFileTrackerResponse {
   optional uint64 proc_id = 1;
 }
 
+message FlushMasterStoreRequest {}
+message FlushMasterStoreResponse {}
+
+message RollAllWALWritersRequest {
+  optional uint64 nonce_group = 1 [default = 0];
+  optional uint64 nonce = 2 [default = 0];
+}
+
+message RollAllWALWritersResponse {
+  optional uint64 proc_id = 1;
+}
+
 service MasterService {
   /** Used by the client to get the number of regions that have received the updated schema */
   rpc GetSchemaAlterStatus(GetSchemaAlterStatusRequest)
@@ -764,9 +828,17 @@ service MasterService {
   rpc GetTableDescriptors(GetTableDescriptorsRequest)
     returns(GetTableDescriptorsResponse);
 
+  /** List all enabled or disabled table descriptors. */
+  rpc ListTableDescriptorsByState(ListTableDescriptorsByStateRequest)
+    returns(ListTableDescriptorsByStateResponse);
+
   /** Get the list of table names. */
   rpc GetTableNames(GetTableNamesRequest)
     returns(GetTableNamesResponse);
+
+  /** List all enabled or disabled table names. */
+  rpc ListTableNamesByState(ListTableNamesByStateRequest)
+    returns(ListTableNamesByStateResponse);
 
   /** Return cluster status. */
   rpc GetClusterStatus(GetClusterStatusRequest)
@@ -823,6 +895,12 @@ service MasterService {
   rpc SplitRegion(SplitTableRegionRequest)
     returns(SplitTableRegionResponse);
 
+  /**
+   * Truncate region
+   */
+  rpc TruncateRegion(TruncateRegionRequest)
+    returns(TruncateRegionResponse);
+
   /** Deletes a table */
   rpc DeleteTable(DeleteTableRequest)
     returns(DeleteTableResponse);
@@ -842,6 +920,13 @@ service MasterService {
   /** Modify a table's metadata */
   rpc ModifyTable(ModifyTableRequest)
     returns(ModifyTableResponse);
+
+  /**
+   * Reopen regions of a table. Regions are reopened in-place without moving.
+   * Useful for rolling out table descriptor changes after modifyTable(reopenRegions=false).
+   */
+  rpc ReopenTableRegions(ReopenTableRegionsRequest)
+    returns(ReopenTableRegionsResponse);
 
   /** Creates a new table asynchronously */
   rpc CreateTable(CreateTableRequest)
@@ -1100,6 +1185,18 @@ service MasterService {
   rpc TransitReplicationPeerSyncReplicationState(TransitReplicationPeerSyncReplicationStateRequest)
     returns(TransitReplicationPeerSyncReplicationStateResponse);
 
+  rpc IsReplicationPeerEnabled(GetReplicationPeerStateRequest)
+    returns(GetReplicationPeerStateResponse);
+
+  rpc ReplicationPeerModificationSwitch(ReplicationPeerModificationSwitchRequest)
+    returns(ReplicationPeerModificationSwitchResponse);
+
+  rpc GetReplicationPeerModificationProcedures(GetReplicationPeerModificationProceduresRequest)
+    returns(GetReplicationPeerModificationProceduresResponse);
+
+  rpc IsReplicationPeerModificationEnabled(IsReplicationPeerModificationEnabledRequest)
+    returns(IsReplicationPeerModificationEnabledResponse);
+
   /** Returns a list of ServerNames marked as decommissioned. */
   rpc ListDecommissionedRegionServers(ListDecommissionedRegionServersRequest)
     returns(ListDecommissionedRegionServersResponse);
@@ -1194,6 +1291,18 @@ service MasterService {
 
   rpc ModifyColumnStoreFileTracker(ModifyColumnStoreFileTrackerRequest)
     returns(ModifyColumnStoreFileTrackerResponse);
+
+  rpc FlushMasterStore(FlushMasterStoreRequest)
+    returns(FlushMasterStoreResponse);
+
+  rpc FlushTable(FlushTableRequest)
+    returns(FlushTableResponse);
+
+  rpc RestoreBackupSystemTable(RestoreBackupSystemTableRequest)
+    returns(RestoreBackupSystemTableResponse);
+
+  rpc rollAllWALWriters(RollAllWALWritersRequest)
+    returns(RollAllWALWritersResponse);
 }
 
 // HBCK Service definitions.
@@ -1226,6 +1335,7 @@ message SetRegionStateInMetaResponse {
 message AssignsRequest {
   repeated RegionSpecifier region = 1;
   optional bool override = 2 [default = false];
+  optional bool force = 3 [default = false];
 }
 
 /** Like Admin's AssignRegionResponse except it can
@@ -1241,6 +1351,7 @@ message AssignsResponse {
 message UnassignsRequest {
   repeated RegionSpecifier region = 1;
   optional bool override = 2 [default = false];
+  optional bool force= 3 [default = false];
 }
 
 /** Like Admin's UnassignRegionResponse except it can
@@ -1278,6 +1389,13 @@ message ScheduleSCPsForUnknownServersResponse {
 message FixMetaRequest {}
 
 message FixMetaResponse {}
+
+message RestoreBackupSystemTableRequest {
+  required string snapshot_name = 1;
+}
+message RestoreBackupSystemTableResponse {
+  optional uint64 proc_id = 1;
+}
 
 service HbckService {
   /** Update state of the table in meta only*/

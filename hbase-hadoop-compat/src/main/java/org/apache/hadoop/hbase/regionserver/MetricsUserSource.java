@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,18 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver;
 
 import java.util.Map;
-
 import org.apache.hadoop.metrics2.MetricsCollector;
 import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Private
 public interface MetricsUserSource extends Comparable<MetricsUserSource> {
 
-  //These client metrics will be reported through clusterStatus and hbtop only
+  // These client metrics will be reported through clusterStatus and hbtop only
   interface ClientMetrics {
     void incrementReadRequest();
 
@@ -53,28 +51,29 @@ public interface MetricsUserSource extends Comparable<MetricsUserSource> {
 
   void updateDelete(long t);
 
-  void updateGet(long t);
+  void updateGet(long time, long blockBytesScanned);
 
-  void updateIncrement(long t);
+  void updateIncrement(long time, long blockBytesScanned);
 
-  void updateAppend(long t);
+  void updateAppend(long time, long blockBytesScanned);
 
   void updateReplay(long t);
 
-  void updateScanTime(long t);
+  void updateScan(long time, long blockBytesScanned);
+
+  void updateCheckAndMutate(long blockBytesScanned);
 
   void getMetrics(MetricsCollector metricsCollector, boolean all);
 
   /**
-   * Metrics collected at client level for a user(needed for reporting through clusterStatus
-   * and  hbtop currently)
+   * Metrics collected at client level for a user(needed for reporting through clusterStatus and
+   * hbtop currently)
    * @return metrics per hostname
    */
   Map<String, ClientMetrics> getClientMetrics();
 
   /**
    * Create a instance of ClientMetrics if not present otherwise return the previous one
-   *
    * @param hostName hostname of the client
    * @return Instance of ClientMetrics
    */

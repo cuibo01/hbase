@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,10 +25,7 @@ import java.util.Set;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.CompoundConfiguration;
-import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -62,39 +59,6 @@ public final class ReplicationUtils {
   private ReplicationUtils() {
   }
 
-  public static Configuration getPeerClusterConfiguration(ReplicationPeerConfig peerConfig,
-      Configuration baseConf) throws ReplicationException {
-    Configuration otherConf;
-    try {
-      otherConf = HBaseConfiguration.createClusterConf(baseConf, peerConfig.getClusterKey());
-    } catch (IOException e) {
-      throw new ReplicationException("Can't get peer configuration for peer " + peerConfig, e);
-    }
-
-    if (!peerConfig.getConfiguration().isEmpty()) {
-      CompoundConfiguration compound = new CompoundConfiguration();
-      compound.add(otherConf);
-      compound.addStringMap(peerConfig.getConfiguration());
-      return compound;
-    }
-
-    return otherConf;
-  }
-
-  public static void removeAllQueues(ReplicationQueueStorage queueStorage, String peerId)
-      throws ReplicationException {
-    for (ServerName replicator : queueStorage.getListOfReplicators()) {
-      List<String> queueIds = queueStorage.getAllQueues(replicator);
-      for (String queueId : queueIds) {
-        ReplicationQueueInfo queueInfo = new ReplicationQueueInfo(queueId);
-        if (queueInfo.getPeerId().equals(peerId)) {
-          queueStorage.removeQueue(replicator, queueId);
-        }
-      }
-      queueStorage.removeReplicatorIfQueueIsEmpty(replicator);
-    }
-  }
-
   private static boolean isCollectionEqual(Collection<String> c1, Collection<String> c2) {
     if (c1 == null) {
       return c2 == null;
@@ -110,7 +74,7 @@ public final class ReplicationUtils {
   }
 
   private static boolean isTableCFsEqual(Map<TableName, List<String>> tableCFs1,
-      Map<TableName, List<String>> tableCFs2) {
+    Map<TableName, List<String>> tableCFs2) {
     if (tableCFs1 == null) {
       return tableCFs2 == null;
     }
@@ -135,16 +99,16 @@ public final class ReplicationUtils {
   }
 
   public static boolean isNamespacesAndTableCFsEqual(ReplicationPeerConfig rpc1,
-      ReplicationPeerConfig rpc2) {
+    ReplicationPeerConfig rpc2) {
     if (rpc1.replicateAllUserTables() != rpc2.replicateAllUserTables()) {
       return false;
     }
     if (rpc1.replicateAllUserTables()) {
-      return isNamespacesEqual(rpc1.getExcludeNamespaces(), rpc2.getExcludeNamespaces()) &&
-        isTableCFsEqual(rpc1.getExcludeTableCFsMap(), rpc2.getExcludeTableCFsMap());
+      return isNamespacesEqual(rpc1.getExcludeNamespaces(), rpc2.getExcludeNamespaces())
+        && isTableCFsEqual(rpc1.getExcludeTableCFsMap(), rpc2.getExcludeTableCFsMap());
     } else {
-      return isNamespacesEqual(rpc1.getNamespaces(), rpc2.getNamespaces()) &&
-        isTableCFsEqual(rpc1.getTableCFsMap(), rpc2.getTableCFsMap());
+      return isNamespacesEqual(rpc1.getNamespaces(), rpc2.getNamespaces())
+        && isTableCFsEqual(rpc1.getTableCFsMap(), rpc2.getTableCFsMap());
     }
   }
 
@@ -158,7 +122,7 @@ public final class ReplicationUtils {
   }
 
   public static FileSystem getRemoteWALFileSystem(Configuration conf, String remoteWALDir)
-      throws IOException {
+    throws IOException {
     return new Path(remoteWALDir).getFileSystem(conf);
   }
 
@@ -184,14 +148,14 @@ public final class ReplicationUtils {
 
   /**
    * Do the sleeping logic
-   * @param msg Why we sleep
-   * @param sleepForRetries the base sleep time.
-   * @param sleepMultiplier by how many times the default sleeping time is augmented
+   * @param msg                  Why we sleep
+   * @param sleepForRetries      the base sleep time.
+   * @param sleepMultiplier      by how many times the default sleeping time is augmented
    * @param maxRetriesMultiplier the max retry multiplier
    * @return True if <code>sleepMultiplier</code> is &lt; <code>maxRetriesMultiplier</code>
    */
   public static boolean sleepForRetries(String msg, long sleepForRetries, int sleepMultiplier,
-      int maxRetriesMultiplier) {
+    int maxRetriesMultiplier) {
     try {
       LOG.trace("{}, sleeping {} times {}", msg, sleepForRetries, sleepMultiplier);
       Thread.sleep(sleepForRetries * sleepMultiplier);

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -41,9 +41,9 @@ import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.ReplicationTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.CommonFSUtils.StreamLacksCapabilityException;
-import org.apache.hadoop.hbase.wal.WAL;
+import org.apache.hadoop.hbase.wal.NoEOFWALStreamReader;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
-import org.apache.hadoop.hbase.wal.WALFactory;
+import org.apache.hadoop.hbase.wal.WALStreamReader;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
@@ -107,8 +107,8 @@ public class TestSerialReplication extends SerialReplicationTestBase {
     Map<String, Long> regionsToSeqId = new HashMap<>();
     regionsToSeqId.put(region.getEncodedName(), -1L);
     regions.stream().map(RegionInfo::getEncodedName).forEach(n -> regionsToSeqId.put(n, -1L));
-    try (WAL.Reader reader =
-      WALFactory.createReader(UTIL.getTestFileSystem(), logPath, UTIL.getConfiguration())) {
+    try (WALStreamReader reader =
+      NoEOFWALStreamReader.create(UTIL.getTestFileSystem(), logPath, UTIL.getConfiguration())) {
       int count = 0;
       for (Entry entry;;) {
         entry = reader.next();
@@ -119,8 +119,8 @@ public class TestSerialReplication extends SerialReplicationTestBase {
         Long seqId = regionsToSeqId.get(encodedName);
         assertNotNull(
           "Unexcepted entry " + entry + ", expected regions " + region + ", or " + regions, seqId);
-        assertTrue("Sequence id go backwards from " + seqId + " to " +
-          entry.getKey().getSequenceId() + " for " + encodedName,
+        assertTrue("Sequence id go backwards from " + seqId + " to "
+          + entry.getKey().getSequenceId() + " for " + encodedName,
           entry.getKey().getSequenceId() >= seqId.longValue());
         if (count < 100) {
           assertEquals(encodedName + " is pushed before parent " + region.getEncodedName(),
@@ -168,8 +168,8 @@ public class TestSerialReplication extends SerialReplicationTestBase {
     RegionInfo region = regionsAfterMerge.get(0);
     regionsToSeqId.put(region.getEncodedName(), -1L);
     regions.stream().map(RegionInfo::getEncodedName).forEach(n -> regionsToSeqId.put(n, -1L));
-    try (WAL.Reader reader =
-      WALFactory.createReader(UTIL.getTestFileSystem(), logPath, UTIL.getConfiguration())) {
+    try (WALStreamReader reader =
+      NoEOFWALStreamReader.create(UTIL.getTestFileSystem(), logPath, UTIL.getConfiguration())) {
       int count = 0;
       for (Entry entry;;) {
         entry = reader.next();
@@ -180,13 +180,13 @@ public class TestSerialReplication extends SerialReplicationTestBase {
         Long seqId = regionsToSeqId.get(encodedName);
         assertNotNull(
           "Unexcepted entry " + entry + ", expected regions " + region + ", or " + regions, seqId);
-        assertTrue("Sequence id go backwards from " + seqId + " to " +
-          entry.getKey().getSequenceId() + " for " + encodedName,
+        assertTrue("Sequence id go backwards from " + seqId + " to "
+          + entry.getKey().getSequenceId() + " for " + encodedName,
           entry.getKey().getSequenceId() >= seqId.longValue());
         if (count < 100) {
           assertNotEquals(
-            encodedName + " is pushed before parents " +
-              regions.stream().map(RegionInfo::getEncodedName).collect(Collectors.joining(" and ")),
+            encodedName + " is pushed before parents " + regions.stream()
+              .map(RegionInfo::getEncodedName).collect(Collectors.joining(" and ")),
             region.getEncodedName(), encodedName);
         } else {
           assertEquals(region.getEncodedName(), encodedName);

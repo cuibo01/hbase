@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,10 +18,13 @@
 package org.apache.hadoop.hbase.client;
 
 import static java.util.stream.Collectors.toList;
-import static org.apache.hadoop.hbase.client.ConnectionUtils.allOf;
 import static org.apache.hadoop.hbase.client.ConnectionUtils.toCheckExistenceOnly;
+import static org.apache.hadoop.hbase.util.FutureUtils.allOf;
 
+import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -111,6 +114,14 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
   long getScanTimeout(TimeUnit unit);
 
   /**
+   * Get the map of request attributes
+   * @return a map of request attributes supplied by the client
+   */
+  default Map<String, byte[]> getRequestAttributes() {
+    return Collections.emptyMap();
+  }
+
+  /**
    * Test for the existence of columns in the table, as specified by the Get.
    * <p>
    * This will return true if the Get matches one or more keys, false if not.
@@ -154,7 +165,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * write operations to a row are synchronized, but readers do not take row locks so get and scan
    * operations can see this operation partially completed.
    * @param append object that specifies the columns and amounts to be used for the increment
-   *          operations
+   *               operations
    * @return values of columns after the append operation (maybe null). The return value will be
    *         wrapped by a {@link CompletableFuture}.
    */
@@ -167,7 +178,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * so write operations to a row are synchronized, but readers do not take row locks so get and
    * scan operations can see this operation partially completed.
    * @param increment object that specifies the columns and amounts to be used for the increment
-   *          operations
+   *                  operations
    * @return values of columns after the increment. The return value will be wrapped by a
    *         {@link CompletableFuture}.
    */
@@ -177,10 +188,11 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * See {@link #incrementColumnValue(byte[], byte[], byte[], long, Durability)}
    * <p>
    * The {@link Durability} is defaulted to {@link Durability#SYNC_WAL}.
-   * @param row The row that contains the cell to increment.
-   * @param family The column family of the cell to increment.
+   * @param row       The row that contains the cell to increment.
+   * @param family    The column family of the cell to increment.
    * @param qualifier The column qualifier of the cell to increment.
-   * @param amount The amount to increment the cell with (or decrement, if the amount is negative).
+   * @param amount    The amount to increment the cell with (or decrement, if the amount is
+   *                  negative).
    * @return The new value, post increment. The return value will be wrapped by a
    *         {@link CompletableFuture}.
    */
@@ -196,10 +208,11 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * <p>
    * Setting durability to {@link Durability#SKIP_WAL} means that in a fail scenario you will lose
    * any increments that have not been flushed.
-   * @param row The row that contains the cell to increment.
-   * @param family The column family of the cell to increment.
-   * @param qualifier The column qualifier of the cell to increment.
-   * @param amount The amount to increment the cell with (or decrement, if the amount is negative).
+   * @param row        The row that contains the cell to increment.
+   * @param family     The column family of the cell to increment.
+   * @param qualifier  The column qualifier of the cell to increment.
+   * @param amount     The amount to increment the cell with (or decrement, if the amount is
+   *                   negative).
    * @param durability The persistence guarantee for this increment.
    * @return The new value, post increment. The return value will be wrapped by a
    *         {@link CompletableFuture}.
@@ -210,7 +223,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
     Preconditions.checkNotNull(family, "family is null");
     return increment(
       new Increment(row).addColumn(family, qualifier, amount).setDurability(durability))
-        .thenApply(r -> Bytes.toLong(r.getValue(family, qualifier)));
+      .thenApply(r -> Bytes.toLong(r.getValue(family, qualifier)));
   }
 
   /**
@@ -221,16 +234,14 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * This is a fluent style API, the code is like:
    *
    * <pre>
-   * <code>
    * table.checkAndMutate(row, family).qualifier(qualifier).ifNotExists().thenPut(put)
-   *     .thenAccept(succ -> {
-   *       if (succ) {
-   *         System.out.println("Check and put succeeded");
-   *       } else {
-   *         System.out.println("Check and put failed");
-   *       }
-   *     });
-   * </code>
+   *   .thenAccept(succ -&gt; {
+   *     if (succ) {
+   *       System.out.println("Check and put succeeded");
+   *     } else {
+   *       System.out.println("Check and put failed");
+   *     }
+   *   });
    * </pre>
    *
    * @deprecated Since 3.0.0, will be removed in 4.0.0. For internal test use only, do not use it
@@ -248,11 +259,13 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
   interface CheckAndMutateBuilder {
 
     /**
+     * Match a qualifier.
      * @param qualifier column qualifier to check.
      */
     CheckAndMutateBuilder qualifier(byte[] qualifier);
 
     /**
+     * Match a timerange.
      * @param timeRange time range to check.
      */
     CheckAndMutateBuilder timeRange(TimeRange timeRange);
@@ -271,12 +284,14 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
     }
 
     /**
+     * Compare a value
      * @param compareOp comparison operator to use
-     * @param value the expected value
+     * @param value     the expected value
      */
     CheckAndMutateBuilder ifMatches(CompareOperator compareOp, byte[] value);
 
     /**
+     * Specify a Put to commit if the check succeeds.
      * @param put data to put if check succeeds
      * @return {@code true} if the new put was executed, {@code false} otherwise. The return value
      *         will be wrapped by a {@link CompletableFuture}.
@@ -284,6 +299,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
     CompletableFuture<Boolean> thenPut(Put put);
 
     /**
+     * Specify a Delete to commit if the check succeeds.
      * @param delete data to delete if check succeeds
      * @return {@code true} if the new delete was executed, {@code false} otherwise. The return
      *         value will be wrapped by a {@link CompletableFuture}.
@@ -291,6 +307,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
     CompletableFuture<Boolean> thenDelete(Delete delete);
 
     /**
+     * Specify a RowMutations to commit if the check succeeds.
      * @param mutation mutations to perform if check succeeds
      * @return true if the new mutation was executed, false otherwise. The return value will be
      *         wrapped by a {@link CompletableFuture}.
@@ -306,16 +323,13 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * execute it. This is a fluent style API, the code is like:
    *
    * <pre>
-   * <code>
-   * table.checkAndMutate(row, filter).thenPut(put)
-   *     .thenAccept(succ -> {
-   *       if (succ) {
-   *         System.out.println("Check and put succeeded");
-   *       } else {
-   *         System.out.println("Check and put failed");
-   *       }
-   *     });
-   * </code>
+   * table.checkAndMutate(row, filter).thenPut(put).thenAccept(succ -&gt; {
+   *   if (succ) {
+   *     System.out.println("Check and put succeeded");
+   *   } else {
+   *     System.out.println("Check and put failed");
+   *   }
+   * });
    * </pre>
    *
    * @deprecated Since 3.0.0, will be removed in 4.0.0. For internal test use only, do not use it
@@ -333,11 +347,13 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
   interface CheckAndMutateWithFilterBuilder {
 
     /**
+     * Match a timerange.
      * @param timeRange time range to check.
      */
     CheckAndMutateWithFilterBuilder timeRange(TimeRange timeRange);
 
     /**
+     * Specify a Put to commit if the check succeeds.
      * @param put data to put if check succeeds
      * @return {@code true} if the new put was executed, {@code false} otherwise. The return value
      *         will be wrapped by a {@link CompletableFuture}.
@@ -345,6 +361,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
     CompletableFuture<Boolean> thenPut(Put put);
 
     /**
+     * Specify a Delete to commit if the check succeeds.
      * @param delete data to delete if check succeeds
      * @return {@code true} if the new delete was executed, {@code false} otherwise. The return
      *         value will be wrapped by a {@link CompletableFuture}.
@@ -352,6 +369,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
     CompletableFuture<Boolean> thenDelete(Delete delete);
 
     /**
+     * Specify a RowMutations to commit if the check succeeds.
      * @param mutation mutations to perform if check succeeds
      * @return true if the new mutation was executed, false otherwise. The return value will be
      *         wrapped by a {@link CompletableFuture}.
@@ -397,7 +415,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
 
   /**
    * The scan API uses the observer pattern.
-   * @param scan A configured {@link Scan} object.
+   * @param scan     A configured {@link Scan} object.
    * @param consumer the consumer used to receive results.
    * @see ScanResultConsumer
    * @see AdvancedScanResultConsumer
@@ -415,7 +433,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
 
   /**
    * Gets a scanner on the current table for the given family and qualifier.
-   * @param family The column family to scan.
+   * @param family    The column family to scan.
    * @param qualifier The column qualifier to scan.
    * @return A scanner.
    */
@@ -438,16 +456,14 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * <p>
    *
    * <pre>
-   * <code>
-   * table.scanAll(new Scan().withStartRow(row, false).setLimit(1)).thenAccept(results -> {
+   * table.scanAll(new Scan().withStartRow(row, false).setLimit(1)).thenAccept(results -&gt; {
    *   if (results.isEmpty()) {
-   *      System.out.println("No row after " + Bytes.toStringBinary(row));
+   *     System.out.println("No row after " + Bytes.toStringBinary(row));
    *   } else {
    *     System.out.println("The closest row after " + Bytes.toStringBinary(row) + " is "
-   *         + Bytes.toStringBinary(results.stream().findFirst().get().getRow()));
+   *       + Bytes.toStringBinary(results.stream().findFirst().get().getRow()));
    *   }
    * });
-   * </code>
    * </pre>
    * <p>
    * If your result set is very large, you should use other scan method to get a scanner or use
@@ -461,7 +477,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * a {@code ResultScanner} or let you pass in a {@code ScanResultConsumer}. There is no
    * performance difference between these scan methods so do not worry.
    * @param scan A configured {@link Scan} object. So if you use this method to fetch a really large
-   *          result set, it is likely to cause OOM.
+   *             result set, it is likely to cause OOM.
    * @return The results of this small scan operation. The return value will be wrapped by a
    *         {@link CompletableFuture}.
    */
@@ -572,17 +588,15 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * one line lambda expression, like:
    *
    * <pre>
-   * <code>
-   * channel -> xxxService.newStub(channel)
-   * </code>
+   * channel -&gt; xxxService.newStub(channel)
    * </pre>
    *
    * @param stubMaker a delegation to the actual {@code newStub} call.
-   * @param callable a delegation to the actual protobuf rpc call. See the comment of
-   *          {@link ServiceCaller} for more details.
-   * @param row The row key used to identify the remote region location
-   * @param <S> the type of the asynchronous stub
-   * @param <R> the type of the return value
+   * @param callable  a delegation to the actual protobuf rpc call. See the comment of
+   *                  {@link ServiceCaller} for more details.
+   * @param row       The row key used to identify the remote region location
+   * @param <S>       the type of the asynchronous stub
+   * @param <R>       the type of the return value
    * @return the return value of the protobuf rpc call, wrapped by a {@link CompletableFuture}.
    * @see ServiceCaller
    */
@@ -607,7 +621,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    *
    * <pre>
    * locateThenCall(byte[] row) {
-   *   locate(row).whenComplete((location, locateError) -> {
+   *   locate(row).whenComplete((location, locateError) -&gt; {
    *     if (locateError != null) {
    *       callback.onError(locateError);
    *       return;
@@ -619,7 +633,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    *     } else {
    *       locateThenCall(region.getEndKey());
    *     }
-   *     sendCall().whenComplete((resp, error) -> {
+   *     sendCall().whenComplete((resp, error) -&gt; {
    *       if (error != null) {
    *         callback.onRegionError(region, error);
    *       } else {
@@ -637,14 +651,16 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
   interface CoprocessorCallback<R> {
 
     /**
+     * Indicate that the respose of a region is available
      * @param region the region that the response belongs to
-     * @param resp the response of the coprocessor call
+     * @param resp   the response of the coprocessor call
      */
     void onRegionComplete(RegionInfo region, R resp);
 
     /**
+     * Indicate that the error for a region is available
      * @param region the region that the error belongs to
-     * @param error the response error of the coprocessor call
+     * @param error  the response error of the coprocessor call
      */
     void onRegionError(RegionInfo region, Throwable error);
 
@@ -662,6 +678,47 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
   }
 
   /**
+   * Some coprocessors may support the idea of "partial results." If for some reason a coprocessor
+   * cannot return all results for a given region in a single response, the client side can be
+   * designed to recognize this and continuing requesting more results until they are completely
+   * accumulated in the client.
+   * <p>
+   * It is up to a particular coprocessor implementation and its corresponding clients to agree on
+   * what it means for results to be incomplete, how this state is communicated, and how multiple
+   * incomplete results are accumulated together.
+   * <p>
+   * Use this callback when you want to execute a coprocessor call on a range of regions, and that
+   * coprocessor may return incomplete results for a given region. See also the docs for
+   * {@link CoprocessorCallback}, which all apply here to its child interface too.
+   */
+  @InterfaceAudience.Public
+  interface PartialResultCoprocessorCallback<S, R> extends CoprocessorCallback<R> {
+    /**
+     * Subclasses should implement this to tell AsyncTable whether the given response is "final" or
+     * whether the AsyncTable should send another request to the coprocessor to fetch more results
+     * from the given region. This method of fetching more results can be used many times until
+     * there are no more results to fetch from the region.
+     * @param response The response received from the coprocessor
+     * @param region   The region the response came from
+     * @return A ServiceCaller object if the response was not final and therefore another request is
+     *         required to continuing fetching results. null if no more requests need to be sent to
+     *         the region.
+     */
+    ServiceCaller<S, R> getNextCallable(R response, RegionInfo region);
+
+    /**
+     * Subclasses should implement this such that, when the above method returns non-null, this
+     * method returns the duration that AsyncTable should wait before sending the next request to
+     * the given region. You can use this to create a back-off behavior to reduce load on the
+     * RegionServer. If that's not desired, you can always return {@link Duration.ZERO}.
+     * @param response The response received from the coprocessor
+     * @param region   The region the response came from
+     * @return The duration to wait.
+     */
+    Duration getWaitInterval(R response, RegionInfo region);
+  }
+
+  /**
    * Helper class for sending coprocessorService request that executes a coprocessor call on regions
    * which are covered by a range.
    * <p>
@@ -673,6 +730,7 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
   interface CoprocessorServiceBuilder<S, R> {
 
     /**
+     * Specify a start row
      * @param startKey start region selection with region containing this row, inclusive.
      */
     default CoprocessorServiceBuilder<S, R> fromRow(byte[] startKey) {
@@ -680,12 +738,14 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
     }
 
     /**
-     * @param startKey start region selection with region containing this row
+     * Specify a start row
+     * @param startKey  start region selection with region containing this row
      * @param inclusive whether to include the startKey
      */
     CoprocessorServiceBuilder<S, R> fromRow(byte[] startKey, boolean inclusive);
 
     /**
+     * Specify a stop row
      * @param endKey select regions up to and including the region containing this row, exclusive.
      */
     default CoprocessorServiceBuilder<S, R> toRow(byte[] endKey) {
@@ -693,7 +753,8 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
     }
 
     /**
-     * @param endKey select regions up to and including the region containing this row
+     * Specify a stop row
+     * @param endKey    select regions up to and including the region containing this row
      * @param inclusive whether to include the endKey
      */
     CoprocessorServiceBuilder<S, R> toRow(byte[] endKey, boolean inclusive);
@@ -714,17 +775,23 @@ public interface AsyncTable<C extends ScanResultConsumerBase> {
    * is only a one line lambda expression, like:
    *
    * <pre>
-   * <code>
-   * channel -> xxxService.newStub(channel)
-   * </code>
+   * channel -&gt; xxxService.newStub(channel)
    * </pre>
    *
    * @param stubMaker a delegation to the actual {@code newStub} call.
-   * @param callable a delegation to the actual protobuf rpc call. See the comment of
-   *          {@link ServiceCaller} for more details.
-   * @param callback callback to get the response. See the comment of {@link CoprocessorCallback}
-   *          for more details.
+   * @param callable  a delegation to the actual protobuf rpc call. See the comment of
+   *                  {@link ServiceCaller} for more details.
+   * @param callback  callback to get the response. See the comment of {@link CoprocessorCallback}
+   *                  for more details.
    */
   <S, R> CoprocessorServiceBuilder<S, R> coprocessorService(Function<RpcChannel, S> stubMaker,
     ServiceCaller<S, R> callable, CoprocessorCallback<R> callback);
+
+  /**
+   * Similar to above. Use when your coprocessor client+endpoint supports partial results. If the
+   * server does not offer partial results, it is still safe to use this, assuming you implement
+   * your {@link PartialResultCoprocessorCallback#getNextCallable(Object, RegionInfo)} correctly.
+   */
+  <S, R> CoprocessorServiceBuilder<S, R> coprocessorService(Function<RpcChannel, S> stubMaker,
+    ServiceCaller<S, R> callable, PartialResultCoprocessorCallback<S, R> callback);
 }

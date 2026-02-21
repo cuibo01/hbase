@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,15 +20,20 @@ package org.apache.hadoop.hbase.regionserver;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CompatibilityFactory;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.metrics.MetricRegistries;
+import org.apache.hadoop.hbase.quotas.RpcThrottlingException;
+import org.apache.hadoop.hbase.regionserver.metrics.MetricsTableRequests;
 import org.apache.hadoop.hbase.test.MetricsAssertHelper;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.JvmPauseMonitor;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
@@ -38,15 +43,15 @@ import org.junit.experimental.categories.Category;
 /**
  * Unit test version of rs metrics tests.
  */
-@Category({RegionServerTests.class, SmallTests.class})
+@Category({ RegionServerTests.class, SmallTests.class })
 public class TestMetricsRegionServer {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMetricsRegionServer.class);
+    HBaseClassTestRule.forClass(TestMetricsRegionServer.class);
 
   public static MetricsAssertHelper HELPER =
-      CompatibilityFactory.getInstance(MetricsAssertHelper.class);
+    CompatibilityFactory.getInstance(MetricsAssertHelper.class);
 
   private MetricsRegionServerWrapperStub wrapper;
   private MetricsRegionServer rsm;
@@ -64,6 +69,12 @@ public class TestMetricsRegionServer {
     serverSource = rsm.getMetricsSource();
   }
 
+  @After
+  public void tearDown() {
+    // Clean up global registries after each test to avoid interference
+    MetricRegistries.global().clear();
+  }
+
   @Test
   public void testWrapperSource() {
     HELPER.assertTag("serverName", "test", serverSource);
@@ -72,6 +83,7 @@ public class TestMetricsRegionServer {
     HELPER.assertGauge("regionServerStartTime", 100, serverSource);
     HELPER.assertGauge("regionCount", 101, serverSource);
     HELPER.assertGauge("storeCount", 2, serverSource);
+    HELPER.assertGauge("maxStoreFileCount", 23, serverSource);
     HELPER.assertGauge("maxStoreFileAge", 2, serverSource);
     HELPER.assertGauge("minStoreFileAge", 2, serverSource);
     HELPER.assertGauge("avgStoreFileAge", 2, serverSource);
@@ -80,12 +92,14 @@ public class TestMetricsRegionServer {
     HELPER.assertGauge("hlogFileSize", 1024000, serverSource);
     HELPER.assertGauge("storeFileCount", 300, serverSource);
     HELPER.assertGauge("memstoreSize", 1025, serverSource);
+    HELPER.assertGauge("memstoreHeapSize", 500, serverSource);
+    HELPER.assertGauge("memstoreOffHeapSize", 600, serverSource);
     HELPER.assertGauge("storeFileSize", 1900, serverSource);
     HELPER.assertGauge("storeFileSizeGrowthRate", 50.0, serverSource);
     HELPER.assertCounter("totalRequestCount", 899, serverSource);
     HELPER.assertCounter("totalRowActionRequestCount",
       HELPER.getCounter("readRequestCount", serverSource)
-          + HELPER.getCounter("writeRequestCount", serverSource),
+        + HELPER.getCounter("writeRequestCount", serverSource),
       serverSource);
     HELPER.assertCounter("readRequestCount", 997, serverSource);
     HELPER.assertCounter("cpRequestCount", 998, serverSource);
@@ -98,79 +112,112 @@ public class TestMetricsRegionServer {
     HELPER.assertGauge("staticBloomSize", 408, serverSource);
     HELPER.assertGauge("mutationsWithoutWALCount", 409, serverSource);
     HELPER.assertGauge("mutationsWithoutWALSize", 410, serverSource);
+    HELPER.assertCounter("bloomFilterRequestsCount", 411, serverSource);
+    HELPER.assertCounter("bloomFilterNegativeResultsCount", 412, serverSource);
+    HELPER.assertCounter("bloomFilterEligibleRequestsCount", 413, serverSource);
     HELPER.assertGauge("percentFilesLocal", 99, serverSource);
     HELPER.assertGauge("percentFilesLocalSecondaryRegions", 99, serverSource);
     HELPER.assertGauge("compactionQueueLength", 411, serverSource);
     HELPER.assertGauge("flushQueueLength", 412, serverSource);
     HELPER.assertGauge("blockCacheFreeSize", 413, serverSource);
     HELPER.assertGauge("blockCacheCount", 414, serverSource);
+    HELPER.assertGauge("blockCacheDataBlockCount", 300, serverSource);
     HELPER.assertGauge("blockCacheSize", 415, serverSource);
     HELPER.assertCounter("blockCacheHitCount", 416, serverSource);
+    HELPER.assertCounter("blockCacheHitCachingCount", 16, serverSource);
     HELPER.assertCounter("blockCacheMissCount", 417, serverSource);
+    HELPER.assertCounter("blockCacheMissCachingCount", 17, serverSource);
     HELPER.assertCounter("blockCacheEvictionCount", 418, serverSource);
     HELPER.assertGauge("blockCacheCountHitPercent", 98, serverSource);
     HELPER.assertGauge("blockCacheExpressHitPercent", 97, serverSource);
     HELPER.assertCounter("blockCacheFailedInsertionCount", 36, serverSource);
+    HELPER.assertGauge("l1CacheFreeSize", 100, serverSource);
+    HELPER.assertGauge("l1CacheSize", 123, serverSource);
+    HELPER.assertGauge("l1CacheCount", 50, serverSource);
+    HELPER.assertCounter("l1CacheEvictionCount", 1000, serverSource);
     HELPER.assertGauge("l1CacheHitCount", 200, serverSource);
+    HELPER.assertGauge("l1CacheHitCachingCount", 200, serverSource);
     HELPER.assertGauge("l1CacheMissCount", 100, serverSource);
+    HELPER.assertGauge("l1CacheMissCachingCount", 100, serverSource);
     HELPER.assertGauge("l1CacheHitRatio", 80, serverSource);
+    HELPER.assertGauge("l1CacheHitCachingRatio", 80, serverSource);
     HELPER.assertGauge("l1CacheMissRatio", 20, serverSource);
+    HELPER.assertGauge("l1CacheMissCachingRatio", 20, serverSource);
+    HELPER.assertGauge("l2CacheFreeSize", 200, serverSource);
+    HELPER.assertGauge("l2CacheSize", 456, serverSource);
+    HELPER.assertGauge("l2CacheCount", 75, serverSource);
+    HELPER.assertCounter("l2CacheEvictionCount", 2000, serverSource);
     HELPER.assertGauge("l2CacheHitCount", 800, serverSource);
+    HELPER.assertGauge("l2CacheHitCachingCount", 800, serverSource);
     HELPER.assertGauge("l2CacheMissCount", 200, serverSource);
+    HELPER.assertGauge("l2CacheMissCachingCount", 200, serverSource);
     HELPER.assertGauge("l2CacheHitRatio", 90, serverSource);
+    HELPER.assertGauge("l2CacheHitCachingRatio", 90, serverSource);
     HELPER.assertGauge("l2CacheMissRatio", 10, serverSource);
+    HELPER.assertGauge("l2CacheMissCachingRatio", 10, serverSource);
     HELPER.assertCounter("updatesBlockedTime", 419, serverSource);
   }
 
   @Test
   public void testConstuctor() {
-    assertNotNull("There should be a hadoop1/hadoop2 metrics source", rsm.getMetricsSource() );
-    assertNotNull("The RegionServerMetricsWrapper should be accessable", rsm.getRegionServerWrapper());
+    assertNotNull("There should be a hadoop1/hadoop2 metrics source", rsm.getMetricsSource());
+    assertNotNull("The RegionServerMetricsWrapper should be accessable",
+      rsm.getRegionServerWrapper());
   }
 
   @Test
   public void testSlowCount() {
-    for (int i=0; i < 12; i ++) {
-      rsm.updateAppend(null, 12);
-      rsm.updateAppend(null, 1002);
+    HRegion region = mock(HRegion.class);
+    MetricsTableRequests metricsTableRequests = mock(MetricsTableRequests.class);
+    when(region.getMetricsTableRequests()).thenReturn(metricsTableRequests);
+    when(metricsTableRequests.isEnableTableLatenciesMetrics()).thenReturn(false);
+    when(metricsTableRequests.isEnabTableQueryMeterMetrics()).thenReturn(false);
+    for (int i = 0; i < 12; i++) {
+      rsm.updateAppend(region, 12, 120);
+      rsm.updateAppend(region, 1002, 10020);
     }
-    for (int i=0; i < 13; i ++) {
-      rsm.updateDeleteBatch(null, 13);
-      rsm.updateDeleteBatch(null, 1003);
+    for (int i = 0; i < 13; i++) {
+      rsm.updateDeleteBatch(region, 13);
+      rsm.updateDeleteBatch(region, 1003);
     }
-    for (int i=0; i < 14; i ++) {
-      rsm.updateGet(null, 14);
-      rsm.updateGet(null, 1004);
+    for (int i = 0; i < 14; i++) {
+      rsm.updateGet(region, 14, 140);
+      rsm.updateGet(region, 1004, 10040);
     }
-    for (int i=0; i < 15; i ++) {
-      rsm.updateIncrement(null, 15);
-      rsm.updateIncrement(null, 1005);
+    for (int i = 0; i < 15; i++) {
+      rsm.updateIncrement(region, 15, 150);
+      rsm.updateIncrement(region, 1005, 10050);
     }
-    for (int i=0; i < 16; i ++) {
-      rsm.updatePutBatch(null, 16);
-      rsm.updatePutBatch(null, 1006);
-    }
-
-    for (int i=0; i < 17; i ++) {
-      rsm.updatePut(null, 17);
-      rsm.updateDelete(null, 17);
-      rsm.updatePut(null, 1006);
-      rsm.updateDelete(null, 1003);
-      rsm.updateCheckAndDelete(null, 17);
-      rsm.updateCheckAndPut(null, 17);
-      rsm.updateCheckAndMutate(null, 17);
+    for (int i = 0; i < 16; i++) {
+      rsm.updatePutBatch(region, 16);
+      rsm.updatePutBatch(region, 1006);
     }
 
+    for (int i = 0; i < 17; i++) {
+      rsm.updatePut(region, 17);
+      rsm.updateDelete(region, 17);
+      rsm.updatePut(region, 1006);
+      rsm.updateDelete(region, 1003);
+      rsm.updateCheckAndDelete(region, 17);
+      rsm.updateCheckAndPut(region, 17);
+      rsm.updateCheckAndMutate(region, 17, 170);
+    }
+
+    HELPER.assertCounter("blockBytesScannedCount", 420090, serverSource);
     HELPER.assertCounter("appendNumOps", 24, serverSource);
+    HELPER.assertCounter("appendBlockBytesScannedNumOps", 24, serverSource);
     HELPER.assertCounter("deleteBatchNumOps", 26, serverSource);
     HELPER.assertCounter("getNumOps", 28, serverSource);
+    HELPER.assertCounter("getBlockBytesScannedNumOps", 28, serverSource);
     HELPER.assertCounter("incrementNumOps", 30, serverSource);
+    HELPER.assertCounter("incrementBlockBytesScannedNumOps", 30, serverSource);
     HELPER.assertCounter("putBatchNumOps", 32, serverSource);
     HELPER.assertCounter("putNumOps", 34, serverSource);
     HELPER.assertCounter("deleteNumOps", 34, serverSource);
     HELPER.assertCounter("checkAndDeleteNumOps", 17, serverSource);
     HELPER.assertCounter("checkAndPutNumOps", 17, serverSource);
     HELPER.assertCounter("checkAndMutateNumOps", 17, serverSource);
+    HELPER.assertCounter("checkAndMutateBlockBytesScannedNumOps", 17, serverSource);
 
     HELPER.assertCounter("slowAppendCount", 12, serverSource);
     HELPER.assertCounter("slowDeleteCount", 17, serverSource);
@@ -251,25 +298,70 @@ public class TestMetricsRegionServer {
   }
 
   @Test
+  public void testScannerMetrics() {
+    HELPER.assertCounter("scannerLeaseExpiredCount", 0, serverSource);
+    rsm.incrScannerLeaseExpired();
+    HELPER.assertCounter("scannerLeaseExpiredCount", 1, serverSource);
+    HELPER.assertGauge("activeScanners", 0, serverSource);
+  }
+
+  @Test
   public void testTableQueryMeterSwitch() {
-    TableName tn1 = TableName.valueOf("table1");
+    HRegion region = mock(HRegion.class);
+    MetricsTableRequests metricsTableRequests = mock(MetricsTableRequests.class);
+    when(region.getMetricsTableRequests()).thenReturn(metricsTableRequests);
+    when(metricsTableRequests.isEnableTableLatenciesMetrics()).thenReturn(false);
+    when(metricsTableRequests.isEnabTableQueryMeterMetrics()).thenReturn(false);
     Configuration conf = new Configuration(false);
     // disable
-    rsm.updateReadQueryMeter(tn1, 500L);
+    rsm.updateReadQueryMeter(region, 500L);
     assertFalse(HELPER.checkGaugeExists("ServerReadQueryPerSecond_count", serverSource));
-    rsm.updateWriteQueryMeter(tn1, 500L);
+    rsm.updateWriteQueryMeter(region, 500L);
     assertFalse(HELPER.checkGaugeExists("ServerWriteQueryPerSecond_count", serverSource));
 
     // enable
     conf.setBoolean(MetricsRegionServer.RS_ENABLE_SERVER_QUERY_METER_METRICS_KEY, true);
     rsm = new MetricsRegionServer(wrapper, conf, null);
     serverSource = rsm.getMetricsSource();
-    rsm.updateReadQueryMeter(tn1, 500L);
+    rsm.updateReadQueryMeter(region, 500L);
     assertTrue(HELPER.checkGaugeExists("ServerWriteQueryPerSecond_count", serverSource));
     HELPER.assertGauge("ServerReadQueryPerSecond_count", 500L, serverSource);
     assertTrue(HELPER.checkGaugeExists("ServerWriteQueryPerSecond_count", serverSource));
-    rsm.updateWriteQueryMeter(tn1, 500L);
+    rsm.updateWriteQueryMeter(region, 500L);
     HELPER.assertGauge("ServerWriteQueryPerSecond_count", 500L, serverSource);
   }
-}
 
+  @Test
+  public void testThrottleExceptionMetricsIntegration() {
+    // Record different types of throttle exceptions
+    rsm.recordThrottleException(RpcThrottlingException.Type.NumRequestsExceeded, "alice", "users");
+    rsm.recordThrottleException(RpcThrottlingException.Type.WriteSizeExceeded, "bob", "logs");
+    rsm.recordThrottleException(RpcThrottlingException.Type.ReadSizeExceeded, "charlie",
+      "metadata");
+
+    // Record the same exception multiple times to test increment
+    rsm.recordThrottleException(RpcThrottlingException.Type.NumRequestsExceeded, "alice", "users");
+    rsm.recordThrottleException(RpcThrottlingException.Type.NumRequestsExceeded, "alice", "users");
+
+    // Verify the specific counters were created and have correct values using HELPER
+    HELPER.assertCounter("RpcThrottlingException_Type_NumRequestsExceeded_User_alice_Table_users",
+      3L, serverSource);
+    HELPER.assertCounter("RpcThrottlingException_Type_WriteSizeExceeded_User_bob_Table_logs", 1L,
+      serverSource);
+    HELPER.assertCounter("RpcThrottlingException_Type_ReadSizeExceeded_User_charlie_Table_metadata",
+      1L, serverSource);
+
+    // Test metric name sanitization through the integration
+    rsm.recordThrottleException(RpcThrottlingException.Type.RequestSizeExceeded,
+      "user.with@special", "table:with,problematic=chars");
+    HELPER.assertCounter(
+      "RpcThrottlingException_Type_RequestSizeExceeded_User_user.with@special_Table_table_with_problematic_chars",
+      1L, serverSource);
+
+    // Test null handling through the integration
+    rsm.recordThrottleException(RpcThrottlingException.Type.ReadCapacityUnitExceeded, null, null);
+    HELPER.assertCounter(
+      "RpcThrottlingException_Type_ReadCapacityUnitExceeded_User_unknown_Table_unknown", 1L,
+      serverSource);
+  }
+}

@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,11 +17,10 @@
  */
 package org.apache.hadoop.hbase.mapreduce;
 
-import java.io.IOException;
 import java.util.TreeSet;
-
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.util.MapReduceExtendedCell;
@@ -30,31 +28,27 @@ import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * Emits sorted Cells.
- * Reads in all Cells from passed Iterator, sorts them, then emits
- * Cells in sorted order.  If lots of columns per row, it will use lots of
- * memory sorting.
+ * Emits sorted Cells. Reads in all Cells from passed Iterator, sorts them, then emits Cells in
+ * sorted order. If lots of columns per row, it will use lots of memory sorting.
  * @see HFileOutputFormat2
  */
 @InterfaceAudience.Public
 public class CellSortReducer
-    extends Reducer<ImmutableBytesWritable, Cell, ImmutableBytesWritable, Cell> {
+  extends Reducer<ImmutableBytesWritable, Cell, ImmutableBytesWritable, Cell> {
   protected void reduce(ImmutableBytesWritable row, Iterable<Cell> kvs,
-      Reducer<ImmutableBytesWritable, Cell, ImmutableBytesWritable, Cell>.Context context)
-  throws java.io.IOException, InterruptedException {
-    TreeSet<Cell> map = new TreeSet<>(CellComparator.getInstance());
+    Reducer<ImmutableBytesWritable, Cell, ImmutableBytesWritable, Cell>.Context context)
+    throws java.io.IOException, InterruptedException {
+    TreeSet<ExtendedCell> set = new TreeSet<>(CellComparator.getInstance());
     for (Cell kv : kvs) {
-      try {
-        map.add(PrivateCellUtil.deepClone(kv));
-      } catch (CloneNotSupportedException e) {
-        throw new IOException(e);
-      }
+      set.add(PrivateCellUtil.ensureExtendedCell(kv));
     }
-    context.setStatus("Read " + map.getClass());
+    context.setStatus("Read " + set.getClass());
     int index = 0;
-    for (Cell kv: map) {
+    for (ExtendedCell kv : set) {
       context.write(row, new MapReduceExtendedCell(kv));
-      if (++index % 100 == 0) context.setStatus("Wrote " + index);
+      if (++index % 100 == 0) {
+        context.setStatus("Wrote " + index);
+      }
     }
   }
 }

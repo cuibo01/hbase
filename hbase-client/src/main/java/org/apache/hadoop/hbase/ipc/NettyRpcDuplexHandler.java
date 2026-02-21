@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,18 +21,13 @@ import io.opentelemetry.context.Scope;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
-import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.codec.Codec;
 import org.apache.hadoop.hbase.exceptions.ConnectionClosedException;
 import org.apache.hadoop.io.compress.CompressionCodec;
-import org.apache.hadoop.ipc.RemoteException;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.hbase.thirdparty.com.google.protobuf.Message;
-import org.apache.hbase.thirdparty.com.google.protobuf.Message.Builder;
-import org.apache.hbase.thirdparty.com.google.protobuf.TextFormat;
 import org.apache.hbase.thirdparty.io.netty.buffer.ByteBuf;
 import org.apache.hbase.thirdparty.io.netty.buffer.ByteBufInputStream;
 import org.apache.hbase.thirdparty.io.netty.buffer.ByteBufOutputStream;
@@ -44,9 +39,7 @@ import org.apache.hbase.thirdparty.io.netty.handler.timeout.IdleStateEvent;
 import org.apache.hbase.thirdparty.io.netty.util.concurrent.PromiseCombiner;
 
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos.CellBlockMeta;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos.ExceptionResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos.RequestHeader;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos.ResponseHeader;
 
 /**
  * The netty rpc handler.
@@ -68,7 +61,7 @@ class NettyRpcDuplexHandler extends ChannelDuplexHandler {
   private final Map<Integer, Call> id2Call = new HashMap<>();
 
   public NettyRpcDuplexHandler(NettyRpcConnection conn, CellBlockBuilder cellBlockBuilder,
-      Codec codec, CompressionCodec compressor) {
+    Codec codec, CompressionCodec compressor) {
     this.conn = conn;
     this.cellBlockBuilder = cellBlockBuilder;
     this.codec = codec;
@@ -77,7 +70,7 @@ class NettyRpcDuplexHandler extends ChannelDuplexHandler {
   }
 
   private void writeRequest(ChannelHandlerContext ctx, Call call, ChannelPromise promise)
-      throws IOException {
+    throws IOException {
     id2Call.put(call.id, call);
     ByteBuf cellBlock = cellBlockBuilder.buildCellBlock(codec, compressor, call.cells, ctx.alloc());
     CellBlockMeta cellBlockMeta;
@@ -90,8 +83,8 @@ class NettyRpcDuplexHandler extends ChannelDuplexHandler {
     }
     RequestHeader requestHeader = IPCUtil.buildRequestHeader(call, cellBlockMeta);
     int sizeWithoutCellBlock = IPCUtil.getTotalSizeWhenWrittenDelimited(requestHeader, call.param);
-    int totalSize = cellBlock != null ? sizeWithoutCellBlock + cellBlock.writerIndex()
-        : sizeWithoutCellBlock;
+    int totalSize =
+      cellBlock != null ? sizeWithoutCellBlock + cellBlock.writerIndex() : sizeWithoutCellBlock;
     ByteBuf buf = ctx.alloc().buffer(sizeWithoutCellBlock + 4);
     buf.writeInt(totalSize);
     try (ByteBufOutputStream bbos = new ByteBufOutputStream(buf)) {
@@ -110,6 +103,7 @@ class NettyRpcDuplexHandler extends ChannelDuplexHandler {
       } else {
         ctx.write(buf, promise);
       }
+      call.callStats.setRequestSizeBytes(totalSize);
     }
   }
 
@@ -127,65 +121,15 @@ class NettyRpcDuplexHandler extends ChannelDuplexHandler {
   }
 
   private void readResponse(ChannelHandlerContext ctx, ByteBuf buf) throws IOException {
-    int totalSize = buf.readInt();
-    ByteBufInputStream in = new ByteBufInputStream(buf);
-    ResponseHeader responseHeader = ResponseHeader.parseDelimitedFrom(in);
-    int id = responseHeader.getCallId();
-    if (LOG.isTraceEnabled()) {
-      LOG.trace("got response header " + TextFormat.shortDebugString(responseHeader)
-          + ", totalSize: " + totalSize + " bytes");
+    try {
+      conn.readResponse(new ByteBufInputStream(buf), id2Call, null,
+        remoteExc -> exceptionCaught(ctx, remoteExc));
+    } catch (IOException e) {
+      // In netty, the decoding the frame based, when reaching here we have already read a full
+      // frame, so hitting exception here does not mean the stream decoding is broken, thus we do
+      // not need to throw the exception out and close the connection.
+      LOG.warn("failed to process response", e);
     }
-    RemoteException remoteExc;
-    if (responseHeader.hasException()) {
-      ExceptionResponse exceptionResponse = responseHeader.getException();
-      remoteExc = IPCUtil.createRemoteException(exceptionResponse);
-      if (IPCUtil.isFatalConnectionException(exceptionResponse)) {
-        // Here we will cleanup all calls so do not need to fall back, just return.
-        exceptionCaught(ctx, remoteExc);
-        return;
-      }
-    } else {
-      remoteExc = null;
-    }
-    Call call = id2Call.remove(id);
-    if (call == null) {
-      // So we got a response for which we have no corresponding 'call' here on the client-side.
-      // We probably timed out waiting, cleaned up all references, and now the server decides
-      // to return a response. There is nothing we can do w/ the response at this stage. Clean
-      // out the wire of the response so its out of the way and we can get other responses on
-      // this connection.
-      if (LOG.isDebugEnabled()) {
-        int readSoFar = IPCUtil.getTotalSizeWhenWrittenDelimited(responseHeader);
-        int whatIsLeftToRead = totalSize - readSoFar;
-        LOG.debug("Unknown callId: " + id + ", skipping over this response of " + whatIsLeftToRead
-            + " bytes");
-      }
-      return;
-    }
-    if (remoteExc != null) {
-      call.setException(remoteExc);
-      return;
-    }
-    Message value;
-    if (call.responseDefaultType != null) {
-      Builder builder = call.responseDefaultType.newBuilderForType();
-      builder.mergeDelimitedFrom(in);
-      value = builder.build();
-    } else {
-      value = null;
-    }
-    CellScanner cellBlockScanner;
-    if (responseHeader.hasCellBlockMeta()) {
-      int size = responseHeader.getCellBlockMeta().getLength();
-      // Maybe we could read directly from the ByteBuf.
-      // The problem here is that we do not know when to release it.
-      byte[] cellBlock = new byte[size];
-      buf.readBytes(cellBlock);
-      cellBlockScanner = cellBlockBuilder.createCellScanner(this.codec, this.compressor, cellBlock);
-    } else {
-      cellBlockScanner = null;
-    }
-    call.setResponse(value, cellBlockScanner);
   }
 
   @Override
@@ -202,7 +146,7 @@ class NettyRpcDuplexHandler extends ChannelDuplexHandler {
     }
   }
 
-  private void cleanupCalls(ChannelHandlerContext ctx, IOException error) {
+  private void cleanupCalls(IOException error) {
     for (Call call : id2Call.values()) {
       call.setException(error);
     }
@@ -212,7 +156,7 @@ class NettyRpcDuplexHandler extends ChannelDuplexHandler {
   @Override
   public void channelInactive(ChannelHandlerContext ctx) throws Exception {
     if (!id2Call.isEmpty()) {
-      cleanupCalls(ctx, new ConnectionClosedException("Connection closed"));
+      cleanupCalls(new ConnectionClosedException("Connection closed"));
     }
     conn.shutdown();
     ctx.fireChannelInactive();
@@ -221,7 +165,7 @@ class NettyRpcDuplexHandler extends ChannelDuplexHandler {
   @Override
   public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
     if (!id2Call.isEmpty()) {
-      cleanupCalls(ctx, IPCUtil.toIOE(cause));
+      cleanupCalls(IPCUtil.toIOE(cause));
     }
     conn.shutdown();
   }
@@ -235,7 +179,7 @@ class NettyRpcDuplexHandler extends ChannelDuplexHandler {
           if (id2Call.isEmpty()) {
             if (LOG.isTraceEnabled()) {
               LOG.trace("shutdown connection to " + conn.remoteId().address
-                  + " because idle for a long time");
+                + " because idle for a long time");
             }
             // It may happen that there are still some pending calls in the event loop queue and
             // they will get a closed channel exception. But this is not a big deal as it rarely

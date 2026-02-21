@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -34,7 +34,7 @@ import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.io.crypto.Encryption;
-import org.apache.hadoop.hbase.io.crypto.KeyProviderForTesting;
+import org.apache.hadoop.hbase.io.crypto.MockAesKeyProvider;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
@@ -46,12 +46,12 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({RegionServerTests.class, MediumTests.class})
+@Category({ RegionServerTests.class, MediumTests.class })
 public class TestEncryptionRandomKeying {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestEncryptionRandomKeying.class);
+    HBaseClassTestRule.forClass(TestEncryptionRandomKeying.class);
 
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static Configuration conf = TEST_UTIL.getConfiguration();
@@ -59,8 +59,8 @@ public class TestEncryptionRandomKeying {
 
   private static List<Path> findStorefilePaths(TableName tableName) throws Exception {
     List<Path> paths = new ArrayList<>();
-    for (Region region:
-      TEST_UTIL.getRSForFirstRegionInTable(tableName).getRegions(tdb.build().getTableName())) {
+    for (Region region : TEST_UTIL.getRSForFirstRegionInTable(tableName)
+      .getRegions(tdb.build().getTableName())) {
       for (HStore store : ((HRegion) region).getStores()) {
         for (HStoreFile storefile : store.getStorefiles()) {
           paths.add(storefile.getPath());
@@ -71,8 +71,8 @@ public class TestEncryptionRandomKeying {
   }
 
   private static byte[] extractHFileKey(Path path) throws Exception {
-    HFile.Reader reader = HFile.createReader(TEST_UTIL.getTestFileSystem(), path,
-      new CacheConfig(conf), true, conf);
+    HFile.Reader reader =
+      HFile.createReader(TEST_UTIL.getTestFileSystem(), path, new CacheConfig(conf), true, conf);
     try {
       Encryption.Context cryptoContext = reader.getFileContext().getEncryptionContext();
       assertNotNull("Reader has a null crypto context", cryptoContext);
@@ -89,13 +89,13 @@ public class TestEncryptionRandomKeying {
   @BeforeClass
   public static void setUp() throws Exception {
     conf.setInt("hfile.format.version", 3);
-    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
+    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
     conf.set(HConstants.CRYPTO_MASTERKEY_NAME_CONF_KEY, "hbase");
 
     // Create the table schema
     // Specify an encryption algorithm without a key
-    tdb = TableDescriptorBuilder.newBuilder(TableName.valueOf("default",
-      "TestEncryptionRandomKeying"));
+    tdb =
+      TableDescriptorBuilder.newBuilder(TableName.valueOf("default", "TestEncryptionRandomKeying"));
     ColumnFamilyDescriptorBuilder columnFamilyDescriptorBuilder =
       ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes("cf"));
     String algorithm = conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
@@ -112,8 +112,8 @@ public class TestEncryptionRandomKeying {
     // Create a store file
     Table table = TEST_UTIL.getConnection().getTable(tdb.build().getTableName());
     try {
-      table.put(new Put(Bytes.toBytes("testrow"))
-        .addColumn(columnFamilyDescriptorBuilder.build().getName(),
+      table.put(
+        new Put(Bytes.toBytes("testrow")).addColumn(columnFamilyDescriptorBuilder.build().getName(),
           Bytes.toBytes("q"), Bytes.toBytes("value")));
     } finally {
       table.close();
@@ -131,7 +131,7 @@ public class TestEncryptionRandomKeying {
     // Verify we have store file(s) with a random key
     final List<Path> initialPaths = findStorefilePaths(tdb.build().getTableName());
     assertTrue(initialPaths.size() > 0);
-    for (Path path: initialPaths) {
+    for (Path path : initialPaths) {
       assertNotNull("Store file " + path + " is not encrypted", extractHFileKey(path));
     }
   }

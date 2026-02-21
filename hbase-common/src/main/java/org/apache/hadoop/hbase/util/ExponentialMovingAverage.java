@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.util;
 
 import org.apache.yetus.audience.InterfaceAudience;
@@ -25,7 +24,7 @@ import org.apache.yetus.audience.InterfaceAudience;
  * exponentially. It brings benefits that it is more sensitive, and can see the trends easily.
  */
 @InterfaceAudience.Private
-public class ExponentialMovingAverage extends WindowMovingAverage {
+public class ExponentialMovingAverage<T> extends WindowMovingAverage<T> {
   private double alpha;
   private double previousAverage;
   private double currentAverage;

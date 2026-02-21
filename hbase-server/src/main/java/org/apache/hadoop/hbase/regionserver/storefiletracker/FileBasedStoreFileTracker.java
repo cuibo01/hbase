@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -33,6 +33,8 @@ import org.apache.hadoop.hbase.regionserver.StoreContext;
 import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
 import org.apache.hadoop.hbase.util.ServerRegionReplicaUtil;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.apache.hadoop.hbase.shaded.protobuf.generated.StoreFileTrackerProtos.StoreFileEntry;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.StoreFileTrackerProtos.StoreFileList;
@@ -53,12 +55,13 @@ class FileBasedStoreFileTracker extends StoreFileTrackerBase {
   private final StoreFileListFile backedFile;
 
   private final Map<String, StoreFileInfo> storefiles = new HashMap<>();
+  private static final Logger LOG = LoggerFactory.getLogger(FileBasedStoreFileTracker.class);
 
   public FileBasedStoreFileTracker(Configuration conf, boolean isPrimaryReplica, StoreContext ctx) {
     super(conf, isPrimaryReplica, ctx);
-    //CreateTableProcedure needs to instantiate the configured SFT impl, in order to update table
-    //descriptors with the SFT impl specific configs. By the time this happens, the table has no
-    //regions nor stores yet, so it can't create a proper StoreContext.
+    // CreateTableProcedure needs to instantiate the configured SFT impl, in order to update table
+    // descriptors with the SFT impl specific configs. By the time this happens, the table has no
+    // regions nor stores yet, so it can't create a proper StoreContext.
     if (ctx != null) {
       backedFile = new StoreFileListFile(ctx);
     } else {
@@ -67,8 +70,12 @@ class FileBasedStoreFileTracker extends StoreFileTrackerBase {
   }
 
   @Override
-  public List<StoreFileInfo> load() throws IOException {
-    StoreFileList list = backedFile.load();
+  protected List<StoreFileInfo> doLoadStoreFiles(boolean readOnly) throws IOException {
+    StoreFileList list = backedFile.load(readOnly);
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Loaded file list backed file, containing " + list.getStoreFileList().size()
+        + " store file entries");
+    }
     if (list == null) {
       return Collections.emptyList();
     }
@@ -77,7 +84,7 @@ class FileBasedStoreFileTracker extends StoreFileTrackerBase {
     for (StoreFileEntry entry : list.getStoreFileList()) {
       infos.add(ServerRegionReplicaUtil.getStoreFileInfo(conf, fs, ctx.getRegionInfo(),
         ctx.getRegionFileSystem().getRegionInfoForFS(), ctx.getFamily().getNameAsString(),
-        new Path(ctx.getFamilyStoreDirectoryPath(), entry.getName())));
+        new Path(ctx.getFamilyStoreDirectoryPath(), entry.getName()), this));
     }
     // In general, for primary replica, the load method should only be called once when
     // initialization, so we do not need synchronized here. And for secondary replicas, though the
@@ -115,6 +122,9 @@ class FileBasedStoreFileTracker extends StoreFileTrackerBase {
         builder.addStoreFile(toStoreFileEntry(info));
       }
       backedFile.update(builder);
+      if (LOG.isTraceEnabled()) {
+        LOG.trace(newFiles.size() + " store files added to store file list file: " + newFiles);
+      }
       for (StoreFileInfo info : newFiles) {
         storefiles.put(info.getPath().getName(), info);
       }
@@ -138,6 +148,10 @@ class FileBasedStoreFileTracker extends StoreFileTrackerBase {
         builder.addStoreFile(toStoreFileEntry(info));
       }
       backedFile.update(builder);
+      if (LOG.isTraceEnabled()) {
+        LOG.trace(
+          "replace compacted files: " + compactedFileNames + " with new store files: " + newFiles);
+      }
       for (String name : compactedFileNames) {
         storefiles.remove(name);
       }
@@ -148,7 +162,7 @@ class FileBasedStoreFileTracker extends StoreFileTrackerBase {
   }
 
   @Override
-  public void set(List<StoreFileInfo> files) throws IOException {
+  protected void doSetStoreFiles(Collection<StoreFileInfo> files) throws IOException {
     synchronized (storefiles) {
       storefiles.clear();
       StoreFileList.Builder builder = StoreFileList.newBuilder();
@@ -157,6 +171,9 @@ class FileBasedStoreFileTracker extends StoreFileTrackerBase {
         builder.addStoreFile(toStoreFileEntry(info));
       }
       backedFile.update(builder);
+      if (LOG.isTraceEnabled()) {
+        LOG.trace("Set store files in store file list file: " + files);
+      }
     }
   }
 }

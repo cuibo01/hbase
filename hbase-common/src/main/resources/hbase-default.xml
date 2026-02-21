@@ -279,14 +279,13 @@ possible configurations would overwhelm and obscure the important.
     to ride over transient HDFS errors.</description>
   </property>
   <property>
-    <name>hbase.regionserver.hlog.reader.impl</name>
-    <value>org.apache.hadoop.hbase.regionserver.wal.ProtobufLogReader</value>
-    <description>The WAL file reader implementation.</description>
-  </property>
-  <property>
-    <name>hbase.regionserver.hlog.writer.impl</name>
-    <value>org.apache.hadoop.hbase.regionserver.wal.ProtobufLogWriter</value>
-    <description>The WAL file writer implementation.</description>
+    <name>hbase.regionserver.free.heap.min.memory.size</name>
+    <value></value>
+    <description>Defines the minimum amount of heap memory that must remain free for the RegionServer to start,
+      specified in bytes or human-readable formats like '512m' for megabytes or '4g' for gigabytes.
+      If not set, the default is 20% of the total heap size. To disable the check entirely,
+      set this value to 0. If the combined memory usage of memstore and block cache
+      exceeds (total heap - this value), the RegionServer will fail to start.</description>
   </property>
   <property>
     <name>hbase.regionserver.global.memstore.size</name>
@@ -493,12 +492,14 @@ possible configurations would overwhelm and obscure the important.
     this initial pause amount and how this pause works w/ retries.</description>
   </property>
   <property>
-    <name>hbase.client.pause.cqtbe</name>
+    <name>hbase.client.pause.server.overloaded</name>
     <value></value>
-    <description>Whether or not to use a special client pause for
-    CallQueueTooBigException (cqtbe). Set this property to a higher value
-    than hbase.client.pause if you observe frequent CQTBE from the same
-    RegionServer and the call queue there keeps full</description>
+    <description>Pause time when encountering an exception indicating a
+    server is overloaded, CallQueueTooBigException or CallDroppedException.
+    Set this property to a higher value than hbase.client.pause if you
+    observe frequent CallQueueTooBigException or CallDroppedException from the same
+    RegionServer and the call queue there keeps filling up. This config used to be
+    called hbase.client.pause.cqtbe, which has been deprecated as of 2.5.0.</description>
   </property>
   <property>
     <name>hbase.client.retries.number</name>
@@ -615,12 +616,27 @@ possible configurations would overwhelm and obscure the important.
       milliseconds.</description>
   </property>
   <property>
+    <name>hbase.master.oldwals.dir.updater.period</name>
+    <value>300000</value>
+    <description>Period at which the oldWALs directory size calculator/updater will run in the
+      Master, in milliseconds.</description>
+  </property>
+  <property>
     <name>hbase.regions.slop</name>
-    <value>0.001</value>
-    <description>Rebalance if any regionserver has average + (average * slop) regions.
-      The default value of this parameter is 0.001 in StochasticLoadBalancer (the default load
-      balancer), while the default is 0.2 in other load balancers (i.e.,
-      SimpleLoadBalancer).</description>
+    <value>0.2</value>
+    <description>The load balancer can trigger for several reasons. This value controls one of
+      those reasons. Run the balancer if any regionserver has a region count outside the range of
+      average +/- (average * slop) regions.
+      If the value of slop is negative, disable sloppiness checks. The balancer can still run for
+      other reasons, but sloppiness will not be one of them.
+      If the value of slop is 0, run the balancer if any server has a region count more than 1
+      from the average.
+      If the value of slop is 100, run the balancer if any server has a region count greater than
+      101 times the average.
+      The default value of this parameter is 0.2, which runs the balancer if any server has a region
+      count less than 80% of the average, or greater than 120% of the average.
+      Note that for the default StochasticLoadBalancer, this does not guarantee any balancing
+      actions will be taken, but only that the balancer will attempt to run.</description>
   </property>
   <property>
     <name>hbase.normalizer.period</name>
@@ -650,15 +666,16 @@ possible configurations would overwhelm and obscure the important.
     <description>The minimum age for a region to be considered for a merge, in days.</description>
   </property>
   <property>
-    <name>hbase.normalizer.merge.min_region_age.days</name>
-    <value>3</value>
-    <description>The minimum age for a region to be considered for a merge, in days.</description>
-  </property>
-  <property>
     <name>hbase.normalizer.merge.min_region_size.mb</name>
     <value>1</value>
     <description>The minimum size for a region to be considered for a merge, in whole
       MBs.</description>
+  </property>
+  <property>
+    <name>hbase.normalizer.merge.merge_request_max_number_of_regions</name>
+    <value>100</value>
+    <description>The maximum number of region count in a merge request for merge
+      normalization.</description>
   </property>
   <property>
     <name>hbase.table.normalization.enabled</name>
@@ -816,7 +833,7 @@ possible configurations would overwhelm and obscure the important.
   <property>
     <name>hbase.hstore.compactionThreshold</name>
     <value>3</value>
-    <description> If more than this number of StoreFiles exist in any one Store
+    <description> If more than or equal to this number of StoreFiles exist in any one Store
       (one StoreFile is written per flush of MemStore), a compaction is run to rewrite all
       StoreFiles into a single StoreFile. Larger values delay compaction, but when compaction does
       occur, it takes longer to complete.</description>
@@ -857,8 +874,8 @@ possible configurations would overwhelm and obscure the important.
       too many tiny StoreFiles to compact. Setting this value to 2 would cause a minor compaction
       each time you have two StoreFiles in a Store, and this is probably not appropriate. If you
       set this value too high, all the other values will need to be adjusted accordingly. For most
-      cases, the default value is appropriate  (empty value here, results in 3 by code logic). In 
-      previous versions of HBase, the parameter hbase.hstore.compaction.min was named 
+      cases, the default value is appropriate  (empty value here, results in 3 by code logic). In
+      previous versions of HBase, the parameter hbase.hstore.compaction.min was named
       hbase.hstore.compactionThreshold.</description>
   </property>
   <property>
@@ -1003,6 +1020,14 @@ possible configurations would overwhelm and obscure the important.
         enough cache to hold the storefile indices.</description>
   </property>
   <property>
+    <name>hfile.block.cache.memory.size</name>
+    <value></value>
+    <description>Defines the maximum heap memory allocated for the HFile block cache,
+      specified in bytes or human-readable formats like '10m' for megabytes or '10g' for gigabytes.
+      This configuration allows setting an absolute memory size instead of a percentage of the maximum heap.
+      Takes precedence over hfile.block.cache.size if both are specified.</description>
+  </property>
+  <property>
       <name>hfile.block.index.cacheonwrite</name>
       <value>false</value>
       <description>This allows to put non-root multi-level index blocks into the block
@@ -1105,6 +1130,13 @@ possible configurations would overwhelm and obscure the important.
       before retries exhausted, it will break early and throw SocketTimeoutException.</description>
   </property>
   <property>
+    <name>hbase.client.connection.metacache.invalidate-interval.ms</name>
+    <value>0</value>
+    <description>Interval in milliseconds of checking and invalidating meta cache when table
+      disabled or dropped, when set to zero means disable checking, suggest set it to 24h
+      or a higher value, because disable/delete table usually not very frequently.</description>
+  </property>
+  <property>
     <name>hbase.cells.scanned.per.heartbeat.check</name>
     <value>10000</value>
     <description>The number of cells scanned in between heartbeat checks. Heartbeat
@@ -1193,7 +1225,8 @@ possible configurations would overwhelm and obscure the important.
     <value></value>
     <description>List of users or groups (comma-separated), who are allowed
     full privileges, regardless of stored ACLs, across the cluster.
-    Only used when HBase security is enabled.</description>
+    Only used when HBase security is enabled.
+    Group names should be prefixed with "@".</description>
   </property>
   <property>
     <name>hbase.auth.key.update.interval</name>
@@ -1776,6 +1809,14 @@ possible configurations would overwhelm and obscure the important.
     </description>
   </property>
   <property>
+    <name>hbase.http.metrics.servlets</name>
+    <value>jmx,metrics,prometheus</value>
+    <description>
+      Comma separated list of servlet names to enable for metrics collection. Supported
+      servlets are jmx, metrics, prometheus
+    </description>
+  </property>
+  <property>
   	<name>hbase.replication.rpc.codec</name>
   	<value>org.apache.hadoop.hbase.codec.KeyValueCodecWithTags</value>
   	<description>
@@ -1892,6 +1933,8 @@ possible configurations would overwhelm and obscure the important.
     <value>5000</value>
     <description>
       Number of rows in a batch operation above which a warning will be logged.
+      If hbase.client.write.buffer.maxmutations is not set, this will be used as
+      fallback for that setting.
     </description>
   </property>
   <property>
@@ -2011,7 +2054,7 @@ possible configurations would overwhelm and obscure the important.
   </property>
   <property>
     <name>hbase.namedqueue.provider.classes</name>
-    <value>org.apache.hadoop.hbase.namequeues.impl.SlowLogQueueService,org.apache.hadoop.hbase.namequeues.impl.BalancerDecisionQueueService,org.apache.hadoop.hbase.namequeues.impl.BalancerRejectionQueueService</value>
+    <value>org.apache.hadoop.hbase.namequeues.impl.SlowLogQueueService,org.apache.hadoop.hbase.namequeues.impl.BalancerDecisionQueueService,org.apache.hadoop.hbase.namequeues.impl.BalancerRejectionQueueService,org.apache.hadoop.hbase.namequeues.WALEventTrackerQueueService</value>
     <description>
       Default values for NamedQueueService implementors. This comma separated full class names
       represent all implementors of NamedQueueService that we would like to be invoked by

@@ -35,6 +35,7 @@ import org.apache.hadoop.hbase.util.RetryCounter;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition.TransitionCode;
 
@@ -58,15 +59,20 @@ public class AssignRegionHandler extends EventHandler {
 
   private final long masterSystemTime;
 
+  // active time of the master that sent this assign request, used for fencing
+  private final long initiatingMasterActiveTime;
+
   private final RetryCounter retryCounter;
 
   public AssignRegionHandler(HRegionServer server, RegionInfo regionInfo, long openProcId,
-      @Nullable TableDescriptor tableDesc, long masterSystemTime, EventType eventType) {
+    @Nullable TableDescriptor tableDesc, long masterSystemTime, long initiatingMasterActiveTime,
+    EventType eventType) {
     super(server, eventType);
     this.regionInfo = regionInfo;
     this.openProcId = openProcId;
     this.tableDesc = tableDesc;
     this.masterSystemTime = masterSystemTime;
+    this.initiatingMasterActiveTime = initiatingMasterActiveTime;
     this.retryCounter = HandlerUtil.getRetryCounter();
   }
 
@@ -79,8 +85,10 @@ public class AssignRegionHandler extends EventHandler {
       error);
     HRegionServer rs = getServer();
     rs.getRegionsInTransitionInRS().remove(regionInfo.getEncodedNameAsBytes(), Boolean.TRUE);
-    if (!rs.reportRegionStateTransition(new RegionStateTransitionContext(TransitionCode.FAILED_OPEN,
-      HConstants.NO_SEQNUM, openProcId, masterSystemTime, regionInfo))) {
+    if (
+      !rs.reportRegionStateTransition(new RegionStateTransitionContext(TransitionCode.FAILED_OPEN,
+        HConstants.NO_SEQNUM, openProcId, masterSystemTime, regionInfo, initiatingMasterActiveTime))
+    ) {
       throw new IOException(
         "Failed to report failed open to master: " + regionInfo.getRegionNameAsString());
     }
@@ -88,6 +96,7 @@ public class AssignRegionHandler extends EventHandler {
 
   @Override
   public void process() throws IOException {
+    MDC.put("pid", Long.toString(openProcId));
     HRegionServer rs = getServer();
     String encodedName = regionInfo.getEncodedName();
     byte[] encodedNameBytes = regionInfo.getEncodedNameAsBytes();
@@ -106,16 +115,15 @@ public class AssignRegionHandler extends EventHandler {
     if (previous != null) {
       if (previous) {
         // The region is opening and this maybe a retry on the rpc call, it is safe to ignore it.
-        LOG.info("Receiving OPEN for {} which we are already trying to OPEN" +
-          " - ignoring this new request for this region.", regionName);
+        LOG.info("Receiving OPEN for {} which we are already trying to OPEN"
+          + " - ignoring this new request for this region.", regionName);
       } else {
         // The region is closing. This is possible as we will update the region state to CLOSED when
         // calling reportRegionStateTransition, so the HMaster will think the region is offline,
         // before we actually close the region, as reportRegionStateTransition is part of the
         // closing process.
         long backoff = retryCounter.getBackoffTimeAndIncrementAttempts();
-        LOG.info(
-          "Receiving OPEN for {} which we are trying to close, try again after {}ms",
+        LOG.info("Receiving OPEN for {} which we are trying to close, try again after {}ms",
           regionName, backoff);
         rs.getExecutorService().delayedSubmit(this, backoff, TimeUnit.MILLISECONDS);
       }
@@ -139,7 +147,8 @@ public class AssignRegionHandler extends EventHandler {
     }
     // From here on out, this is PONR. We can not revert back. The only way to address an
     // exception from here on out is to abort the region server.
-    rs.postOpenDeployTasks(new PostOpenDeployContext(region, openProcId, masterSystemTime));
+    rs.postOpenDeployTasks(
+      new PostOpenDeployContext(region, openProcId, masterSystemTime, initiatingMasterActiveTime));
     rs.addRegion(region);
     LOG.info("Opened {}", regionName);
     // Cache the open region procedure id after report region transition succeed.
@@ -166,17 +175,20 @@ public class AssignRegionHandler extends EventHandler {
   }
 
   public static AssignRegionHandler create(HRegionServer server, RegionInfo regionInfo,
-      long openProcId, TableDescriptor tableDesc, long masterSystemTime) {
+    long openProcId, TableDescriptor tableDesc, long masterSystemTime,
+    long initiatingMasterActiveTime) {
     EventType eventType;
     if (regionInfo.isMetaRegion()) {
       eventType = EventType.M_RS_OPEN_META;
-    } else if (regionInfo.getTable().isSystemTable() ||
-      (tableDesc != null && tableDesc.getPriority() >= HConstants.ADMIN_QOS)) {
+    } else if (
+      regionInfo.getTable().isSystemTable()
+        || (tableDesc != null && tableDesc.getPriority() >= HConstants.ADMIN_QOS)
+    ) {
       eventType = EventType.M_RS_OPEN_PRIORITY_REGION;
     } else {
       eventType = EventType.M_RS_OPEN_REGION;
     }
     return new AssignRegionHandler(server, regionInfo, openProcId, tableDesc, masterSystemTime,
-      eventType);
+      initiatingMasterActiveTime, eventType);
   }
 }

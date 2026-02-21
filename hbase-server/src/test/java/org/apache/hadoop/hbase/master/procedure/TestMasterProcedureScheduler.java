@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,7 +27,9 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
@@ -65,12 +67,15 @@ public class TestMasterProcedureScheduler {
 
   private MasterProcedureScheduler queue;
 
+  private Map<Long, Procedure<?>> procedures;
+
   @Rule
   public TestName name = new TestName();
 
   @Before
   public void setUp() throws IOException {
-    queue = new MasterProcedureScheduler(pid -> null);
+    procedures = new HashMap<>();
+    queue = new MasterProcedureScheduler(procedures::get);
     queue.start();
   }
 
@@ -95,7 +100,7 @@ public class TestMasterProcedureScheduler {
       // insert items
       for (int j = 1; j <= NUM_ITEMS; ++j) {
         queue.addBack(new TestTableProcedure(i * 1000 + j, tableName,
-          TableProcedureInterface.TableOperationType.EDIT));
+          TableProcedureInterface.TableOperationType.REGION_EDIT));
         assertEquals(++count, queue.size());
       }
     }
@@ -222,7 +227,7 @@ public class TestMasterProcedureScheduler {
     assertEquals(null, queue.poll(0));
 
     // Release the write lock and acquire the read lock
-    queue.wakeTableExclusiveLock(proc, tableName);
+    releaseTableExclusiveLockAndComplete(proc, tableName);
 
     // Fetch the 2nd item and take the read lock
     Procedure<?> rdProc = queue.poll();
@@ -248,7 +253,7 @@ public class TestMasterProcedureScheduler {
     assertEquals(null, queue.poll(0));
 
     // Release the write lock and acquire the read lock
-    queue.wakeTableExclusiveLock(wrProc, tableName);
+    releaseTableExclusiveLockAndComplete(wrProc, tableName);
 
     // Fetch the 4th item and take the read lock
     rdProc = queue.poll();
@@ -641,8 +646,15 @@ public class TestMasterProcedureScheduler {
       childProcs);
   }
 
+  private void releaseTableExclusiveLockAndComplete(Procedure<?> proc, TableName tableName) {
+    // release xlock
+    queue.wakeTableExclusiveLock(proc, tableName);
+    // mark the procedure as complete
+    queue.completionCleanup(proc);
+  }
+
   private void testInheritedXLockAndChildrenSharedLock(final TableName tableName,
-      final TestTableProcedure rootProc, final TestRegionProcedure[] childProcs) throws Exception {
+    final TestTableProcedure rootProc, final TestRegionProcedure[] childProcs) throws Exception {
     queue.addBack(rootProc);
 
     // fetch and acquire first xlock proc
@@ -671,13 +683,13 @@ public class TestMasterProcedureScheduler {
     assertEquals(null, queue.poll(0));
 
     // release xlock
-    queue.wakeTableExclusiveLock(parentProc, tableName);
+    releaseTableExclusiveLockAndComplete(parentProc, tableName);
 
     // fetch the other xlock proc
     Procedure<?> proc = queue.poll();
     assertEquals(100, proc.getProcId());
     assertEquals(false, queue.waitTableExclusiveLock(proc, tableName));
-    queue.wakeTableExclusiveLock(proc, tableName);
+    releaseTableExclusiveLockAndComplete(proc, tableName);
   }
 
   @Test
@@ -694,29 +706,35 @@ public class TestMasterProcedureScheduler {
     // simulate 3 procedures: 1 (root), (2) child of root, (3) child of proc-2
     testInheritedXLockAndChildrenXLock(tableName,
       new TestTableProcedure(1, tableName, TableProcedureInterface.TableOperationType.EDIT),
+      new TestTableProcedure(1, 1, 2, tableName, TableProcedureInterface.TableOperationType.EDIT),
       new TestTableProcedure(1, 2, 3, tableName, TableProcedureInterface.TableOperationType.EDIT));
   }
 
   private void testInheritedXLockAndChildrenXLock(final TableName tableName,
-      final TestTableProcedure rootProc, final TestTableProcedure childProc) throws Exception {
+    final TestTableProcedure rootProc, final TestTableProcedure... childProcs) throws Exception {
+    procedures.put(rootProc.getProcId(), rootProc);
+    for (TestTableProcedure childProc : childProcs) {
+      procedures.put(childProc.getProcId(), childProc);
+    }
     queue.addBack(rootProc);
 
     // fetch and acquire first xlock proc
     Procedure<?> parentProc = queue.poll();
-    assertEquals(rootProc, parentProc);
+    assertSame(rootProc, parentProc);
     assertEquals(false, queue.waitTableExclusiveLock(parentProc, tableName));
 
+    TestTableProcedure childProc = childProcs[childProcs.length - 1];
     // add child procedure
     queue.addFront(childProc);
 
     // fetch the other xlock proc
     Procedure<?> proc = queue.poll();
-    assertEquals(childProc, proc);
+    assertSame(childProc, proc);
     assertEquals(false, queue.waitTableExclusiveLock(proc, tableName));
-    queue.wakeTableExclusiveLock(proc, tableName);
+    releaseTableExclusiveLockAndComplete(proc, tableName);
 
     // release xlock
-    queue.wakeTableExclusiveLock(parentProc, tableName);
+    releaseTableExclusiveLockAndComplete(proc, tableName);
   }
 
   @Test
@@ -744,7 +762,7 @@ public class TestMasterProcedureScheduler {
     assertEquals(1, proc.getProcId());
 
     // release the xlock
-    queue.wakeTableExclusiveLock(proc, tableName);
+    releaseTableExclusiveLockAndComplete(proc, tableName);
 
     proc = queue.poll();
     assertEquals(2, proc.getProcId());
@@ -805,12 +823,12 @@ public class TestMasterProcedureScheduler {
     }
 
     public TestTableProcedure(long parentProcId, long procId, TableName tableName,
-        TableOperationType opType) {
+      TableOperationType opType) {
       this(-1, parentProcId, procId, tableName, opType);
     }
 
     public TestTableProcedure(long rootProcId, long parentProcId, long procId, TableName tableName,
-        TableOperationType opType) {
+      TableOperationType opType) {
       super(procId, parentProcId, rootProcId, null);
       this.tableName = tableName;
       this.opType = opType;
@@ -839,7 +857,7 @@ public class TestMasterProcedureScheduler {
     private final ProcedureEvent<?> event;
 
     public TestTableProcedureWithEvent(long procId, TableName tableName,
-        TableOperationType opType) {
+      TableOperationType opType) {
       super(procId, tableName, opType);
       event = new ProcedureEvent<>(tableName + " procId=" + procId);
     }
@@ -857,17 +875,17 @@ public class TestMasterProcedureScheduler {
     }
 
     public TestRegionProcedure(long procId, TableName tableName, TableOperationType opType,
-        RegionInfo... regionInfos) {
+      RegionInfo... regionInfos) {
       this(-1, procId, tableName, opType, regionInfos);
     }
 
     public TestRegionProcedure(long parentProcId, long procId, TableName tableName,
-        TableOperationType opType, RegionInfo... regionInfos) {
+      TableOperationType opType, RegionInfo... regionInfos) {
       this(-1, parentProcId, procId, tableName, opType, regionInfos);
     }
 
     public TestRegionProcedure(long rootProcId, long parentProcId, long procId, TableName tableName,
-        TableOperationType opType, RegionInfo... regionInfos) {
+      TableOperationType opType, RegionInfo... regionInfos) {
       super(rootProcId, parentProcId, procId, tableName, opType);
       this.regionInfos = regionInfos;
     }
@@ -886,7 +904,7 @@ public class TestMasterProcedureScheduler {
   }
 
   public static class TestNamespaceProcedure extends TestProcedure
-      implements TableProcedureInterface {
+    implements TableProcedureInterface {
     private final TableOperationType opType;
     private final String nsName;
 
@@ -940,8 +958,23 @@ public class TestMasterProcedureScheduler {
     }
   }
 
+  public static class TestGlobalProcedure extends TestProcedure
+    implements GlobalProcedureInterface {
+    private final String globalId;
+
+    public TestGlobalProcedure(long procId, String globalId) {
+      super(procId);
+      this.globalId = globalId;
+    }
+
+    @Override
+    public String getGlobalId() {
+      return globalId;
+    }
+  }
+
   private static LockProcedure createLockProcedure(LockType lockType, long procId)
-      throws Exception {
+    throws Exception {
     LockProcedure procedure = new LockProcedure();
 
     Field typeField = LockProcedure.class.getDeclaredField("type");
@@ -964,7 +997,7 @@ public class TestMasterProcedureScheduler {
   }
 
   private static void assertLockResource(LockedResource resource, LockedResourceType resourceType,
-      String resourceName) {
+    String resourceName) {
     assertEquals(resourceType, resource.getResourceType());
     assertEquals(resourceName, resource.getResourceName());
   }
@@ -1087,6 +1120,39 @@ public class TestMasterProcedureScheduler {
 
     resource = locks.get(0);
     assertLockResource(resource, LockedResourceType.PEER, peerId);
+    // LockedResource owner still is the origin procedure
+    assertExclusiveLock(resource, procedure);
+    // The new procedure should in the waiting list
+    assertEquals(1, resource.getWaitingProcedures().size());
+  }
+
+  @Test
+  public void testListLocksGlobal() throws Exception {
+    String globalId = "1";
+    LockProcedure procedure = createExclusiveLockProcedure(4);
+    queue.waitGlobalExclusiveLock(procedure, globalId);
+
+    List<LockedResource> locks = queue.getLocks();
+    assertEquals(1, locks.size());
+
+    LockedResource resource = locks.get(0);
+    assertLockResource(resource, LockedResourceType.GLOBAL, globalId);
+    assertExclusiveLock(resource, procedure);
+    assertTrue(resource.getWaitingProcedures().isEmpty());
+
+    // Try to acquire the exclusive lock again with same procedure
+    assertFalse(queue.waitGlobalExclusiveLock(procedure, globalId));
+
+    // Try to acquire the exclusive lock again with new procedure
+    LockProcedure procedure2 = createExclusiveLockProcedure(5);
+    assertTrue(queue.waitGlobalExclusiveLock(procedure2, globalId));
+
+    // Same peerId, still only has 1 LockedResource
+    locks = queue.getLocks();
+    assertEquals(1, locks.size());
+
+    resource = locks.get(0);
+    assertLockResource(resource, LockedResourceType.GLOBAL, globalId);
     // LockedResource owner still is the origin procedure
     assertExclusiveLock(resource, procedure);
     // The new procedure should in the waiting list

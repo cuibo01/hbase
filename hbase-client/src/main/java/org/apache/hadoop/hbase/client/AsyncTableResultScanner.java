@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,10 +19,13 @@ package org.apache.hadoop.hbase.client;
 
 import static org.apache.hadoop.hbase.client.ConnectionUtils.calcEstimatedSize;
 
+import io.opentelemetry.api.trace.Span;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayDeque;
 import java.util.Queue;
+import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.AsyncScanSingleRegionRpcRetryingCaller.ScanResumerImpl;
 import org.apache.hadoop.hbase.client.metrics.ScanMetrics;
 import org.apache.hadoop.hbase.util.FutureUtils;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -30,8 +33,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The {@link ResultScanner} implementation for {@link AsyncTable}. It will fetch data automatically
- * in background and cache it in memory. Typically the {@link #maxCacheSize} will be
+ * The {@link ResultScanner} implementation for {@link RawAsyncTableImpl}. It will fetch data
+ * automatically in background and cache it in memory. Typically, the {@link #maxCacheSize} will be
  * {@code 2 * scan.getMaxResultSize()}.
  */
 @InterfaceAudience.Private
@@ -39,7 +42,7 @@ class AsyncTableResultScanner implements ResultScanner, AdvancedScanResultConsum
 
   private static final Logger LOG = LoggerFactory.getLogger(AsyncTableResultScanner.class);
 
-  private final AsyncTable<AdvancedScanResultConsumer> rawTable;
+  private final TableName tableName;
 
   private final long maxCacheSize;
 
@@ -57,12 +60,13 @@ class AsyncTableResultScanner implements ResultScanner, AdvancedScanResultConsum
 
   private ScanResumer resumer;
 
-  public AsyncTableResultScanner(AsyncTable<AdvancedScanResultConsumer> table, Scan scan,
-      long maxCacheSize) {
-    this.rawTable = table;
+  // Used to pass the span instance to the `AsyncTableImpl` from its underlying `rawAsyncTable`.
+  private Span span = null;
+
+  public AsyncTableResultScanner(TableName tableName, Scan scan, long maxCacheSize) {
+    this.tableName = tableName;
     this.maxCacheSize = maxCacheSize;
     this.scan = scan;
-    table.scan(scan, this);
   }
 
   private void addToCache(Result result) {
@@ -72,11 +76,20 @@ class AsyncTableResultScanner implements ResultScanner, AdvancedScanResultConsum
 
   private void stopPrefetch(ScanController controller) {
     if (LOG.isDebugEnabled()) {
-      LOG.debug(String.format("0x%x", System.identityHashCode(this)) +
-        " stop prefetching when scanning " + rawTable.getName() + " as the cache size " +
-        cacheSize + " is greater than the maxCacheSize " + maxCacheSize);
+      LOG.debug(
+        "{} stop prefetching when scanning {} as the cache size {}"
+          + " is greater than the maxCacheSize {}",
+        String.format("0x%x", System.identityHashCode(this)), tableName, cacheSize, maxCacheSize);
     }
     resumer = controller.suspend();
+  }
+
+  Span getSpan() {
+    return span;
+  }
+
+  void setSpan(final Span span) {
+    this.span = span;
   }
 
   @Override
@@ -131,6 +144,25 @@ class AsyncTableResultScanner implements ResultScanner, AdvancedScanResultConsum
     resumer = null;
   }
 
+  private void terminateResumerIfPossible() {
+    if (resumer == null) {
+      return;
+    }
+    // AsyncTableResultScanner.close means we do not need scan results any more, but for
+    // ScanResumerImpl.resume, it would perform another scan on RegionServer and call
+    // AsyncTableResultScanner.onNext again when ScanResponse is received. This time
+    // AsyncTableResultScanner.onNext would do nothing else but just discard ScanResponse
+    // because AsyncTableResultScanner.closed is true. So here we would better save this
+    // unnecessary scan on RegionServer and introduce ScanResumerImpl.terminate to close
+    // scanner directly.
+    if (resumer instanceof ScanResumerImpl) {
+      ((ScanResumerImpl) resumer).terminate();
+    } else {
+      resumePrefetch();
+    }
+    resumer = null;
+  }
+
   @Override
   public synchronized Result next() throws IOException {
     while (queue.isEmpty()) {
@@ -138,7 +170,7 @@ class AsyncTableResultScanner implements ResultScanner, AdvancedScanResultConsum
         return null;
       }
       if (error != null) {
-        FutureUtils.rethrow(error);
+        throw FutureUtils.rethrow(error);
       }
       try {
         wait();
@@ -161,9 +193,7 @@ class AsyncTableResultScanner implements ResultScanner, AdvancedScanResultConsum
     closed = true;
     queue.clear();
     cacheSize = 0;
-    if (resumer != null) {
-      resumePrefetch();
-    }
+    terminateResumerIfPossible();
     notifyAll();
   }
 

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,6 +22,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Map;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeepDeletedCells;
@@ -30,6 +31,7 @@ import org.apache.hadoop.hbase.exceptions.HBaseException;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.compress.Compression.Algorithm;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
+import org.apache.hadoop.hbase.io.encoding.IndexBlockEncoding;
 import org.apache.hadoop.hbase.regionserver.BloomType;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
@@ -40,7 +42,6 @@ import org.junit.Assert;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-import java.util.Map;
 
 @Category({ MiscTests.class, SmallTests.class })
 public class TestColumnFamilyDescriptorBuilder {
@@ -219,7 +220,7 @@ public class TestColumnFamilyDescriptorBuilder {
   @Test
   public void testDefaultBuilder() {
     final Map<String, String> defaultValueMap = ColumnFamilyDescriptorBuilder.getDefaultValues();
-    assertEquals(defaultValueMap.size(), 11);
+    assertEquals(defaultValueMap.size(), 12);
     assertEquals(defaultValueMap.get(ColumnFamilyDescriptorBuilder.BLOOMFILTER),
       BloomType.ROW.toString());
     assertEquals(defaultValueMap.get(ColumnFamilyDescriptorBuilder.REPLICATION_SCOPE), "0");
@@ -239,6 +240,8 @@ public class TestColumnFamilyDescriptorBuilder {
       KeepDeletedCells.FALSE.toString());
     assertEquals(defaultValueMap.get(ColumnFamilyDescriptorBuilder.DATA_BLOCK_ENCODING),
       DataBlockEncoding.NONE.toString());
+    assertEquals(defaultValueMap.get(ColumnFamilyDescriptorBuilder.INDEX_BLOCK_ENCODING),
+      IndexBlockEncoding.NONE.toString());
   }
 
   @Test

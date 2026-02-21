@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,11 +18,12 @@
 package org.apache.hadoop.hbase.master.procedure;
 
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.quotas.QuotaCache;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * Procedures that handle servers -- e.g. server crash -- must implement this Interface.
- * It is used by the procedure runner to figure locking and what queuing.
+ * Procedures that handle servers -- e.g. server crash -- must implement this Interface. It is used
+ * by the procedure runner to figure locking and what queuing.
  */
 @InterfaceAudience.Private
 public interface ServerProcedureInterface {
@@ -50,23 +51,34 @@ public interface ServerProcedureInterface {
     /**
      * send the claim replication queue request to region server to actually assign it
      */
-    CLAIM_REPLICATION_QUEUE_REMOTE
+    CLAIM_REPLICATION_QUEUE_REMOTE,
+
+    /**
+     * send verify snapshot request to region server and handle the response
+     */
+    VERIFY_SNAPSHOT,
+
+    /**
+     * Re-read the hbase:quotas table and update {@link QuotaCache}.
+     */
+    RELOAD_QUOTAS,
+
+    /**
+     * send roll log request to region server and handle the response
+     */
+    LOG_ROLL
   }
 
-  /**
-   * @return Name of this server instance.
-   */
+  /** Returns Name of this server instance. */
   ServerName getServerName();
 
-  /**
-   * @return True if this server has an hbase:meta table region.
-   */
+  /** Returns True if this server has an hbase:meta table region. */
   boolean hasMetaTableRegion();
 
   /**
-   * Given an operation type we can take decisions about what to do with pending operations.
-   * e.g. if we get a crash handler and we have some assignment operation pending
-   * we can abort those operations.
+   * Given an operation type we can take decisions about what to do with pending operations. e.g. if
+   * we get a crash handler and we have some assignment operation pending we can abort those
+   * operations.
    * @return the operation type that the procedure is executing.
    */
   ServerOperationType getServerOperationType();

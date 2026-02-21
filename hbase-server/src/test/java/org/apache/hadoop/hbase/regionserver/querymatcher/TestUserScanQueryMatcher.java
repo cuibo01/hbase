@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeepDeletedCells;
@@ -48,7 +49,7 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestUserScanQueryMatcher.class);
+    HBaseClassTestRule.forClass(TestUserScanQueryMatcher.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestUserScanQueryMatcher.class);
 
@@ -62,10 +63,10 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
     // Do with fam2 which has a col2 qualifier.
     UserScanQueryMatcher qm = UserScanQueryMatcher.create(scan,
       new ScanInfo(this.conf, fam2, 10, 1, ttl, KeepDeletedCells.FALSE,
-          HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
+        HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
       get.getFamilyMap().get(fam2), now - ttl, now, null);
-    Cell kv = new KeyValue(row1, fam2, col2, 1, data);
-    Cell cell = PrivateCellUtil.createLastOnRowCol(kv);
+    ExtendedCell kv = new KeyValue(row1, fam2, col2, 1, data);
+    ExtendedCell cell = PrivateCellUtil.createLastOnRowCol(kv);
     qm.setToNewRow(kv);
     MatchCode code = qm.match(cell);
     assertFalse(code.compareTo(MatchCode.SEEK_NEXT_COL) != 0);
@@ -89,7 +90,7 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
     // 2,4,5
     UserScanQueryMatcher qm = UserScanQueryMatcher.create(
       scan, new ScanInfo(this.conf, fam2, 0, 1, ttl, KeepDeletedCells.FALSE,
-          HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
+        HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
       get.getFamilyMap().get(fam2), now - ttl, now, null);
 
     List<KeyValue> memstore = new ArrayList<>(6);
@@ -132,8 +133,8 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
 
     long now = EnvironmentEdgeManager.currentTime();
     UserScanQueryMatcher qm = UserScanQueryMatcher.create(scan, new ScanInfo(this.conf, fam2, 0, 1,
-        ttl, KeepDeletedCells.FALSE, HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
-      null, now - ttl, now, null);
+      ttl, KeepDeletedCells.FALSE, HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false), null,
+      now - ttl, now, null);
 
     List<KeyValue> memstore = new ArrayList<>(6);
     memstore.add(new KeyValue(row1, fam2, col1, 1, data));
@@ -163,30 +164,29 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
    * Verify that {@link ScanQueryMatcher} only skips expired KeyValue instances and does not exit
    * early from the row (skipping later non-expired KeyValues). This version mimics a Get with
    * explicitly specified column qualifiers.
-   * @throws IOException
    */
   @Test
   public void testMatch_ExpiredExplicit() throws IOException {
 
     long testTTL = 1000;
     MatchCode[] expected = new MatchCode[] { ScanQueryMatcher.MatchCode.SEEK_NEXT_COL,
-        ScanQueryMatcher.MatchCode.INCLUDE_AND_SEEK_NEXT_COL,
-        ScanQueryMatcher.MatchCode.SEEK_NEXT_COL,
-        ScanQueryMatcher.MatchCode.INCLUDE_AND_SEEK_NEXT_COL,
-        ScanQueryMatcher.MatchCode.SEEK_NEXT_ROW, ScanQueryMatcher.MatchCode.DONE };
+      ScanQueryMatcher.MatchCode.INCLUDE_AND_SEEK_NEXT_COL,
+      ScanQueryMatcher.MatchCode.SEEK_NEXT_COL,
+      ScanQueryMatcher.MatchCode.INCLUDE_AND_SEEK_NEXT_COL,
+      ScanQueryMatcher.MatchCode.SEEK_NEXT_ROW, ScanQueryMatcher.MatchCode.DONE };
 
     long now = EnvironmentEdgeManager.currentTime();
     UserScanQueryMatcher qm = UserScanQueryMatcher.create(scan,
       new ScanInfo(this.conf, fam2, 0, 1, testTTL, KeepDeletedCells.FALSE,
-          HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
+        HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
       get.getFamilyMap().get(fam2), now - testTTL, now, null);
 
     KeyValue[] kvs = new KeyValue[] { new KeyValue(row1, fam2, col1, now - 100, data),
-        new KeyValue(row1, fam2, col2, now - 50, data),
-        new KeyValue(row1, fam2, col3, now - 5000, data),
-        new KeyValue(row1, fam2, col4, now - 500, data),
-        new KeyValue(row1, fam2, col5, now - 10000, data),
-        new KeyValue(row2, fam1, col1, now - 10, data) };
+      new KeyValue(row1, fam2, col2, now - 50, data),
+      new KeyValue(row1, fam2, col3, now - 5000, data),
+      new KeyValue(row1, fam2, col4, now - 500, data),
+      new KeyValue(row1, fam2, col5, now - 10000, data),
+      new KeyValue(row2, fam1, col1, now - 10, data) };
 
     KeyValue k = kvs[0];
     qm.setToNewRow(k);
@@ -207,30 +207,27 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
    * Verify that {@link ScanQueryMatcher} only skips expired KeyValue instances and does not exit
    * early from the row (skipping later non-expired KeyValues). This version mimics a Get with
    * wildcard-inferred column qualifiers.
-   * @throws IOException
    */
   @Test
   public void testMatch_ExpiredWildcard() throws IOException {
 
     long testTTL = 1000;
     MatchCode[] expected =
-        new MatchCode[] { ScanQueryMatcher.MatchCode.INCLUDE, ScanQueryMatcher.MatchCode.INCLUDE,
-          ScanQueryMatcher.MatchCode.SEEK_NEXT_COL, ScanQueryMatcher.MatchCode.INCLUDE,
-          ScanQueryMatcher.MatchCode.SEEK_NEXT_COL, ScanQueryMatcher.MatchCode.DONE };
+      new MatchCode[] { ScanQueryMatcher.MatchCode.INCLUDE, ScanQueryMatcher.MatchCode.INCLUDE,
+        ScanQueryMatcher.MatchCode.SEEK_NEXT_COL, ScanQueryMatcher.MatchCode.INCLUDE,
+        ScanQueryMatcher.MatchCode.SEEK_NEXT_COL, ScanQueryMatcher.MatchCode.DONE };
 
     long now = EnvironmentEdgeManager.currentTime();
-    UserScanQueryMatcher qm =
-        UserScanQueryMatcher.create(scan,
-          new ScanInfo(this.conf, fam2, 0, 1, testTTL, KeepDeletedCells.FALSE,
-              HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
-          null, now - testTTL, now, null);
+    UserScanQueryMatcher qm = UserScanQueryMatcher.create(scan, new ScanInfo(this.conf, fam2, 0, 1,
+      testTTL, KeepDeletedCells.FALSE, HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false), null,
+      now - testTTL, now, null);
 
     KeyValue[] kvs = new KeyValue[] { new KeyValue(row1, fam2, col1, now - 100, data),
-        new KeyValue(row1, fam2, col2, now - 50, data),
-        new KeyValue(row1, fam2, col3, now - 5000, data),
-        new KeyValue(row1, fam2, col4, now - 500, data),
-        new KeyValue(row1, fam2, col5, now - 10000, data),
-        new KeyValue(row2, fam1, col1, now - 10, data) };
+      new KeyValue(row1, fam2, col2, now - 50, data),
+      new KeyValue(row1, fam2, col3, now - 5000, data),
+      new KeyValue(row1, fam2, col4, now - 500, data),
+      new KeyValue(row1, fam2, col5, now - 10000, data),
+      new KeyValue(row2, fam1, col1, now - 10, data) };
     KeyValue k = kvs[0];
     qm.setToNewRow(k);
 
@@ -266,7 +263,7 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
     // scan with column 2,4,5
     UserScanQueryMatcher qm = UserScanQueryMatcher.create(
       scanWithFilter, new ScanInfo(this.conf, fam2, 0, 1, ttl, KeepDeletedCells.FALSE,
-          HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
+        HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
       get.getFamilyMap().get(fam2), now - ttl, now, null);
 
     List<KeyValue> memstore = new ArrayList<>();
@@ -316,7 +313,7 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
     // scan with column 2,4,5, the family with maxVersion = 3
     UserScanQueryMatcher qm = UserScanQueryMatcher.create(
       scanWithFilter, new ScanInfo(this.conf, fam2, 0, 3, ttl, KeepDeletedCells.FALSE,
-          HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
+        HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
       get.getFamilyMap().get(fam2), now - ttl, now, null);
 
     List<KeyValue> memstore = new ArrayList<>();
@@ -336,7 +333,7 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
     scanWithFilter = new Scan(scan).setFilter(new AlwaysIncludeFilter()).readVersions(1);
     qm = UserScanQueryMatcher.create(
       scanWithFilter, new ScanInfo(this.conf, fam2, 0, 2, ttl, KeepDeletedCells.FALSE,
-          HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
+        HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
       get.getFamilyMap().get(fam2), now - ttl, now, null);
 
     List<KeyValue> memstore2 = new ArrayList<>();
@@ -376,7 +373,7 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
     // scan with column 2,4,5, the family with maxVersion = 5
     UserScanQueryMatcher qm = UserScanQueryMatcher.create(
       scanWithFilter, new ScanInfo(this.conf, fam2, 0, 5, ttl, KeepDeletedCells.FALSE,
-          HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
+        HConstants.DEFAULT_BLOCKSIZE, 0, rowComparator, false),
       get.getFamilyMap().get(fam2), now - ttl, now, null);
 
     List<KeyValue> memstore = new ArrayList<>();
@@ -395,7 +392,7 @@ public class TestUserScanQueryMatcher extends AbstractTestScanQueryMatcher {
 
     // For last cell, the query matcher will return SEEK_NEXT_COL, and the
     // ColumnTracker will skip to the next column, which is col4.
-    Cell lastCell = memstore.get(memstore.size() - 1);
+    ExtendedCell lastCell = memstore.get(memstore.size() - 1);
     Cell nextCell = qm.getKeyForNextColumn(lastCell);
     assertArrayEquals(nextCell.getQualifierArray(), col4);
   }

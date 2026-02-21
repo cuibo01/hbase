@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -30,24 +30,24 @@ import org.apache.hadoop.hbase.io.crypto.CipherProvider;
 import org.apache.hadoop.hbase.io.crypto.DefaultCipherProvider;
 import org.apache.hadoop.hbase.io.crypto.Encryption;
 import org.apache.hadoop.hbase.io.crypto.KeyProvider;
-import org.apache.hadoop.hbase.io.crypto.KeyProviderForTesting;
+import org.apache.hadoop.hbase.io.crypto.MockAesKeyProvider;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({MiscTests.class, SmallTests.class})
+@Category({ MiscTests.class, SmallTests.class })
 public class TestEncryptionTest {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestEncryptionTest.class);
+    HBaseClassTestRule.forClass(TestEncryptionTest.class);
 
   @Test
   public void testTestKeyProvider() throws Exception {
     Configuration conf = HBaseConfiguration.create();
-    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
+    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
     EncryptionTest.testKeyProvider(conf);
   }
 
@@ -77,9 +77,8 @@ public class TestEncryptionTest {
   @Test
   public void testAESCipher() {
     Configuration conf = HBaseConfiguration.create();
-    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
-    String algorithm =
-        conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
+    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
+    String algorithm = conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
     try {
       EncryptionTest.testEncryption(conf, algorithm, null);
     } catch (Exception e) {
@@ -90,7 +89,7 @@ public class TestEncryptionTest {
   @Test(expected = IOException.class)
   public void testUnknownCipher() throws Exception {
     Configuration conf = HBaseConfiguration.create();
-    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
+    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
     EncryptionTest.testEncryption(conf, "foobar", null);
     fail("Test for bogus cipher should have failed");
   }
@@ -98,42 +97,38 @@ public class TestEncryptionTest {
   @Test
   public void testTestEnabledWithDefaultConfig() {
     Configuration conf = HBaseConfiguration.create();
-    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
-    String algorithm =
-        conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
+    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
+    String algorithm = conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
     try {
       EncryptionTest.testEncryption(conf, algorithm, null);
     } catch (Exception e) {
-      fail("Test for cipher " + algorithm + " should have succeeded, when " +
-        Encryption.CRYPTO_ENABLED_CONF_KEY + " is not set");
+      fail("Test for cipher " + algorithm + " should have succeeded, when "
+        + Encryption.CRYPTO_ENABLED_CONF_KEY + " is not set");
     }
   }
 
   @Test
   public void testTestEnabledWhenCryptoIsExplicitlyEnabled() {
     Configuration conf = HBaseConfiguration.create();
-    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
-    String algorithm =
-        conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
+    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
+    String algorithm = conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
     conf.setBoolean(Encryption.CRYPTO_ENABLED_CONF_KEY, true);
     try {
       EncryptionTest.testEncryption(conf, algorithm, null);
     } catch (Exception e) {
-      fail("Test for cipher " + algorithm + " should have succeeded, when " +
-        Encryption.CRYPTO_ENABLED_CONF_KEY + " is set to true");
+      fail("Test for cipher " + algorithm + " should have succeeded, when "
+        + Encryption.CRYPTO_ENABLED_CONF_KEY + " is set to true");
     }
   }
 
   @Test(expected = IOException.class)
   public void testTestEnabledWhenCryptoIsExplicitlyDisabled() throws Exception {
     Configuration conf = HBaseConfiguration.create();
-    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
-    String algorithm =
-        conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
+    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
+    String algorithm = conf.get(HConstants.CRYPTO_KEY_ALGORITHM_CONF_KEY, HConstants.CIPHER_AES);
     conf.setBoolean(Encryption.CRYPTO_ENABLED_CONF_KEY, false);
     EncryptionTest.testEncryption(conf, algorithm, null);
   }
-
 
   public static class FailingKeyProvider implements KeyProvider {
 

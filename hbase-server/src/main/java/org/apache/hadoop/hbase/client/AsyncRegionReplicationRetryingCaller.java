@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,9 +20,10 @@ package org.apache.hadoop.hbase.client;
 import static org.apache.hadoop.hbase.util.FutureUtils.addListener;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
-import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.protobuf.ReplicationProtobufUtil;
 import org.apache.hadoop.hbase.util.Pair;
@@ -53,16 +54,19 @@ public class AsyncRegionReplicationRetryingCaller extends AsyncRpcRetryingCaller
     AsyncClusterConnectionImpl conn, int maxAttempts, long rpcTimeoutNs, long operationTimeoutNs,
     RegionInfo replica, List<Entry> entries) {
     super(retryTimer, conn, ConnectionUtils.getPriority(replica.getTable()),
-      conn.connConf.getPauseNs(), conn.connConf.getPauseForCQTBENs(), maxAttempts,
-      operationTimeoutNs, rpcTimeoutNs, conn.connConf.getStartLogErrorsCnt());
+      conn.connConf.getPauseNs(), conn.connConf.getPauseNsForServerOverloaded(), maxAttempts,
+      operationTimeoutNs, rpcTimeoutNs, conn.connConf.getStartLogErrorsCnt(),
+      Collections.emptyMap());
     this.replica = replica;
     this.entries = entries.toArray(new Entry[0]);
   }
 
   @Override
   protected Throwable preProcessError(Throwable error) {
-    if (error instanceof DoNotRetryIOException &&
-      error.getCause() instanceof UnsupportedOperationException) {
+    if (
+      error instanceof DoNotRetryIOException
+        && error.getCause() instanceof UnsupportedOperationException
+    ) {
       // fallback to use replay, and also return the cause to let the upper retry
       useReplay = true;
       return error.getCause();
@@ -90,7 +94,7 @@ public class AsyncRegionReplicationRetryingCaller extends AsyncRpcRetryingCaller
         err -> conn.getLocator().updateCachedLocationOnError(loc, err));
       return;
     }
-    Pair<ReplicateWALEntryRequest, CellScanner> pair = ReplicationProtobufUtil
+    Pair<ReplicateWALEntryRequest, ExtendedCellScanner> pair = ReplicationProtobufUtil
       .buildReplicateWALEntryRequest(entries, replica.getEncodedNameAsBytes(), null, null, null);
     resetCallTimeout();
     controller.setCellScanner(pair.getSecond());

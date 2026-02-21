@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,10 +22,11 @@ import static org.junit.Assert.assertEquals;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.apache.hbase.thirdparty.com.google.gson.Gson;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+
+import org.apache.hbase.thirdparty.com.google.gson.Gson;
 
 @Category({ MiscTests.class, SmallTests.class })
 public class TestGsonUtil {
@@ -36,6 +37,10 @@ public class TestGsonUtil {
 
   private static final Gson GSON = GsonUtil.createGson().create();
   private static final Gson DHE_GSON = GsonUtil.createGsonWithDisableHtmlEscaping().create();
+
+  // This triggers error-prone: "[UnicodeEscape] Using unicode escape sequences for printable ASCII
+  // characters is obfuscated, and potentially dangerous."
+  // The UnicodeEscape warning cannot be disabled. Consider rewriting this test.
 
   @Test
   public void testDisableHtmlEscaping() {

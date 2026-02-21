@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,28 +17,26 @@
  */
 package org.apache.hadoop.hbase.codec;
 
+import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PushbackInputStream;
-
-import edu.umd.cs.findbugs.annotations.NonNull;
-
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * TODO javadoc
+ * Base implementation for {@link Codec.Decoder}.
  */
-@InterfaceAudience.LimitedPrivate({HBaseInterfaceAudience.COPROC, HBaseInterfaceAudience.PHOENIX})
+@InterfaceAudience.LimitedPrivate({ HBaseInterfaceAudience.COPROC, HBaseInterfaceAudience.PHOENIX })
 public abstract class BaseDecoder implements Codec.Decoder {
   protected static final Logger LOG = LoggerFactory.getLogger(BaseDecoder.class);
 
   protected final InputStream in;
-  private Cell current = null;
+  private ExtendedCell current = null;
 
   protected static class PBIS extends PushbackInputStream {
     public PBIS(InputStream in, int size) {
@@ -61,13 +59,14 @@ public abstract class BaseDecoder implements Codec.Decoder {
     if (firstByte == -1) {
       return false;
     } else {
-      ((PBIS)in).unread(firstByte);
+      ((PBIS) in).unread(firstByte);
     }
 
     try {
       this.current = parseCell();
     } catch (IOException ioEx) {
-      ((PBIS)in).resetBuf(1); // reset the buffer in case the underlying stream is read from upper layers
+      ((PBIS) in).resetBuf(1); // reset the buffer in case the underlying stream is read from upper
+                               // layers
       rethrowEofException(ioEx);
     }
     return true;
@@ -96,14 +95,13 @@ public abstract class BaseDecoder implements Codec.Decoder {
   /**
    * Extract a Cell.
    * @return a parsed Cell or throws an Exception. EOFException or a generic IOException maybe
-   * thrown if EOF is reached prematurely. Does not return null.
-   * @throws IOException
+   *         thrown if EOF is reached prematurely. Does not return null.
    */
   @NonNull
-  protected abstract Cell parseCell() throws IOException;
+  protected abstract ExtendedCell parseCell() throws IOException;
 
   @Override
-  public Cell current() {
+  public ExtendedCell current() {
     return this.current;
   }
 }

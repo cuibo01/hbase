@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,6 +27,7 @@ import java.util.Map;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureUtil;
@@ -37,6 +38,7 @@ import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.hbase.wal.WALPrettyPrinter;
+import org.apache.hadoop.hbase.wal.WALStreamReader;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 
@@ -88,7 +90,7 @@ public class WALProcedurePrettyPrinter extends AbstractHBaseTool {
   protected int doWork() throws Exception {
     Path path = new Path(file);
     FileSystem fs = path.getFileSystem(conf);
-    try (WAL.Reader reader = WALFactory.createReader(fs, path, conf)) {
+    try (WALStreamReader reader = WALFactory.createStreamReader(fs, path, conf)) {
       for (;;) {
         WAL.Entry entry = reader.next();
         if (entry == null) {
@@ -101,16 +103,18 @@ public class WALProcedurePrettyPrinter extends AbstractHBaseTool {
         out.println(
           String.format(KEY_TMPL, sequenceId, FORMATTER.format(Instant.ofEpochMilli(writeTime))));
         for (Cell cell : edit.getCells()) {
-          Map<String, Object> op = WALPrettyPrinter.toStringMap(cell);
-          if (!Bytes.equals(PROC_FAMILY, 0, PROC_FAMILY.length, cell.getFamilyArray(),
-            cell.getFamilyOffset(), cell.getFamilyLength())) {
+          Map<String, Object> op = WALPrettyPrinter.toStringMap((ExtendedCell) cell);
+          if (
+            !Bytes.equals(PROC_FAMILY, 0, PROC_FAMILY.length, cell.getFamilyArray(),
+              cell.getFamilyOffset(), cell.getFamilyLength())
+          ) {
             // We could have cells other than procedure edits, for example, a flush marker
             WALPrettyPrinter.printCell(out, op, false, false);
             continue;
           }
           long procId = Bytes.toLong(cell.getRowArray(), cell.getRowOffset(), cell.getRowLength());
-          out.println("pid=" + procId + ", type=" + op.get("type") + ", column=" +
-            op.get("family") + ":" + op.get("qualifier"));
+          out.println("pid=" + procId + ", type=" + op.get("type") + ", column=" + op.get("family")
+            + ":" + op.get("qualifier"));
           if (cell.getType() == Cell.Type.Put) {
             if (cell.getValueLength() > 0) {
               // should be a normal put

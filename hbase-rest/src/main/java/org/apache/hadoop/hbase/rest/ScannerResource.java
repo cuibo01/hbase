@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,16 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.rest;
 
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.databind.JsonMappingException;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalCause;
 import java.io.IOException;
 import java.net.URI;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.rest.model.ScannerModel;
@@ -48,23 +49,34 @@ public class ScannerResource extends ResourceBase {
 
   private static final Logger LOG = LoggerFactory.getLogger(ScannerResource.class);
 
-  static final Map<String,ScannerInstanceResource> scanners =
-   Collections.synchronizedMap(new HashMap<String,ScannerInstanceResource>());
-
+  private static final Cache<String, ScannerInstanceResource> scanners = setupScanners();
   TableResource tableResource;
 
   /**
    * Constructor
-   * @param tableResource
-   * @throws IOException
    */
-  public ScannerResource(TableResource tableResource)throws IOException {
+  public ScannerResource(TableResource tableResource) throws IOException {
     super();
     this.tableResource = tableResource;
   }
 
+  private static Cache<String, ScannerInstanceResource> setupScanners() {
+    final Configuration conf = HBaseConfiguration.create();
+
+    int size = conf.getInt(REST_SCANNERCACHE_SIZE, DEFAULT_REST_SCANNERCACHE_SIZE);
+    long evictTimeoutMs = conf.getTimeDuration(REST_SCANNERCACHE_EXPIRE_TIME,
+      DEFAULT_REST_SCANNERCACHE_EXPIRE_TIME_MS, TimeUnit.MILLISECONDS);
+
+    Cache<String, ScannerInstanceResource> cache =
+      Caffeine.newBuilder().removalListener(ScannerResource::removalListener).maximumSize(size)
+        .expireAfterAccess(evictTimeoutMs, TimeUnit.MILLISECONDS)
+        .<String, ScannerInstanceResource> build();
+
+    return cache;
+  }
+
   static boolean delete(final String id) {
-    ScannerInstanceResource instance = scanners.remove(id);
+    ScannerInstanceResource instance = scanners.asMap().remove(id);
     if (instance != null) {
       instance.generator.close();
       return true;
@@ -73,30 +85,34 @@ public class ScannerResource extends ResourceBase {
     }
   }
 
-  Response update(final ScannerModel model, final boolean replace,
-      final UriInfo uriInfo) {
+  static void removalListener(String key, ScannerInstanceResource value, RemovalCause cause) {
+    if (cause.wasEvicted()) {
+      delete(key);
+    }
+  }
+
+  Response update(final ScannerModel model, final boolean replace, final UriInfo uriInfo) {
     servlet.getMetrics().incrementRequests(1);
     if (servlet.isReadOnly()) {
-      return Response.status(Response.Status.FORBIDDEN)
-        .type(MIMETYPE_TEXT).entity("Forbidden" + CRLF)
-        .build();
+      return Response.status(Response.Status.FORBIDDEN).type(MIMETYPE_TEXT)
+        .entity("Forbidden" + CRLF).build();
     }
     byte[] endRow = model.hasEndRow() ? model.getEndRow() : null;
     RowSpec spec = null;
     if (model.getLabels() != null) {
       spec = new RowSpec(model.getStartRow(), endRow, model.getColumns(), model.getStartTime(),
-          model.getEndTime(), model.getMaxVersions(), model.getLabels());
+        model.getEndTime(), model.getMaxVersions(), model.getLabels());
     } else {
       spec = new RowSpec(model.getStartRow(), endRow, model.getColumns(), model.getStartTime(),
-          model.getEndTime(), model.getMaxVersions());
+        model.getEndTime(), model.getMaxVersions());
     }
 
     try {
       Filter filter = ScannerResultGenerator.buildFilterFromModel(model);
       String tableName = tableResource.getName();
-      ScannerResultGenerator gen =
-        new ScannerResultGenerator(tableName, spec, filter, model.getCaching(),
-          model.getCacheBlocks(), model.getLimit());
+      ScannerResultGenerator gen = new ScannerResultGenerator(tableName, spec, filter,
+        model.getCaching(), model.getCacheBlocks(), model.getLimit(), model.isIncludeStartRow(),
+        model.isIncludeStopRow());
       String id = gen.getID();
       ScannerInstanceResource instance =
         new ScannerInstanceResource(tableName, id, gen, model.getBatch());
@@ -112,26 +128,23 @@ public class ScannerResource extends ResourceBase {
       LOG.error("Exception occurred while processing " + uriInfo.getAbsolutePath() + " : ", e);
       servlet.getMetrics().incrementFailedPutRequests(1);
       if (e instanceof TableNotFoundException) {
-        return Response.status(Response.Status.NOT_FOUND)
-          .type(MIMETYPE_TEXT).entity("Not found" + CRLF)
-          .build();
-      } else if (e instanceof RuntimeException
-          || e instanceof JsonMappingException | e instanceof JsonParseException) {
-        return Response.status(Response.Status.BAD_REQUEST)
-          .type(MIMETYPE_TEXT).entity("Bad request" + CRLF)
-          .build();
+        return Response.status(Response.Status.NOT_FOUND).type(MIMETYPE_TEXT)
+          .entity("Not found" + CRLF).build();
+      } else if (
+        e instanceof RuntimeException
+          || e instanceof JsonMappingException | e instanceof JsonParseException
+      ) {
+        return Response.status(Response.Status.BAD_REQUEST).type(MIMETYPE_TEXT)
+          .entity("Bad request" + CRLF).build();
       }
-      return Response.status(Response.Status.SERVICE_UNAVAILABLE)
-        .type(MIMETYPE_TEXT).entity("Unavailable" + CRLF)
-        .build();
+      return Response.status(Response.Status.SERVICE_UNAVAILABLE).type(MIMETYPE_TEXT)
+        .entity("Unavailable" + CRLF).build();
     }
   }
 
   @PUT
-  @Consumes({MIMETYPE_XML, MIMETYPE_JSON, MIMETYPE_PROTOBUF,
-    MIMETYPE_PROTOBUF_IETF})
-  public Response put(final ScannerModel model,
-      final @Context UriInfo uriInfo) {
+  @Consumes({ MIMETYPE_XML, MIMETYPE_JSON, MIMETYPE_PROTOBUF, MIMETYPE_PROTOBUF_IETF })
+  public Response put(final ScannerModel model, final @Context UriInfo uriInfo) {
     if (LOG.isTraceEnabled()) {
       LOG.trace("PUT " + uriInfo.getAbsolutePath());
     }
@@ -139,10 +152,8 @@ public class ScannerResource extends ResourceBase {
   }
 
   @POST
-  @Consumes({MIMETYPE_XML, MIMETYPE_JSON, MIMETYPE_PROTOBUF,
-    MIMETYPE_PROTOBUF_IETF})
-  public Response post(final ScannerModel model,
-      final @Context UriInfo uriInfo) {
+  @Consumes({ MIMETYPE_XML, MIMETYPE_JSON, MIMETYPE_PROTOBUF, MIMETYPE_PROTOBUF_IETF })
+  public Response post(final ScannerModel model, final @Context UriInfo uriInfo) {
     if (LOG.isTraceEnabled()) {
       LOG.trace("POST " + uriInfo.getAbsolutePath());
     }
@@ -150,9 +161,9 @@ public class ScannerResource extends ResourceBase {
   }
 
   @Path("{scanner: .+}")
-  public ScannerInstanceResource getScannerInstanceResource(
-      final @PathParam("scanner") String id) throws IOException {
-    ScannerInstanceResource instance = scanners.get(id);
+  public ScannerInstanceResource getScannerInstanceResource(final @PathParam("scanner") String id)
+    throws IOException {
+    ScannerInstanceResource instance = scanners.getIfPresent(id);
     if (instance == null) {
       servlet.getMetrics().incrementFailedGetRequests(1);
       return new ScannerInstanceResource();

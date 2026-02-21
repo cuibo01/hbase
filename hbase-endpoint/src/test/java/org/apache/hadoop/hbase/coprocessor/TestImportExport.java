@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,19 +19,19 @@ package org.apache.hadoop.hbase.coprocessor;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
+import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({MediumTests.class})
+@Category(LargeTests.class)
 public class TestImportExport extends org.apache.hadoop.hbase.mapreduce.TestImportExport {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestImportExport.class);
+    HBaseClassTestRule.forClass(TestImportExport.class);
 
   @BeforeClass
   public static void beforeClass() throws Throwable {
@@ -51,11 +51,10 @@ public class TestImportExport extends org.apache.hadoop.hbase.mapreduce.TestImpo
     Export.main(args);
   }
 
-  /**
-   * Skip the test which is unrelated to the coprocessor.Export.
-   */
   @Test
   @Ignore
+  @Override
   public void testImport94Table() throws Throwable {
+    // Skip the test which is unrelated to the coprocessor.Export.
   }
 }

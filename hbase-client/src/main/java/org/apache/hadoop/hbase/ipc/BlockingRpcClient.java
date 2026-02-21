@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,8 @@ package org.apache.hadoop.hbase.ipc;
 
 import java.io.IOException;
 import java.net.SocketAddress;
+import java.util.Collections;
+import java.util.Map;
 import javax.net.SocketFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HConstants;
@@ -41,20 +43,20 @@ public class BlockingRpcClient extends AbstractRpcClient<BlockingRpcConnection> 
    * SocketFactory
    */
   BlockingRpcClient(Configuration conf) {
-    this(conf, HConstants.CLUSTER_ID_DEFAULT, null, null);
+    this(conf, HConstants.CLUSTER_ID_DEFAULT, null, null, Collections.emptyMap());
   }
 
   /**
    * Construct an IPC client for the cluster {@code clusterId} with the default SocketFactory This
    * method is called with reflection by the RpcClientFactory to create an instance
-   * @param conf configuration
+   * @param conf      configuration
    * @param clusterId the cluster id
    * @param localAddr client socket bind address.
-   * @param metrics the connection metrics
+   * @param metrics   the connection metrics
    */
   public BlockingRpcClient(Configuration conf, String clusterId, SocketAddress localAddr,
-      MetricsConnection metrics) {
-    super(conf, clusterId, localAddr, metrics);
+    MetricsConnection metrics, Map<String, byte[]> connectionAttributes) {
+    super(conf, clusterId, localAddr, metrics, connectionAttributes);
     this.socketFactory = NetUtils.getDefaultSocketFactory(conf);
   }
 

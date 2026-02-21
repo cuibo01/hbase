@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.ipc;
 
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
@@ -43,6 +44,8 @@ import org.junit.experimental.categories.Category;
 
 import org.apache.hbase.thirdparty.io.netty.channel.DefaultEventLoop;
 import org.apache.hbase.thirdparty.io.netty.channel.EventLoop;
+
+import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos.ExceptionResponse;
 
 @Category({ ClientTests.class, SmallTests.class })
 public class TestIPCUtil {
@@ -104,15 +107,16 @@ public class TestIPCUtil {
     Address addr = Address.fromParts("127.0.0.1", 12345);
     for (Throwable exception : exceptions) {
       if (exception instanceof TimeoutException) {
-        assertThat(IPCUtil.wrapException(addr, null, exception), instanceOf(TimeoutIOException.class));
+        assertThat(IPCUtil.wrapException(addr, null, exception),
+          instanceOf(TimeoutIOException.class));
       } else {
-        IOException ioe = IPCUtil.wrapException(addr, RegionInfoBuilder.FIRST_META_REGIONINFO,
-          exception);
+        IOException ioe =
+          IPCUtil.wrapException(addr, RegionInfoBuilder.FIRST_META_REGIONINFO, exception);
         // Assert that the exception contains the Region name if supplied. HBASE-25735.
         // Not all exceptions get the region stuffed into it.
         if (ioe.getMessage() != null) {
-          assertTrue(ioe.getMessage().
-            contains(RegionInfoBuilder.FIRST_META_REGIONINFO.getRegionNameAsString()));
+          assertTrue(ioe.getMessage()
+            .contains(RegionInfoBuilder.FIRST_META_REGIONINFO.getRegionNameAsString()));
         }
         assertThat(ioe, instanceOf(exception.getClass()));
       }
@@ -120,7 +124,7 @@ public class TestIPCUtil {
   }
 
   @Test
-  public void testExecute() throws IOException {
+  public void testExecute() throws Exception {
     EventLoop eventLoop = new DefaultEventLoop();
     MutableInt executed = new MutableInt(0);
     MutableInt numStackTraceElements = new MutableInt(0);
@@ -135,8 +139,8 @@ public class TestIPCUtil {
           if (depth <= IPCUtil.MAX_DEPTH) {
             if (numElements <= numStackTraceElements.intValue()) {
               future.completeExceptionally(
-                new AssertionError("should call run directly but stack trace decreased from " +
-                  numStackTraceElements.intValue() + " to " + numElements));
+                new AssertionError("should call run directly but stack trace decreased from "
+                  + numStackTraceElements.intValue() + " to " + numElements));
               return;
             }
             numStackTraceElements.setValue(numElements);
@@ -144,9 +148,9 @@ public class TestIPCUtil {
           } else {
             if (numElements >= numStackTraceElements.intValue()) {
               future.completeExceptionally(
-                new AssertionError("should call eventLoop.execute to prevent stack overflow but" +
-                  " stack trace increased from " + numStackTraceElements.intValue() + " to " +
-                  numElements));
+                new AssertionError("should call eventLoop.execute to prevent stack overflow but"
+                  + " stack trace increased from " + numStackTraceElements.intValue() + " to "
+                  + numElements));
             } else {
               future.complete(null);
             }
@@ -155,7 +159,26 @@ public class TestIPCUtil {
       });
       FutureUtils.get(future);
     } finally {
-      eventLoop.shutdownGracefully();
+      eventLoop.shutdownGracefully().get();
     }
+  }
+
+  @Test
+  public void testIsFatalConnectionException() {
+    // intentionally not reference the class object directly, so here we will not load the class, to
+    // make sure that in isFatalConnectionException, we can use initialized = false when calling
+    // Class.forName
+    ExceptionResponse resp = ExceptionResponse.newBuilder()
+      .setExceptionClassName("org.apache.hadoop.hbase.ipc.DummyFatalConnectionException").build();
+    assertTrue(IPCUtil.isFatalConnectionException(resp));
+
+    resp = ExceptionResponse.newBuilder()
+      .setExceptionClassName("org.apache.hadoop.hbase.ipc.DummyException").build();
+    assertFalse(IPCUtil.isFatalConnectionException(resp));
+
+    // class not found
+    resp = ExceptionResponse.newBuilder()
+      .setExceptionClassName("org.apache.hadoop.hbase.ipc.WhatEver").build();
+    assertFalse(IPCUtil.isFatalConnectionException(resp));
   }
 }

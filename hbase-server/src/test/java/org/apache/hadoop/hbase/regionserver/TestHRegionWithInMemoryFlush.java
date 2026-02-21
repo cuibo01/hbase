@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,8 +17,9 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
-import java.io.IOException;
+import static org.junit.Assert.assertEquals;
 
+import java.io.IOException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
@@ -29,90 +30,78 @@ import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.VerySlowRegionServerTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WAL;
-import org.apache.hadoop.hbase.wal.WALFactory;
-import org.junit.Assert;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-
 /**
- * A test similar to TestHRegion, but with in-memory flush families.
- * Also checks wal truncation after in-memory compaction.
+ * A test similar to TestHRegion, but with in-memory flush families. Also checks wal truncation
+ * after in-memory compaction.
  */
-@Category({VerySlowRegionServerTests.class, LargeTests.class})
+@Category({ VerySlowRegionServerTests.class, LargeTests.class })
 public class TestHRegionWithInMemoryFlush extends TestHRegion {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestHRegionWithInMemoryFlush.class);
+    HBaseClassTestRule.forClass(TestHRegionWithInMemoryFlush.class);
 
   /**
-   * @return A region on which you must call
-   *         {@link HBaseTestingUtil#closeRegionAndWAL(HRegion)} when done.
+   * @return A region on which you must call {@link HBaseTestingUtil#closeRegionAndWAL(HRegion)}
+   *         when done.
    */
   @Override
-  public HRegion initHRegion(TableName tableName, byte[] startKey, byte[] stopKey,
-      Configuration conf, boolean isReadOnly, Durability durability, WAL wal, byte[]... families)
-      throws IOException {
+  protected HRegion initHRegion(TableName tableName, byte[] startKey, byte[] stopKey,
+    Configuration conf, boolean isReadOnly, Durability durability, WAL wal, byte[]... families)
+    throws IOException {
     boolean[] inMemory = new boolean[families.length];
-    for(int i = 0; i < inMemory.length; i++) {
+    for (int i = 0; i < inMemory.length; i++) {
       inMemory[i] = true;
     }
-    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0,
-      0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
-    return TEST_UTIL.createLocalHRegionWithInMemoryFlags(tableName, startKey, stopKey,
-        conf, isReadOnly, durability, wal, inMemory, families);
+    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null,
+      MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
+    return TEST_UTIL.createLocalHRegionWithInMemoryFlags(tableName, startKey, stopKey, conf,
+      isReadOnly, durability, wal, inMemory, families);
   }
 
-  @Override int getTestCountForTestWritesWhileScanning() {
+  @Override
+  protected int getTestCountForTestWritesWhileScanning() {
     return 10;
   }
 
   /**
-   * testWritesWhileScanning is flakey when called out of this class. Need to dig in. Meantime
-   * go easy on it. See if that helps.
+   * testWritesWhileScanning is flakey when called out of this class. Need to dig in. Meantime go
+   * easy on it. See if that helps.
    */
-  @Override int getNumQualifiersForTestWritesWhileScanning() {
+  @Override
+  protected int getNumQualifiersForTestWritesWhileScanning() {
     return 10;
   }
 
   /**
    * A test case of HBASE-21041
-   * @throws Exception Exception
    */
   @Override
   @Test
   public void testFlushAndMemstoreSizeCounting() throws Exception {
     byte[] family = Bytes.toBytes("family");
     this.region = initHRegion(tableName, method, CONF, family);
-    final WALFactory wals = new WALFactory(CONF, method);
     int count = 0;
-    try {
-      for (byte[] row : HBaseTestingUtil.ROWS) {
-        Put put = new Put(row);
-        put.addColumn(family, family, row);
-        region.put(put);
-        //In memory flush every 1000 puts
-        if (count++ % 1000 == 0) {
-          ((CompactingMemStore) (region.getStore(family).memstore))
-              .flushInMemory();
-        }
+    for (byte[] row : HBaseTestingUtil.ROWS) {
+      Put put = new Put(row);
+      put.addColumn(family, family, row);
+      region.put(put);
+      // In memory flush every 1000 puts
+      if (count++ % 1000 == 0) {
+        ((CompactingMemStore) (region.getStore(family).memstore)).flushInMemory();
       }
-      region.flush(true);
-      // After flush, data size should be zero
-      Assert.assertEquals(0, region.getMemStoreDataSize());
-      // After flush, a new active mutable segment is created, so the heap size
-      // should equal to MutableSegment.DEEP_OVERHEAD
-      Assert.assertEquals(MutableSegment.DEEP_OVERHEAD, region.getMemStoreHeapSize());
-      // After flush, offheap size should be zero
-      Assert.assertEquals(0, region.getMemStoreOffHeapSize());
-
-    } finally {
-      HBaseTestingUtil.closeRegionAndWAL(this.region);
-      this.region = null;
-      wals.close();
     }
+    region.flush(true);
+    // After flush, data size should be zero
+    assertEquals(0, region.getMemStoreDataSize());
+    // After flush, a new active mutable segment is created, so the heap size
+    // should equal to MutableSegment.DEEP_OVERHEAD
+    assertEquals(MutableSegment.DEEP_OVERHEAD, region.getMemStoreHeapSize());
+    // After flush, offheap size should be zero
+    assertEquals(0, region.getMemStoreOffHeapSize());
   }
 }
-

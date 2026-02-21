@@ -17,8 +17,17 @@
  */
 package org.apache.hadoop.hbase.master.assignment;
 
+import static org.apache.hadoop.hbase.io.hfile.CacheConfig.DEFAULT_EVICT_ON_CLOSE;
+import static org.apache.hadoop.hbase.io.hfile.CacheConfig.DEFAULT_EVICT_ON_SPLIT;
+import static org.apache.hadoop.hbase.io.hfile.CacheConfig.EVICT_BLOCKS_ON_CLOSE_KEY;
+import static org.apache.hadoop.hbase.io.hfile.CacheConfig.EVICT_BLOCKS_ON_SPLIT_KEY;
+import static org.apache.hadoop.hbase.master.LoadBalancer.BOGUS_SERVER_NAME;
+import static org.apache.hadoop.hbase.master.assignment.AssignmentManager.FORCE_REGION_RETAINMENT;
+
 import edu.umd.cs.findbugs.annotations.Nullable;
 import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.hbase.HBaseIOException;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
@@ -27,15 +36,17 @@ import org.apache.hadoop.hbase.client.RegionReplicaUtil;
 import org.apache.hadoop.hbase.client.RetriesExhaustedException;
 import org.apache.hadoop.hbase.master.MetricsAssignmentManager;
 import org.apache.hadoop.hbase.master.RegionState.State;
+import org.apache.hadoop.hbase.master.ServerManager;
 import org.apache.hadoop.hbase.master.procedure.AbstractStateMachineRegionProcedure;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.procedure.ServerCrashProcedure;
-import org.apache.hadoop.hbase.procedure2.Procedure;
+import org.apache.hadoop.hbase.procedure2.ProcedureFutureUtil;
 import org.apache.hadoop.hbase.procedure2.ProcedureMetrics;
 import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
 import org.apache.hadoop.hbase.procedure2.ProcedureSuspendedException;
 import org.apache.hadoop.hbase.procedure2.ProcedureUtil;
 import org.apache.hadoop.hbase.procedure2.ProcedureYieldException;
+import org.apache.hadoop.hbase.util.FutureUtils;
 import org.apache.hadoop.hbase.util.RetryCounter;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -91,6 +102,10 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProto
  * Notice that, although we allow specify a target server, it just acts as a candidate, we do not
  * guarantee that the region will finally be on the target server. If this is important for you, you
  * should check whether the region is on the target server after the procedure is finished.
+ * </p>
+ * Altenatively, for trying retaining assignments, the
+ * <b>hbase.master.scp.retain.assignment.force</b> option can be used together with
+ * <b>hbase.master.scp.retain.assignment</b>.
  * <p/>
  * When you want to schedule a TRSP, please check whether there is still one for this region, and
  * the check should be under the RegionStateNode lock. We will remove the TRSP from a
@@ -99,7 +114,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProto
  */
 @InterfaceAudience.Private
 public class TransitRegionStateProcedure
-    extends AbstractStateMachineRegionProcedure<RegionStateTransitionState> {
+  extends AbstractStateMachineRegionProcedure<RegionStateTransitionState> {
 
   private static final Logger LOG = LoggerFactory.getLogger(TransitRegionStateProcedure.class);
 
@@ -117,6 +132,16 @@ public class TransitRegionStateProcedure
   private RetryCounter retryCounter;
 
   private RegionRemoteProcedureBase remoteProc;
+
+  private boolean evictCache;
+
+  private boolean isSplit;
+
+  private RetryCounter forceRetainmentRetryCounter;
+
+  private long forceRetainmentTotalWait;
+
+  private CompletableFuture<Void> future;
 
   public TransitRegionStateProcedure() {
   }
@@ -142,7 +167,7 @@ public class TransitRegionStateProcedure
   }
 
   protected TransitRegionStateProcedure(MasterProcedureEnv env, RegionInfo hri,
-      ServerName assignCandidate, boolean forceNewPlan, TransitionType type) {
+    ServerName assignCandidate, boolean forceNewPlan, TransitionType type) {
     super(env, hri);
     this.assignCandidate = assignCandidate;
     this.forceNewPlan = forceNewPlan;
@@ -153,6 +178,24 @@ public class TransitRegionStateProcedure
     if (type == TransitionType.REOPEN) {
       this.assignCandidate = getRegionStateNode(env).getRegionLocation();
     }
+    evictCache =
+      env.getMasterConfiguration().getBoolean(EVICT_BLOCKS_ON_CLOSE_KEY, DEFAULT_EVICT_ON_CLOSE);
+    initForceRetainmentRetryCounter(env);
+  }
+
+  private void initForceRetainmentRetryCounter(MasterProcedureEnv env) {
+    if (env.getAssignmentManager().isForceRegionRetainment()) {
+      forceRetainmentRetryCounter =
+        new RetryCounter(env.getAssignmentManager().getForceRegionRetainmentRetries(),
+          env.getAssignmentManager().getForceRegionRetainmentWaitInterval(), TimeUnit.MILLISECONDS);
+      forceRetainmentTotalWait = 0;
+    }
+  }
+
+  protected TransitRegionStateProcedure(MasterProcedureEnv env, RegionInfo hri,
+    ServerName assignCandidate, boolean forceNewPlan, TransitionType type, boolean isSplit) {
+    this(env, hri, assignCandidate, forceNewPlan, type);
+    this.isSplit = isSplit;
   }
 
   @Override
@@ -163,6 +206,9 @@ public class TransitRegionStateProcedure
 
   @Override
   protected boolean waitInitialized(MasterProcedureEnv env) {
+    if (isCriticalSystemTable()) {
+      return false;
+    }
     if (TableName.isMetaTableName(getTableName())) {
       return false;
     }
@@ -172,8 +218,33 @@ public class TransitRegionStateProcedure
     return am.waitMetaLoaded(this) || am.waitMetaAssigned(this, getRegion());
   }
 
+  private void checkAndWaitForOriginalServer(MasterProcedureEnv env, ServerName lastHost)
+    throws ProcedureSuspendedException {
+    ServerManager serverManager = env.getMasterServices().getServerManager();
+    ServerName newNameForServer = serverManager.findServerWithSameHostnamePortWithLock(lastHost);
+    boolean isOnline = serverManager.createDestinationServersList().contains(newNameForServer);
+
+    if (!isOnline && forceRetainmentRetryCounter.shouldRetry()) {
+      int backoff =
+        Math.toIntExact(forceRetainmentRetryCounter.getBackoffTimeAndIncrementAttempts());
+      forceRetainmentTotalWait += backoff;
+      LOG.info(
+        "Suspending the TRSP PID={} for {}ms because {} is true and previous host {} "
+          + "for region is not yet online.",
+        this.getProcId(), backoff, FORCE_REGION_RETAINMENT, lastHost);
+      setTimeout(backoff);
+      setState(ProcedureProtos.ProcedureState.WAITING_TIMEOUT);
+      throw new ProcedureSuspendedException();
+    }
+    LOG.info(
+      "{} is true. TRSP PID={} waited {}ms for host {} to come back online. "
+        + "Did host come back online? {}",
+      FORCE_REGION_RETAINMENT, this.getProcId(), forceRetainmentTotalWait, lastHost, isOnline);
+    initForceRetainmentRetryCounter(env);
+  }
+
   private void queueAssign(MasterProcedureEnv env, RegionStateNode regionNode)
-      throws ProcedureSuspendedException {
+    throws ProcedureSuspendedException {
     boolean retain = false;
     if (forceNewPlan) {
       // set the region location to null if forceNewPlan is true
@@ -184,8 +255,17 @@ public class TransitRegionStateProcedure
         regionNode.setRegionLocation(assignCandidate);
       } else if (regionNode.getLastHost() != null) {
         retain = true;
-        LOG.info("Setting lastHost as the region location {}", regionNode.getLastHost());
+        LOG.info("Setting lastHost {} as the location for region {}", regionNode.getLastHost(),
+          regionNode.getRegionInfo().getEncodedName());
         regionNode.setRegionLocation(regionNode.getLastHost());
+      }
+      if (
+        regionNode.getRegionLocation() != null
+          && env.getAssignmentManager().isForceRegionRetainment()
+      ) {
+        LOG.warn("{} is set to true. This may delay regions re-assignment "
+          + "upon RegionServers crashes or restarts.", FORCE_REGION_RETAINMENT);
+        checkAndWaitForOriginalServer(env, regionNode.getRegionLocation());
       }
     }
     LOG.info("Starting {}; {}; forceNewPlan={}, retain={}", this, regionNode.toShortString(),
@@ -197,21 +277,54 @@ public class TransitRegionStateProcedure
     }
   }
 
-  private void openRegion(MasterProcedureEnv env, RegionStateNode regionNode) throws IOException {
-    ServerName loc = regionNode.getRegionLocation();
-    if (loc == null) {
-      LOG.warn("No location specified for {}, jump back to state {} to get one", getRegion(),
-        RegionStateTransitionState.REGION_STATE_TRANSITION_GET_ASSIGN_CANDIDATE);
-      setNextState(RegionStateTransitionState.REGION_STATE_TRANSITION_GET_ASSIGN_CANDIDATE);
-      return;
-    }
-    env.getAssignmentManager().regionOpening(regionNode);
+  private CompletableFuture<Void> getFuture() {
+    return future;
+  }
+
+  private void setFuture(CompletableFuture<Void> f) {
+    future = f;
+  }
+
+  private void openRegionAfterUpdatingMeta(ServerName loc) {
     addChildProcedure(new OpenRegionProcedure(this, getRegion(), loc));
     setNextState(RegionStateTransitionState.REGION_STATE_TRANSITION_CONFIRM_OPENED);
   }
 
+  private void openRegion(MasterProcedureEnv env, RegionStateNode regionNode)
+    throws IOException, ProcedureSuspendedException {
+    ServerName loc = regionNode.getRegionLocation();
+    if (
+      ProcedureFutureUtil.checkFuture(this, this::getFuture, this::setFuture,
+        () -> openRegionAfterUpdatingMeta(loc))
+    ) {
+      return;
+    }
+    if (loc == null || BOGUS_SERVER_NAME.equals(loc)) {
+      LOG.warn("No location specified for {}, jump back to state {} to get one", getRegion(),
+        RegionStateTransitionState.REGION_STATE_TRANSITION_GET_ASSIGN_CANDIDATE);
+      setNextState(RegionStateTransitionState.REGION_STATE_TRANSITION_GET_ASSIGN_CANDIDATE);
+      throw new HBaseIOException("Failed to open region, the location is null or bogus.");
+    }
+    ProcedureFutureUtil.suspendIfNecessary(this, this::setFuture,
+      env.getAssignmentManager().regionOpening(regionNode), env,
+      () -> openRegionAfterUpdatingMeta(loc));
+  }
+
+  private void regionFailedOpenAfterUpdatingMeta(MasterProcedureEnv env,
+    RegionStateNode regionNode) {
+    setFailure(getClass().getSimpleName(), new RetriesExhaustedException(
+      "Max attempts " + env.getAssignmentManager().getAssignMaxAttempts() + " exceeded"));
+    regionNode.unsetProcedure(this);
+  }
+
   private Flow confirmOpened(MasterProcedureEnv env, RegionStateNode regionNode)
-      throws IOException {
+    throws IOException, ProcedureSuspendedException {
+    if (
+      ProcedureFutureUtil.checkFuture(this, this::getFuture, this::setFuture,
+        () -> regionFailedOpenAfterUpdatingMeta(env, regionNode))
+    ) {
+      return Flow.NO_MORE_STATE;
+    }
     if (regionNode.isInState(State.OPEN)) {
       retryCounter = null;
       if (lastState == RegionStateTransitionState.REGION_STATE_TRANSITION_CONFIRM_OPENED) {
@@ -230,19 +343,21 @@ public class TransitRegionStateProcedure
     }
 
     int retries = env.getAssignmentManager().getRegionStates().addToFailedOpen(regionNode)
-        .incrementAndGetRetries();
+      .incrementAndGetRetries();
     int maxAttempts = env.getAssignmentManager().getAssignMaxAttempts();
     LOG.info("Retry={} of max={}; {}; {}", retries, maxAttempts, this, regionNode.toShortString());
 
     if (retries >= maxAttempts) {
-      env.getAssignmentManager().regionFailedOpen(regionNode, true);
-      setFailure(getClass().getSimpleName(), new RetriesExhaustedException(
-        "Max attempts " + env.getAssignmentManager().getAssignMaxAttempts() + " exceeded"));
-      regionNode.unsetProcedure(this);
+      ProcedureFutureUtil.suspendIfNecessary(this, this::setFuture,
+        env.getAssignmentManager().regionFailedOpen(regionNode, true), env,
+        () -> regionFailedOpenAfterUpdatingMeta(env, regionNode));
       return Flow.NO_MORE_STATE;
     }
 
-    env.getAssignmentManager().regionFailedOpen(regionNode, false);
+    // if not giving up, we will not update meta, so the returned CompletableFuture should be a fake
+    // one, which should have been completed already
+    CompletableFuture<Void> future = env.getAssignmentManager().regionFailedOpen(regionNode, false);
+    assert future.isDone();
     // we failed to assign the region, force a new plan
     forceNewPlan = true;
     regionNode.setRegionLocation(null);
@@ -250,21 +365,40 @@ public class TransitRegionStateProcedure
 
     if (retries > env.getAssignmentManager().getAssignRetryImmediatelyMaxAttempts()) {
       // Throw exception to backoff and retry when failed open too many times
-      throw new HBaseIOException("Failed confirm OPEN of " + regionNode +
-          " (remote log may yield more detail on why).");
+      throw new HBaseIOException(
+        "Failed confirm OPEN of " + regionNode + " (remote log may yield more detail on why).");
     } else {
       // Here we do not throw exception because we want to the region to be online ASAP
       return Flow.HAS_MORE_STATE;
     }
   }
 
-  private void closeRegion(MasterProcedureEnv env, RegionStateNode regionNode) throws IOException {
+  private void closeRegionAfterUpdatingMeta(MasterProcedureEnv env, RegionStateNode regionNode) {
+    LOG.debug("Close region: isSplit: {}: evictOnSplit: {}: evictOnClose: {}", isSplit,
+      env.getMasterConfiguration().getBoolean(EVICT_BLOCKS_ON_SPLIT_KEY, DEFAULT_EVICT_ON_SPLIT),
+      evictCache);
+    // Splits/Merges are special cases, rather than deciding on the cache eviction behaviour here at
+    // Master, we just need to tell this close is for a split/merge and let RSes decide on the
+    // eviction. See HBASE-28811 for more context.
+    CloseRegionProcedure closeProc = new CloseRegionProcedure(this, getRegion(),
+      regionNode.getRegionLocation(), assignCandidate, isSplit);
+    addChildProcedure(closeProc);
+    setNextState(RegionStateTransitionState.REGION_STATE_TRANSITION_CONFIRM_CLOSED);
+  }
+
+  private void closeRegion(MasterProcedureEnv env, RegionStateNode regionNode)
+    throws IOException, ProcedureSuspendedException {
+    if (
+      ProcedureFutureUtil.checkFuture(this, this::getFuture, this::setFuture,
+        () -> closeRegionAfterUpdatingMeta(env, regionNode))
+    ) {
+      return;
+    }
     if (regionNode.isInState(State.OPEN, State.CLOSING, State.MERGING, State.SPLITTING)) {
       // this is the normal case
-      env.getAssignmentManager().regionClosing(regionNode);
-      addChildProcedure(new CloseRegionProcedure(this, getRegion(), regionNode.getRegionLocation(),
-        assignCandidate));
-      setNextState(RegionStateTransitionState.REGION_STATE_TRANSITION_CONFIRM_CLOSED);
+      ProcedureFutureUtil.suspendIfNecessary(this, this::setFuture,
+        env.getAssignmentManager().regionClosing(regionNode), env,
+        () -> closeRegionAfterUpdatingMeta(env, regionNode));
     } else {
       forceNewPlan = true;
       regionNode.setRegionLocation(null);
@@ -273,7 +407,7 @@ public class TransitRegionStateProcedure
   }
 
   private Flow confirmClosed(MasterProcedureEnv env, RegionStateNode regionNode)
-      throws IOException {
+    throws IOException {
     if (regionNode.isInState(State.CLOSED)) {
       retryCounter = null;
       if (lastState == RegionStateTransitionState.REGION_STATE_TRANSITION_CONFIRM_CLOSED) {
@@ -299,8 +433,10 @@ public class TransitRegionStateProcedure
     // edits. Notice that the region will remain in ABNORMALLY_CLOSED state, the upper layer need to
     // deal with this state. For non-default replica, this is usually the same with CLOSED.
     assert regionNode.isInState(State.ABNORMALLY_CLOSED);
-    if (!RegionReplicaUtil.isDefaultReplica(getRegion()) &&
-      lastState == RegionStateTransitionState.REGION_STATE_TRANSITION_CONFIRM_CLOSED) {
+    if (
+      !RegionReplicaUtil.isDefaultReplica(getRegion())
+        && lastState == RegionStateTransitionState.REGION_STATE_TRANSITION_CONFIRM_CLOSED
+    ) {
       regionNode.unsetProcedure(this);
       return Flow.NO_MORE_STATE;
     }
@@ -309,18 +445,33 @@ public class TransitRegionStateProcedure
     return Flow.HAS_MORE_STATE;
   }
 
-  // Override to lock RegionStateNode
-  @SuppressWarnings("rawtypes")
   @Override
-  protected Procedure[] execute(MasterProcedureEnv env)
-      throws ProcedureSuspendedException, ProcedureYieldException, InterruptedException {
+  protected void beforeExec(MasterProcedureEnv env) throws ProcedureSuspendedException {
     RegionStateNode regionNode =
       env.getAssignmentManager().getRegionStates().getOrCreateRegionStateNode(getRegion());
-    regionNode.lock();
-    try {
-      return super.execute(env);
-    } finally {
-      regionNode.unlock();
+    if (!regionNode.isLockedBy(this)) {
+      // The wake up action will be called under the lock inside RegionStateNode for implementing
+      // RegionStateNodeLock, so if we call ProcedureUtil.wakeUp where we will acquire the procedure
+      // execution lock directly, it may cause dead lock since in normal case procedure execution
+      // case, we will acquire the procedure execution lock first and then acquire the lock inside
+      // RegionStateNodeLock. This is the reason why we need to schedule the task to a thread pool
+      // and execute asynchronously.
+      regionNode.lock(this,
+        () -> env.getAsyncTaskExecutor().execute(() -> ProcedureFutureUtil.wakeUp(this, env)));
+    }
+  }
+
+  @Override
+  protected void afterExec(MasterProcedureEnv env) {
+    // only release the lock if there is no pending updating meta operation
+    if (future == null) {
+      RegionStateNode regionNode =
+        env.getAssignmentManager().getRegionStates().getOrCreateRegionStateNode(getRegion());
+      // in beforeExec, we may throw ProcedureSuspendedException which means we do not get the lock,
+      // in this case we should not call unlock
+      if (regionNode.isLockedBy(this)) {
+        regionNode.unlock(this);
+      }
     }
   }
 
@@ -330,7 +481,7 @@ public class TransitRegionStateProcedure
 
   @Override
   protected Flow executeFromState(MasterProcedureEnv env, RegionStateTransitionState state)
-      throws ProcedureSuspendedException, ProcedureYieldException, InterruptedException {
+    throws ProcedureSuspendedException, ProcedureYieldException, InterruptedException {
     RegionStateNode regionNode = getRegionStateNode(env);
     try {
       switch (state) {
@@ -340,8 +491,10 @@ public class TransitRegionStateProcedure
           if (!RegionReplicaUtil.isDefaultReplica(regionNode.getRegionInfo())) {
             RegionInfo defaultRI =
               RegionReplicaUtil.getRegionInfoForDefaultReplica(regionNode.getRegionInfo());
-            if (env.getMasterServices().getAssignmentManager().getRegionStates().
-              getRegionStateNode(defaultRI) == null) {
+            if (
+              env.getMasterServices().getAssignmentManager().getRegionStates()
+                .getRegionStateNode(defaultRI) == null
+            ) {
               LOG.error(
                 "Cannot assign replica region {} because its primary region {} does not exist.",
                 regionNode.getRegionInfo(), defaultRI);
@@ -370,13 +523,10 @@ public class TransitRegionStateProcedure
       }
       long backoff = retryCounter.getBackoffTimeAndIncrementAttempts();
       LOG.warn(
-        "Failed transition, suspend {}secs {}; {}; waiting on rectified condition fixed " +
-          "by other Procedure or operator intervention",
+        "Failed transition, suspend {}secs {}; {}; waiting on rectified condition fixed "
+          + "by other Procedure or operator intervention",
         backoff / 1000, this, regionNode.toShortString(), e);
-      setTimeout(Math.toIntExact(backoff));
-      setState(ProcedureProtos.ProcedureState.WAITING_TIMEOUT);
-      skipPersistence();
-      throw new ProcedureSuspendedException();
+      throw suspend(Math.toIntExact(backoff), true);
     }
   }
 
@@ -392,11 +542,11 @@ public class TransitRegionStateProcedure
 
   // Should be called with RegionStateNode locked
   public void reportTransition(MasterProcedureEnv env, RegionStateNode regionNode,
-      ServerName serverName, TransitionCode code, long seqId, long procId) throws IOException {
+    ServerName serverName, TransitionCode code, long seqId, long procId) throws IOException {
     if (remoteProc == null) {
       LOG.warn(
-        "There is no outstanding remote region procedure for {}, serverName={}, code={}," +
-          " seqId={}, proc={}, should be a retry, ignore",
+        "There is no outstanding remote region procedure for {}, serverName={}, code={},"
+          + " seqId={}, proc={}, should be a retry, ignore",
         regionNode, serverName, code, seqId, this);
       return;
     }
@@ -404,8 +554,8 @@ public class TransitRegionStateProcedure
     // can do rolling upgraing.
     if (procId >= 0 && remoteProc.getProcId() != procId) {
       LOG.warn(
-        "The pid of remote region procedure for {} is {}, the reported pid={}, serverName={}," +
-          " code={}, seqId={}, proc={}, should be a retry, ignore",
+        "The pid of remote region procedure for {} is {}, the reported pid={}, serverName={},"
+          + " code={}, seqId={}, proc={}, should be a retry, ignore",
         regionNode, remoteProc.getProcId(), procId, serverName, code, seqId, this);
       return;
     }
@@ -413,15 +563,25 @@ public class TransitRegionStateProcedure
   }
 
   // Should be called with RegionStateNode locked
-  public void serverCrashed(MasterProcedureEnv env, RegionStateNode regionNode,
-      ServerName serverName, boolean forceNewPlan) throws IOException {
+  public CompletableFuture<Void> serverCrashed(MasterProcedureEnv env, RegionStateNode regionNode,
+    ServerName serverName, boolean forceNewPlan) {
     this.forceNewPlan = forceNewPlan;
     if (remoteProc != null) {
       // this means we are waiting for the sub procedure, so wake it up
-      remoteProc.serverCrashed(env, regionNode, serverName);
+      try {
+        remoteProc.serverCrashed(env, regionNode, serverName);
+      } catch (Exception e) {
+        return FutureUtils.failedFuture(e);
+      }
+      return CompletableFuture.completedFuture(null);
     } else {
-      // we are in RUNNING state, just update the region state, and we will process it later.
-      env.getAssignmentManager().regionClosedAbnormally(regionNode);
+      if (regionNode.isInState(State.ABNORMALLY_CLOSED)) {
+        // should be a retry, where we have already changed the region state to abnormally closed
+        return CompletableFuture.completedFuture(null);
+      } else {
+        // we are in RUNNING state, just update the region state, and we will process it later.
+        return env.getAssignmentManager().regionClosedAbnormally(regionNode);
+      }
     }
   }
 
@@ -445,7 +605,7 @@ public class TransitRegionStateProcedure
 
   @Override
   protected void rollbackState(MasterProcedureEnv env, RegionStateTransitionState state)
-      throws IOException, InterruptedException {
+    throws IOException, InterruptedException {
     // no rollback
     throw new UnsupportedOperationException();
   }
@@ -498,8 +658,9 @@ public class TransitRegionStateProcedure
   @Override
   protected void serializeStateData(ProcedureStateSerializer serializer) throws IOException {
     super.serializeStateData(serializer);
-    RegionStateTransitionStateData.Builder builder = RegionStateTransitionStateData.newBuilder()
-      .setType(convert(type)).setForceNewPlan(forceNewPlan);
+    RegionStateTransitionStateData.Builder builder =
+      RegionStateTransitionStateData.newBuilder().setType(convert(type))
+        .setForceNewPlan(forceNewPlan).setEvictCache(evictCache).setIsSplit(isSplit);
     if (assignCandidate != null) {
       builder.setAssignCandidate(ProtobufUtil.toServerName(assignCandidate));
     }
@@ -517,6 +678,8 @@ public class TransitRegionStateProcedure
     if (data.hasAssignCandidate()) {
       assignCandidate = ProtobufUtil.toServerName(data.getAssignCandidate());
     }
+    evictCache = data.getEvictCache();
+    isSplit = data.getIsSplit();
   }
 
   @Override
@@ -549,32 +712,41 @@ public class TransitRegionStateProcedure
   }
 
   private static TransitRegionStateProcedure setOwner(MasterProcedureEnv env,
-      TransitRegionStateProcedure proc) {
+    TransitRegionStateProcedure proc) {
     proc.setOwner(env.getRequestUser().getShortName());
     return proc;
   }
 
   public enum TransitionType {
-    ASSIGN, UNASSIGN, MOVE, REOPEN
+    ASSIGN,
+    UNASSIGN,
+    MOVE,
+    REOPEN
   }
 
   // Be careful that, when you call these 4 methods below, you need to manually attach the returned
   // procedure with the RegionStateNode, otherwise the procedure will quit immediately without doing
   // anything. See the comment in executeFromState to find out why we need this assumption.
   public static TransitRegionStateProcedure assign(MasterProcedureEnv env, RegionInfo region,
-      @Nullable ServerName targetServer) {
+    @Nullable ServerName targetServer) {
     return assign(env, region, false, targetServer);
   }
 
   public static TransitRegionStateProcedure assign(MasterProcedureEnv env, RegionInfo region,
-      boolean forceNewPlan, @Nullable ServerName targetServer) {
+    boolean forceNewPlan, @Nullable ServerName targetServer) {
     return setOwner(env, new TransitRegionStateProcedure(env, region, targetServer, forceNewPlan,
-        TransitionType.ASSIGN));
+      TransitionType.ASSIGN));
   }
 
   public static TransitRegionStateProcedure unassign(MasterProcedureEnv env, RegionInfo region) {
     return setOwner(env,
       new TransitRegionStateProcedure(env, region, null, false, TransitionType.UNASSIGN));
+  }
+
+  public static TransitRegionStateProcedure unassignSplitMerge(MasterProcedureEnv env,
+    RegionInfo region) {
+    return setOwner(env,
+      new TransitRegionStateProcedure(env, region, null, false, TransitionType.UNASSIGN, true));
   }
 
   public static TransitRegionStateProcedure reopen(MasterProcedureEnv env, RegionInfo region) {
@@ -583,7 +755,7 @@ public class TransitRegionStateProcedure
   }
 
   public static TransitRegionStateProcedure move(MasterProcedureEnv env, RegionInfo region,
-      @Nullable ServerName targetServer) {
+    @Nullable ServerName targetServer) {
     return setOwner(env, new TransitRegionStateProcedure(env, region, targetServer,
       targetServer == null, TransitionType.MOVE));
   }

@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,18 +20,20 @@ package org.apache.hadoop.hbase.io;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicInteger;
-
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.IntConsumer;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.HFileInfo;
+import org.apache.hadoop.hbase.io.hfile.HFileReaderImpl;
 import org.apache.hadoop.hbase.io.hfile.HFileScanner;
 import org.apache.hadoop.hbase.io.hfile.ReaderContext;
+import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
 import org.apache.hadoop.hbase.regionserver.StoreFileReader;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -40,48 +41,48 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * A facade for a {@link org.apache.hadoop.hbase.io.hfile.HFile.Reader} that serves up
- * either the top or bottom half of a HFile where 'bottom' is the first half
- * of the file containing the keys that sort lowest and 'top' is the second half
- * of the file with keys that sort greater than those of the bottom half.
- * The top includes the split files midkey, of the key that follows if it does
+ * A facade for a {@link org.apache.hadoop.hbase.io.hfile.HFile.Reader} that serves up either the
+ * top or bottom half of a HFile where 'bottom' is the first half of the file containing the keys
+ * that sort lowest and 'top' is the second half of the file with keys that sort greater than those
+ * of the bottom half. The top includes the split files midkey, of the key that follows if it does
  * not exist in the file.
- *
- * <p>This type works in tandem with the {@link Reference} type.  This class
- * is used reading while Reference is used writing.
- *
- * <p>This file is not splitable.  Calls to {@link #midKey()} return null.
+ * <p>
+ * This type works in tandem with the {@link Reference} type. This class is used reading while
+ * Reference is used writing.
+ * <p>
+ * This file is not splitable. Calls to {@link #midKey()} return null.
  */
 @InterfaceAudience.Private
 public class HalfStoreFileReader extends StoreFileReader {
   private static final Logger LOG = LoggerFactory.getLogger(HalfStoreFileReader.class);
   final boolean top;
-  // This is the key we split around.  Its the first possible entry on a row:
+  // This is the key we split around. Its the first possible entry on a row:
   // i.e. empty column and a timestamp of LATEST_TIMESTAMP.
-  protected final byte [] splitkey;
+  protected final byte[] splitkey;
 
-  private final Cell splitCell;
+  private final ExtendedCell splitCell;
 
-  private Optional<Cell> firstKey = Optional.empty();
+  private Optional<ExtendedCell> firstKey = Optional.empty();
 
   private boolean firstKeySeeked = false;
 
+  private AtomicBoolean closed = new AtomicBoolean(false);
+
   /**
    * Creates a half file reader for a hfile referred to by an hfilelink.
-   * @param context Reader context info
-   * @param fileInfo HFile info
+   * @param context   Reader context info
+   * @param fileInfo  HFile info
    * @param cacheConf CacheConfig
-   * @param r original reference file (contains top or bottom)
-   * @param refCount reference count
-   * @param conf Configuration
+   * @param r         original reference file (contains top or bottom)
+   * @param conf      Configuration
    */
   public HalfStoreFileReader(final ReaderContext context, final HFileInfo fileInfo,
-      final CacheConfig cacheConf, final Reference r,
-      AtomicInteger refCount, final Configuration conf) throws IOException {
-    super(context, fileInfo, cacheConf, refCount, conf);
+    final CacheConfig cacheConf, final Reference r, StoreFileInfo storeFileInfo,
+    final Configuration conf) throws IOException {
+    super(context, fileInfo, cacheConf, storeFileInfo, conf);
     // This is not actual midkey for this half-file; its just border
-    // around which we split top and bottom.  Have to look in files to find
-    // actual last and first keys for bottom and top halves.  Half-files don't
+    // around which we split top and bottom. Have to look in files to find
+    // actual last and first keys for bottom and top halves. Half-files don't
     // have an actual midkey themselves. No midkey is how we indicate file is
     // not splittable.
     this.splitkey = r.getSplitKey();
@@ -95,43 +96,35 @@ public class HalfStoreFileReader extends StoreFileReader {
   }
 
   @Override
-  public HFileScanner getScanner(final boolean cacheBlocks,
-      final boolean pread, final boolean isCompaction) {
+  protected HFileScanner getScanner(final boolean cacheBlocks, final boolean pread,
+    final boolean isCompaction) {
     final HFileScanner s = super.getScanner(cacheBlocks, pread, isCompaction);
     return new HFileScanner() {
       final HFileScanner delegate = s;
       public boolean atEnd = false;
 
       @Override
-      public Cell getKey() {
-        if (atEnd) return null;
+      public ExtendedCell getKey() {
+        if (atEnd) {
+          return null;
+        }
         return delegate.getKey();
       }
 
       @Override
-      public String getKeyString() {
-        if (atEnd) return null;
-
-        return delegate.getKeyString();
-      }
-
-      @Override
       public ByteBuffer getValue() {
-        if (atEnd) return null;
+        if (atEnd) {
+          return null;
+        }
 
         return delegate.getValue();
       }
 
       @Override
-      public String getValueString() {
-        if (atEnd) return null;
-
-        return delegate.getValueString();
-      }
-
-      @Override
-      public Cell getCell() {
-        if (atEnd) return null;
+      public ExtendedCell getCell() {
+        if (atEnd) {
+          return null;
+        }
 
         return delegate.getCell();
       }
@@ -190,7 +183,7 @@ public class HalfStoreFileReader extends StoreFileReader {
       }
 
       @Override
-      public int seekTo(Cell key) throws IOException {
+      public int seekTo(ExtendedCell key) throws IOException {
         if (top) {
           if (PrivateCellUtil.compareKeyIgnoresMvcc(getComparator(), key, splitCell) < 0) {
             return -1;
@@ -202,8 +195,8 @@ public class HalfStoreFileReader extends StoreFileReader {
             boolean res = delegate.seekBefore(splitCell);
             if (!res) {
               throw new IOException(
-                  "Seeking for a key in bottom of file, but key exists in top of file, " +
-                  "failed on seekBefore(midkey)");
+                "Seeking for a key in bottom of file, but key exists in top of file, "
+                  + "failed on seekBefore(midkey)");
             }
             return 1;
           }
@@ -212,10 +205,9 @@ public class HalfStoreFileReader extends StoreFileReader {
       }
 
       @Override
-      public int reseekTo(Cell key) throws IOException {
+      public int reseekTo(ExtendedCell key) throws IOException {
         // This function is identical to the corresponding seekTo function
-        // except
-        // that we call reseekTo (and not seekTo) on the delegate.
+        // except that we call reseekTo (and not seekTo) on the delegate.
         if (top) {
           if (PrivateCellUtil.compareKeyIgnoresMvcc(getComparator(), key, splitCell) < 0) {
             return -1;
@@ -227,7 +219,7 @@ public class HalfStoreFileReader extends StoreFileReader {
             boolean res = delegate.seekBefore(splitCell);
             if (!res) {
               throw new IOException("Seeking for a key in bottom of file, but"
-                  + " key exists in top of file, failed on seekBefore(midkey)");
+                + " key exists in top of file, failed on seekBefore(midkey)");
             }
             return 1;
           }
@@ -240,11 +232,13 @@ public class HalfStoreFileReader extends StoreFileReader {
       }
 
       @Override
-      public boolean seekBefore(Cell key) throws IOException {
+      public boolean seekBefore(ExtendedCell key) throws IOException {
         if (top) {
-          Optional<Cell> fk = getFirstKey();
-          if (fk.isPresent() &&
-                  PrivateCellUtil.compareKeyIgnoresMvcc(getComparator(), key, fk.get()) <= 0) {
+          Optional<ExtendedCell> fk = getFirstKey();
+          if (
+            fk.isPresent()
+              && PrivateCellUtil.compareKeyIgnoresMvcc(getComparator(), key, fk.get()) <= 0
+          ) {
             return false;
           }
         } else {
@@ -266,7 +260,7 @@ public class HalfStoreFileReader extends StoreFileReader {
       }
 
       @Override
-      public Cell getNextIndexedKey() {
+      public ExtendedCell getNextIndexedKey() {
         return null;
       }
 
@@ -279,21 +273,26 @@ public class HalfStoreFileReader extends StoreFileReader {
       public void shipped() throws IOException {
         this.delegate.shipped();
       }
+
+      @Override
+      public void recordBlockSize(IntConsumer blockSizeConsumer) {
+        this.delegate.recordBlockSize(blockSizeConsumer);
+      }
     };
   }
-  
+
   @Override
   public boolean passesKeyRangeFilter(Scan scan) {
     return true;
   }
-  
+
   @Override
-  public Optional<Cell> getLastKey() {
+  public Optional<ExtendedCell> getLastKey() {
     if (top) {
       return super.getLastKey();
     }
     // Get a scanner that caches the block and that uses pread.
-    HFileScanner scanner = getScanner(true, true);
+    HFileScanner scanner = getScanner(true, true, false);
     try {
       if (scanner.seekBefore(this.splitCell)) {
         return Optional.ofNullable(scanner.getKey());
@@ -309,13 +308,13 @@ public class HalfStoreFileReader extends StoreFileReader {
   }
 
   @Override
-  public Optional<Cell> midKey() throws IOException {
+  public Optional<ExtendedCell> midKey() throws IOException {
     // Returns null to indicate file is not splitable.
     return Optional.empty();
   }
 
   @Override
-  public Optional<Cell> getFirstKey() {
+  public Optional<ExtendedCell> getFirstKey() {
     if (!firstKeySeeked) {
       HFileScanner scanner = getScanner(true, true, false);
       try {
@@ -326,7 +325,7 @@ public class HalfStoreFileReader extends StoreFileReader {
       } catch (IOException e) {
         LOG.warn("Failed seekTo first KV in the file", e);
       } finally {
-        if(scanner != null) {
+        if (scanner != null) {
           scanner.close();
         }
       }
@@ -344,5 +343,44 @@ public class HalfStoreFileReader extends StoreFileReader {
   public long getFilterEntries() {
     // Estimate the number of entries as half the original file; this may be wildly inaccurate.
     return super.getFilterEntries() / 2;
+  }
+
+  /**
+   * Overrides close method to handle cache evictions for the referred file. If evictionOnClose is
+   * true, we will seek to the block containing the splitCell and evict all blocks from offset 0 up
+   * to that block offset if this is a bottom half reader, or the from the split block offset up to
+   * the end of the file if this is a top half reader.
+   * @param evictOnClose true if it should evict the file blocks from the cache.
+   */
+  @Override
+  public void close(boolean evictOnClose) throws IOException {
+    if (closed.compareAndSet(false, true)) {
+      if (evictOnClose) {
+        final HFileReaderImpl.HFileScannerImpl s =
+          (HFileReaderImpl.HFileScannerImpl) super.getScanner(false, true, false);
+        final String reference = this.reader.getHFileInfo().getHFileContext().getHFileName();
+        final String referred = StoreFileInfo.getReferredToRegionAndFile(reference).getSecond();
+        s.seekTo(splitCell);
+        if (s.getCurBlock() != null) {
+          long offset = s.getCurBlock().getOffset();
+          LOG.trace("Seeking to split cell in reader: {} for file: {} top: {}, split offset: {}",
+            this, reference, top, offset);
+          ((HFileReaderImpl) reader).getCacheConf().getBlockCache().ifPresent(cache -> {
+            int numEvictedReferred = top
+              ? cache.evictBlocksRangeByHfileName(referred, offset, Long.MAX_VALUE)
+              : cache.evictBlocksRangeByHfileName(referred, 0, offset);
+            int numEvictedReference = cache.evictBlocksByHfileName(reference);
+            LOG.trace(
+              "Closing reference: {}; referred file: {}; was top? {}; evicted for referred: {};"
+                + "evicted for reference: {}",
+              reference, referred, top, numEvictedReferred, numEvictedReference);
+          });
+        }
+        s.close();
+        reader.close(false);
+      } else {
+        reader.close(evictOnClose);
+      }
+    }
   }
 }

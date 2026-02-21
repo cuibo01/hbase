@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.quotas;
 
 import org.apache.yetus.audience.InterfaceAudience;
@@ -35,24 +34,30 @@ class NoopQuotaLimiter implements QuotaLimiter {
 
   @Override
   public void checkQuota(long writeReqs, long estimateWriteSize, long readReqs,
-      long estimateReadSize, long estimateWriteCapacityUnit, long estimateReadCapacityUnit)
-      throws RpcThrottlingException {
+    long estimateReadSize, long estimateWriteCapacityUnit, long estimateReadCapacityUnit,
+    boolean isAtomic, long estimateHandlerThreadUsageMs) throws RpcThrottlingException {
     // no-op
   }
 
   @Override
   public void grabQuota(long writeReqs, long writeSize, long readReqs, long readSize,
-      long writeCapacityUnit, long readCapacityUnit) {
+    long writeCapacityUnit, long readCapacityUnit, boolean isAtomic,
+    long estimateHandlerThreadUsageMs) {
     // no-op
   }
 
   @Override
-  public void consumeWrite(final long size, long capacityUnit) {
+  public void consumeWrite(final long size, long capacityUnit, boolean isAtomic) {
     // no-op
   }
 
   @Override
-  public void consumeRead(final long size, long capacityUnit) {
+  public void consumeRead(final long size, long capacityUnit, boolean isAtomic) {
+    // no-op
+  }
+
+  @Override
+  public void consumeTime(final long handlerMillisUsed) {
     // no-op
   }
 
@@ -67,8 +72,33 @@ class NoopQuotaLimiter implements QuotaLimiter {
   }
 
   @Override
+  public long getRequestNumLimit() {
+    return Long.MAX_VALUE;
+  }
+
+  @Override
+  public long getReadNumLimit() {
+    return Long.MAX_VALUE;
+  }
+
+  @Override
+  public long getWriteNumLimit() {
+    return Long.MAX_VALUE;
+  }
+
+  @Override
   public long getReadAvailable() {
     throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public long getReadLimit() {
+    return Long.MAX_VALUE;
+  }
+
+  @Override
+  public long getWriteLimit() {
+    return Long.MAX_VALUE;
   }
 
   @Override

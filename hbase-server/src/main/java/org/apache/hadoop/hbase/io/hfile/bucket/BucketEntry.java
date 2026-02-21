@@ -1,6 +1,4 @@
-/**
- * Copyright The Apache Software Foundation
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -12,7 +10,6 @@
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
-
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
@@ -26,7 +23,6 @@ import java.util.Comparator;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
-
 import org.apache.hadoop.hbase.io.ByteBuffAllocator;
 import org.apache.hadoop.hbase.io.ByteBuffAllocator.Recycler;
 import org.apache.hadoop.hbase.io.hfile.BlockPriority;
@@ -47,13 +43,15 @@ import org.apache.yetus.audience.InterfaceAudience;
  * bytes gives us 256TB or so.
  */
 @InterfaceAudience.Private
-class BucketEntry implements HBaseReferenceCounted {
+public class BucketEntry implements HBaseReferenceCounted {
   // access counter comparator, descending order
   static final Comparator<BucketEntry> COMPARATOR =
-      Comparator.comparingLong(BucketEntry::getAccessCounter).reversed();
+    Comparator.comparingLong(BucketEntry::getAccessCounter).reversed();
 
   private int offsetBase;
   private int length;
+
+  private int onDiskSizeWithHeader;
   private byte offset1;
 
   /**
@@ -95,24 +93,32 @@ class BucketEntry implements HBaseReferenceCounted {
   /**
    * Time this block was cached. Presumes we are created just before we are added to the cache.
    */
-  private final long cachedTime = System.nanoTime();
+  private long cachedTime = System.nanoTime();
 
   /**
    * @param createRecycler used to free this {@link BucketEntry} when {@link BucketEntry#refCnt}
-   *          becoming 0. NOTICE that {@link ByteBuffAllocator#NONE} could only be used for test.
+   *                       becoming 0. NOTICE that {@link ByteBuffAllocator#NONE} could only be used
+   *                       for test.
    */
-  BucketEntry(long offset, int length, long accessCounter, boolean inMemory,
-      Function<BucketEntry, Recycler> createRecycler,
-      ByteBuffAllocator allocator) {
+  BucketEntry(long offset, int length, int onDiskSizeWithHeader, long accessCounter,
+    boolean inMemory, Function<BucketEntry, Recycler> createRecycler, ByteBuffAllocator allocator) {
+    this(offset, length, onDiskSizeWithHeader, accessCounter, System.nanoTime(), inMemory,
+      createRecycler, allocator);
+  }
+
+  BucketEntry(long offset, int length, int onDiskSizeWithHeader, long accessCounter,
+    long cachedTime, boolean inMemory, Function<BucketEntry, Recycler> createRecycler,
+    ByteBuffAllocator allocator) {
     if (createRecycler == null) {
       throw new IllegalArgumentException("createRecycler could not be null!");
     }
     setOffset(offset);
     this.length = length;
+    this.onDiskSizeWithHeader = onDiskSizeWithHeader;
     this.accessCounter = accessCounter;
-    this.priority = inMemory ? BlockPriority.MEMORY : BlockPriority.MULTI;
+    this.cachedTime = cachedTime;
+    this.priority = inMemory ? BlockPriority.MEMORY : BlockPriority.SINGLE;
     this.refCnt = RefCnt.create(createRecycler.apply(this));
-
     this.markedAsEvicted = new AtomicBoolean(false);
     this.allocator = allocator;
   }
@@ -163,8 +169,12 @@ class BucketEntry implements HBaseReferenceCounted {
     return this.priority;
   }
 
-  long getCachedTime() {
+  public long getCachedTime() {
     return cachedTime;
+  }
+
+  public int getOnDiskSizeWithHeader() {
+    return onDiskSizeWithHeader;
   }
 
   /**
@@ -243,7 +253,7 @@ class BucketEntry implements HBaseReferenceCounted {
    * also release its refCnt (case.1 will do this) and no other rpc reference, then it will free the
    * area in bucketAllocator. <br>
    * 3.evict those block without any rpc reference if cache size exceeded. we'll only free those
-   * blocks with zero rpc reference count, as the {@link BucketEntry#markStaleAsEvicted()} do.
+   * blocks with zero rpc reference count.
    * @return true to indicate we've decreased to zero and do the de-allocation.
    */
   @Override

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,6 +16,8 @@
  * limitations under the License.
  */
 package org.apache.hadoop.hbase.fs;
+
+import static org.apache.hadoop.hbase.util.LocatedBlockHelper.getLocatedBlockLocations;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -63,19 +65,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Tests for the hdfs fix from HBASE-6435.
- *
- * Please don't add new subtest which involves starting / stopping MiniDFSCluster in this class.
- * When stopping MiniDFSCluster, shutdown hooks would be cleared in hadoop's ShutdownHookManager
- *   in hadoop 3.
- * This leads to 'Failed suppression of fs shutdown hook' error in region server.
+ * Tests for the hdfs fix from HBASE-6435. Please don't add new subtest which involves starting /
+ * stopping MiniDFSCluster in this class. When stopping MiniDFSCluster, shutdown hooks would be
+ * cleared in hadoop's ShutdownHookManager in hadoop 3. This leads to 'Failed suppression of fs
+ * shutdown hook' error in region server.
  */
-@Category({MiscTests.class, LargeTests.class})
+@Category({ MiscTests.class, LargeTests.class })
 public class TestBlockReorderMultiBlocks {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestBlockReorderMultiBlocks.class);
+    HBaseClassTestRule.forClass(TestBlockReorderMultiBlocks.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestBlockReorderMultiBlocks.class);
 
@@ -95,8 +95,8 @@ public class TestBlockReorderMultiBlocks {
     htu = new HBaseTestingUtil();
     htu.getConfiguration().setInt("dfs.blocksize", 1024);// For the test with multiple blocks
     htu.getConfiguration().setInt("dfs.replication", 3);
-    htu.startMiniDFSCluster(3,
-        new String[]{"/r1", "/r2", "/r3"}, new String[]{host1, host2, host3});
+    htu.startMiniDFSCluster(3, new String[] { "/r1", "/r2", "/r3" },
+      new String[] { host1, host2, host3 });
 
     conf = htu.getConfiguration();
     cluster = htu.getDFSCluster();
@@ -121,10 +121,11 @@ public class TestBlockReorderMultiBlocks {
     HRegionServer targetRs = hbm.getRegionServer(0);
 
     // We want to have a datanode with the same name as the region server, so
-    //  we're going to get the regionservername, and start a new datanode with this name.
+    // we're going to get the regionservername, and start a new datanode with this name.
     String host4 = targetRs.getServerName().getHostname();
     LOG.info("Starting a new datanode with the name=" + host4);
-    cluster.startDataNodes(conf, 1, true, null, new String[]{"/r4"}, new String[]{host4}, null);
+    cluster.startDataNodes(conf, 1, true, null, new String[] { "/r4" }, new String[] { host4 },
+      null);
     cluster.waitClusterUp();
 
     final int repCount = 3;
@@ -140,12 +141,12 @@ public class TestBlockReorderMultiBlocks {
 
     // Now we need to find the log file, its locations, and look at it
 
-    String rootDir = new Path(CommonFSUtils.getWALRootDir(conf) + "/" +
-      HConstants.HREGION_LOGDIR_NAME + "/" + targetRs.getServerName().toString()).toUri().getPath();
+    String rootDir =
+      new Path(CommonFSUtils.getWALRootDir(conf) + "/" + HConstants.HREGION_LOGDIR_NAME + "/"
+        + targetRs.getServerName().toString()).toUri().getPath();
 
-    DistributedFileSystem mdfs = (DistributedFileSystem)
-        hbm.getMaster().getMasterFileSystem().getFileSystem();
-
+    DistributedFileSystem mdfs =
+      (DistributedFileSystem) hbm.getMaster().getMasterFileSystem().getFileSystem();
 
     int nbTest = 0;
     while (nbTest < 10) {
@@ -153,11 +154,11 @@ public class TestBlockReorderMultiBlocks {
       final CountDownLatch latch = new CountDownLatch(regions.size());
       // listen for successful log rolls
       final WALActionsListener listener = new WALActionsListener() {
-            @Override
-            public void postLogRoll(final Path oldPath, final Path newPath) throws IOException {
-              latch.countDown();
-            }
-          };
+        @Override
+        public void postLogRoll(final Path oldPath, final Path newPath) throws IOException {
+          latch.countDown();
+        }
+      };
       for (HRegion region : regions) {
         region.getWAL().registerWALActionsListener(listener);
       }
@@ -168,12 +169,12 @@ public class TestBlockReorderMultiBlocks {
       try {
         latch.await();
       } catch (InterruptedException exception) {
-        LOG.warn("Interrupted while waiting for the wal of '" + targetRs + "' to roll. If later " +
-            "tests fail, it's probably because we should still be waiting.");
+        LOG.warn("Interrupted while waiting for the wal of '" + targetRs + "' to roll. If later "
+          + "tests fail, it's probably because we should still be waiting.");
         Thread.currentThread().interrupt();
       }
       for (Region region : regions) {
-        ((HRegion)region).getWAL().unregisterWALActionsListener(listener);
+        ((HRegion) region).getWAL().unregisterWALActionsListener(listener);
       }
 
       // We need a sleep as the namenode is informed asynchronously
@@ -226,14 +227,14 @@ public class TestBlockReorderMultiBlocks {
             }
           }
         } catch (FileNotFoundException exception) {
-          LOG.debug("Failed to find log file '" + hf.getLocalName() + "'; it probably was " +
-              "archived out from under us so we'll ignore and retry. If this test hangs " +
-              "indefinitely you should treat this failure as a symptom.", exception);
+          LOG.debug("Failed to find log file '" + hf.getLocalName() + "'; it probably was "
+            + "archived out from under us so we'll ignore and retry. If this test hangs "
+            + "indefinitely you should treat this failure as a symptom.", exception);
         } catch (RemoteException exception) {
           if (exception.unwrapRemoteException() instanceof FileNotFoundException) {
-            LOG.debug("Failed to find log file '" + hf.getLocalName() + "'; it probably was " +
-                "archived out from under us so we'll ignore and retry. If this test hangs " +
-                "indefinitely you should treat this failure as a symptom.", exception);
+            LOG.debug("Failed to find log file '" + hf.getLocalName() + "'; it probably was "
+              + "archived out from under us so we'll ignore and retry. If this test hangs "
+              + "indefinitely you should treat this failure as a symptom.", exception);
           } else {
             throw exception;
           }
@@ -243,28 +244,29 @@ public class TestBlockReorderMultiBlocks {
   }
 
   private void testFromDFS(DistributedFileSystem dfs, String src, int repCount, String localhost)
-      throws Exception {
+    throws Exception {
     // Multiple times as the order is random
     for (int i = 0; i < 10; i++) {
-      LocatedBlocks l;
+      LocatedBlocks lbs;
       // The NN gets the block list asynchronously, so we may need multiple tries to get the list
       final long max = EnvironmentEdgeManager.currentTime() + 10000;
       boolean done;
       do {
         Assert.assertTrue("Can't get enouth replica", EnvironmentEdgeManager.currentTime() < max);
-        l = getNamenode(dfs.getClient()).getBlockLocations(src, 0, 1);
-        Assert.assertNotNull("Can't get block locations for " + src, l);
-        Assert.assertNotNull(l.getLocatedBlocks());
-        Assert.assertTrue(l.getLocatedBlocks().size() > 0);
+        lbs = getNamenode(dfs.getClient()).getBlockLocations(src, 0, 1);
+        Assert.assertNotNull("Can't get block locations for " + src, lbs);
+        Assert.assertNotNull(lbs.getLocatedBlocks());
+        Assert.assertTrue(lbs.getLocatedBlocks().size() > 0);
 
         done = true;
-        for (int y = 0; y < l.getLocatedBlocks().size() && done; y++) {
-          done = (l.get(y).getLocations().length == repCount);
+        for (int y = 0; y < lbs.getLocatedBlocks().size() && done; y++) {
+          done = getLocatedBlockLocations(lbs.get(y)).length == repCount;
         }
       } while (!done);
 
-      for (int y = 0; y < l.getLocatedBlocks().size() && done; y++) {
-        Assert.assertEquals(localhost, l.get(y).getLocations()[repCount - 1].getHostName());
+      for (int y = 0; y < lbs.getLocatedBlocks().size() && done; y++) {
+        Assert.assertEquals(localhost,
+          getLocatedBlockLocations(lbs.get(y))[repCount - 1].getHostName());
       }
     }
   }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,9 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.procedure2;
 
+import org.apache.commons.lang3.builder.ToStringBuilder;
+import org.apache.commons.lang3.builder.ToStringStyle;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
@@ -69,4 +70,14 @@ public interface LockStatus {
    * Get the number of procedures which hold the shared lock.
    */
   int getSharedLockCount();
+
+  default String describeLockStatus() {
+    ToStringBuilder builder = new ToStringBuilder(this, ToStringStyle.SHORT_PREFIX_STYLE)
+      .append("exclusiveLock", hasExclusiveLock());
+    if (hasExclusiveLock()) {
+      builder.append("exclusiveLockProcIdOwner", getExclusiveLockProcIdOwner());
+    }
+    builder.append("sharedLockCount", getSharedLockCount());
+    return builder.build();
+  }
 }

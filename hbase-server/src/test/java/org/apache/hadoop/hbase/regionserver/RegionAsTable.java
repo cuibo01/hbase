@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,7 +19,6 @@ package org.apache.hadoop.hbase.regionserver;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -54,12 +53,11 @@ import org.apache.hbase.thirdparty.com.google.protobuf.ServiceException;
 /**
  * An implementation of {@link Table} that sits directly on a Region; it decorates the passed in
  * Region instance with the Table API. Some API is not implemented yet (throws
- * {@link UnsupportedOperationException}) mostly because no need as yet or it necessitates copying
- * a load of code local from RegionServer.
- * 
- * <p>Use as an instance of a {@link Table} in-the-small -- no networking or servers
- * necessary -- or to write a test that can run directly against the datastore and then
- * over the network.
+ * {@link UnsupportedOperationException}) mostly because no need as yet or it necessitates copying a
+ * load of code local from RegionServer.
+ * <p>
+ * Use as an instance of a {@link Table} in-the-small -- no networking or servers necessary -- or to
+ * write a test that can run directly against the datastore and then over the network.
  */
 public class RegionAsTable implements Table {
   private final Region region;
@@ -94,9 +92,9 @@ public class RegionAsTable implements Table {
 
   @Override
   public boolean[] exists(List<Get> gets) throws IOException {
-    boolean [] results = new boolean[gets.size()];
+    boolean[] results = new boolean[gets.size()];
     int index = 0;
-    for (Get get: gets) {
+    for (Get get : gets) {
       results[index++] = exists(get);
     }
     return results;
@@ -104,14 +102,13 @@ public class RegionAsTable implements Table {
 
   @Override
   public void batch(List<? extends Row> actions, Object[] results)
-  throws IOException, InterruptedException {
+    throws IOException, InterruptedException {
     throw new UnsupportedOperationException();
   }
 
   @Override
-  public <R> void batchCallback(List<? extends Row> actions, Object[] results,
-      Callback<R> callback)
-  throws IOException, InterruptedException {
+  public <R> void batchCallback(List<? extends Row> actions, Object[] results, Callback<R> callback)
+    throws IOException, InterruptedException {
     throw new UnsupportedOperationException();
   }
 
@@ -122,48 +119,50 @@ public class RegionAsTable implements Table {
 
   @Override
   public Result[] get(List<Get> gets) throws IOException {
-    Result [] results = new Result[gets.size()];
+    Result[] results = new Result[gets.size()];
     int index = 0;
-    for (Get get: gets) {
+    for (Get get : gets) {
       results[index++] = get(get);
     }
     return results;
   }
 
   static class RegionScannerToResultScannerAdaptor implements ResultScanner {
-    private static final Result [] EMPTY_RESULT_ARRAY = new Result[0];
-    private final RegionScanner regionScanner;
 
-    RegionScannerToResultScannerAdaptor(final RegionScanner regionScanner) {
-      this.regionScanner = regionScanner;
-    }
+    private final RegionScanner scanner;
 
-    @Override
-    public Iterator<Result> iterator() {
-      throw new UnsupportedOperationException();
+    private boolean moreRows = true;
+
+    private final List<Cell> cells = new ArrayList<>();
+
+    RegionScannerToResultScannerAdaptor(final RegionScanner scanner) {
+      this.scanner = scanner;
     }
 
     @Override
     public Result next() throws IOException {
-      List<Cell> cells = new ArrayList<>();
-      return regionScanner.next(cells)? Result.create(cells): null;
-    }
-
-    @Override
-    public Result[] next(int nbRows) throws IOException {
-      List<Result> results = new ArrayList<>(nbRows);
-      for (int i = 0; i < nbRows; i++) {
-        Result result = next();
-        if (result == null) break;
-        results.add(result);
+      if (!moreRows) {
+        return null;
       }
-      return results.toArray(EMPTY_RESULT_ARRAY);
+      for (;;) {
+        moreRows = scanner.next(cells);
+        if (cells.isEmpty()) {
+          if (!moreRows) {
+            return null;
+          } else {
+            continue;
+          }
+        }
+        Result result = Result.create(cells);
+        cells.clear();
+        return result;
+      }
     }
 
     @Override
     public void close() {
       try {
-        regionScanner.close();
+        scanner.close();
       } catch (IOException e) {
         throw new RuntimeException(e);
       }
@@ -176,7 +175,7 @@ public class RegionAsTable implements Table {
 
     @Override
     public ScanMetrics getScanMetrics() {
-      throw new UnsupportedOperationException();
+      return null;
     }
   }
 
@@ -202,7 +201,8 @@ public class RegionAsTable implements Table {
 
   @Override
   public void put(List<Put> puts) throws IOException {
-    for (Put put: puts) put(put);
+    for (Put put : puts)
+      put(put);
   }
 
   @Override
@@ -212,7 +212,8 @@ public class RegionAsTable implements Table {
 
   @Override
   public void delete(List<Delete> deletes) throws IOException {
-    for(Delete delete: deletes) delete(delete);
+    for (Delete delete : deletes)
+      delete(delete);
   }
 
   @Override
@@ -242,14 +243,13 @@ public class RegionAsTable implements Table {
 
   @Override
   public long incrementColumnValue(byte[] row, byte[] family, byte[] qualifier, long amount)
-  throws IOException {
+    throws IOException {
     throw new UnsupportedOperationException();
   }
 
   @Override
   public long incrementColumnValue(byte[] row, byte[] family, byte[] qualifier, long amount,
-      Durability durability)
-  throws IOException {
+    Durability durability) throws IOException {
     throw new UnsupportedOperationException();
   }
 
@@ -267,30 +267,27 @@ public class RegionAsTable implements Table {
 
   @Override
   public <T extends Service, R> Map<byte[], R> coprocessorService(Class<T> service, byte[] startKey,
-      byte[] endKey, Call<T, R> callable)
-  throws ServiceException, Throwable {
+    byte[] endKey, Call<T, R> callable) throws ServiceException, Throwable {
     throw new UnsupportedOperationException();
   }
 
   @Override
   public <T extends Service, R> void coprocessorService(Class<T> service, byte[] startKey,
-      byte[] endKey, Call<T, R> callable, Callback<R> callback)
-  throws ServiceException, Throwable {
+    byte[] endKey, Call<T, R> callable, Callback<R> callback) throws ServiceException, Throwable {
     throw new UnsupportedOperationException();
   }
 
   @Override
-  public <R extends Message> Map<byte[], R> batchCoprocessorService(MethodDescriptor
-      methodDescriptor, Message request,
-      byte[] startKey, byte[] endKey, R responsePrototype)
-  throws ServiceException, Throwable {
+  public <R extends Message> Map<byte[], R> batchCoprocessorService(
+    MethodDescriptor methodDescriptor, Message request, byte[] startKey, byte[] endKey,
+    R responsePrototype) throws ServiceException, Throwable {
     throw new UnsupportedOperationException();
   }
 
   @Override
   public <R extends Message> void batchCoprocessorService(MethodDescriptor methodDescriptor,
-      Message request, byte[] startKey, byte[] endKey, R responsePrototype, Callback<R> callback)
-  throws ServiceException, Throwable {
+    Message request, byte[] startKey, byte[] endKey, R responsePrototype, Callback<R> callback)
+    throws ServiceException, Throwable {
     throw new UnsupportedOperationException();
   }
 

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,13 +18,14 @@
 package org.apache.hadoop.hbase.backup.mapreduce;
 
 import java.io.IOException;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseConfiguration;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
@@ -34,10 +35,14 @@ import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.mapreduce.CellSortReducer;
 import org.apache.hadoop.hbase.mapreduce.HFileInputFormat;
 import org.apache.hadoop.hbase.mapreduce.HFileOutputFormat2;
+import org.apache.hadoop.hbase.mapreduce.KeyOnlyCellComparable;
+import org.apache.hadoop.hbase.mapreduce.PreSortedCellsReducer;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
+import org.apache.hadoop.hbase.snapshot.SnapshotRegionLocator;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.MapReduceExtendedCell;
 import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
@@ -69,22 +74,30 @@ public class MapReduceHFileSplitterJob extends Configured implements Tool {
   }
 
   /**
-   * A mapper that just writes out cells. This one can be used together with
-   * {@link CellSortReducer}
+   * A mapper that just writes out cells. This one can be used together with {@link CellSortReducer}
    */
-  static class HFileCellMapper extends
-      Mapper<NullWritable, Cell, ImmutableBytesWritable, Cell> {
+  static class HFileCellMapper extends Mapper<NullWritable, Cell, WritableComparable<?>, Cell> {
+
+    private boolean diskBasedSortingEnabled = false;
 
     @Override
     public void map(NullWritable key, Cell value, Context context)
-        throws IOException, InterruptedException {
-      context.write(new ImmutableBytesWritable(CellUtil.cloneRow(value)),
-          new MapReduceExtendedCell(value));
+      throws IOException, InterruptedException {
+      ExtendedCell extendedCell = PrivateCellUtil.ensureExtendedCell(value);
+      context.write(wrap(extendedCell), new MapReduceExtendedCell(extendedCell));
     }
 
     @Override
     public void setup(Context context) throws IOException {
-      // do nothing
+      diskBasedSortingEnabled =
+        HFileOutputFormat2.diskBasedSortingEnabled(context.getConfiguration());
+    }
+
+    private WritableComparable<?> wrap(ExtendedCell cell) {
+      if (diskBasedSortingEnabled) {
+        return new KeyOnlyCellComparable(cell);
+      }
+      return new ImmutableBytesWritable(CellUtil.cloneRow(cell));
     }
   }
 
@@ -100,29 +113,42 @@ public class MapReduceHFileSplitterJob extends Configured implements Tool {
     String tabName = args[1];
     conf.setStrings(TABLES_KEY, tabName);
     conf.set(FileInputFormat.INPUT_DIR, inputDirs);
-    Job job =
-        Job.getInstance(conf,
-          conf.get(JOB_NAME_CONF_KEY, NAME + "_" + EnvironmentEdgeManager.currentTime()));
+    Job job = Job.getInstance(conf,
+      conf.get(JOB_NAME_CONF_KEY, NAME + "_" + EnvironmentEdgeManager.currentTime()));
+    // MapReduceHFileSplitter needs ExtendedCellSerialization so that sequenceId can be propagated
+    // when sorting cells in CellSortReducer
+    job.getConfiguration().setBoolean(HFileOutputFormat2.EXTENDED_CELL_SERIALIZATION_ENABLED_KEY,
+      true);
     job.setJarByClass(MapReduceHFileSplitterJob.class);
     job.setInputFormatClass(HFileInputFormat.class);
-    job.setMapOutputKeyClass(ImmutableBytesWritable.class);
     String hfileOutPath = conf.get(BULK_OUTPUT_CONF_KEY);
+    boolean diskBasedSortingEnabled = HFileOutputFormat2.diskBasedSortingEnabled(conf);
+    if (diskBasedSortingEnabled) {
+      job.setMapOutputKeyClass(KeyOnlyCellComparable.class);
+      job.setSortComparatorClass(KeyOnlyCellComparable.KeyOnlyCellComparator.class);
+    } else {
+      job.setMapOutputKeyClass(ImmutableBytesWritable.class);
+    }
     if (hfileOutPath != null) {
       LOG.debug("add incremental job :" + hfileOutPath + " from " + inputDirs);
       TableName tableName = TableName.valueOf(tabName);
       job.setMapperClass(HFileCellMapper.class);
-      job.setReducerClass(CellSortReducer.class);
+      if (diskBasedSortingEnabled) {
+        job.setReducerClass(PreSortedCellsReducer.class);
+      } else {
+        job.setReducerClass(CellSortReducer.class);
+      }
       Path outputDir = new Path(hfileOutPath);
       FileOutputFormat.setOutputPath(job, outputDir);
       job.setMapOutputValueClass(MapReduceExtendedCell.class);
       try (Connection conn = ConnectionFactory.createConnection(conf);
-          Table table = conn.getTable(tableName);
-          RegionLocator regionLocator = conn.getRegionLocator(tableName)) {
+        Table table = conn.getTable(tableName);
+        RegionLocator regionLocator = getRegionLocator(conf, conn, tableName)) {
         HFileOutputFormat2.configureIncrementalLoad(job, table.getDescriptor(), regionLocator);
       }
       LOG.debug("success configuring load incremental job");
 
-      TableMapReduceUtil.addDependencyJars(job.getConfiguration(),
+      TableMapReduceUtil.addDependencyJarsForClasses(job.getConfiguration(),
         org.apache.hbase.thirdparty.com.google.common.base.Preconditions.class);
     } else {
       throw new IOException("No bulk output directory specified");
@@ -145,9 +171,9 @@ public class MapReduceHFileSplitterJob extends Configured implements Tool {
     System.err.println("  -D" + BULK_OUTPUT_CONF_KEY + "=/path/for/output");
     System.err.println("Other options:");
     System.err.println("   -D " + JOB_NAME_CONF_KEY
-        + "=jobName - use the specified mapreduce job name for the HFile splitter");
+      + "=jobName - use the specified mapreduce job name for the HFile splitter");
     System.err.println("For performance also consider the following options:\n"
-        + "  -Dmapreduce.map.speculative=false\n" + "  -Dmapreduce.reduce.speculative=false");
+      + "  -Dmapreduce.map.speculative=false\n" + "  -Dmapreduce.reduce.speculative=false");
   }
 
   /**
@@ -169,5 +195,14 @@ public class MapReduceHFileSplitterJob extends Configured implements Tool {
     Job job = createSubmittableJob(args);
     int result = job.waitForCompletion(true) ? 0 : 1;
     return result;
+  }
+
+  private static RegionLocator getRegionLocator(Configuration conf, Connection conn,
+    TableName table) throws IOException {
+    if (SnapshotRegionLocator.shouldUseSnapshotRegionLocator(conf, table)) {
+      return SnapshotRegionLocator.create(conf, table);
+    }
+
+    return conn.getRegionLocator(table);
   }
 }

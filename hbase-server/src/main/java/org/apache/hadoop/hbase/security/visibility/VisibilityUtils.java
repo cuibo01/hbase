@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,7 +7,7 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -34,7 +34,7 @@ import java.util.Set;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.ArrayBackedTag;
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.TagType;
@@ -75,10 +75,10 @@ public class VisibilityUtils {
   private static final Logger LOG = LoggerFactory.getLogger(VisibilityUtils.class);
 
   public static final String VISIBILITY_LABEL_GENERATOR_CLASS =
-      "hbase.regionserver.scan.visibility.label.generator.class";
+    "hbase.regionserver.scan.visibility.label.generator.class";
   public static final String SYSTEM_LABEL = "system";
-  public static final Tag SORTED_ORDINAL_SERIALIZATION_FORMAT_TAG = new ArrayBackedTag(
-      TagType.VISIBILITY_EXP_SERIALIZATION_FORMAT_TAG_TYPE,
+  public static final Tag SORTED_ORDINAL_SERIALIZATION_FORMAT_TAG =
+    new ArrayBackedTag(TagType.VISIBILITY_EXP_SERIALIZATION_FORMAT_TAG_TYPE,
       VisibilityConstants.SORTED_ORDINAL_SERIALIZATION_FORMAT_TAG_VAL);
   private static final String COMMA = ",";
 
@@ -87,7 +87,6 @@ public class VisibilityUtils {
 
   /**
    * Creates the labels data to be written to zookeeper.
-   * @param existingLabels
    * @return Bytes form of labels and their ordinal details to be written to zookeeper.
    */
   public static byte[] getDataToWriteToZooKeeper(Map<String, Integer> existingLabels) {
@@ -103,7 +102,6 @@ public class VisibilityUtils {
 
   /**
    * Creates the user auth data to be written to zookeeper.
-   * @param userAuths
    * @return Bytes form of user auths details to be written to zookeeper.
    */
   public static byte[] getUserAuthsDataToWriteToZooKeeper(Map<String, List<Integer>> userAuths) {
@@ -122,13 +120,10 @@ public class VisibilityUtils {
   /**
    * Reads back from the zookeeper. The data read here is of the form written by
    * writeToZooKeeper(Map&lt;byte[], Integer&gt; entries).
-   * 
-   * @param data
    * @return Labels and their ordinal details
-   * @throws DeserializationException
    */
   public static List<VisibilityLabel> readLabelsFromZKData(byte[] data)
-      throws DeserializationException {
+    throws DeserializationException {
     if (ProtobufUtil.isPBMagicPrefix(data)) {
       int pblen = ProtobufUtil.lengthOfPBMagic();
       try {
@@ -144,12 +139,10 @@ public class VisibilityUtils {
 
   /**
    * Reads back User auth data written to zookeeper.
-   * @param data
    * @return User auth details
-   * @throws DeserializationException
    */
-  public static MultiUserAuthorizations readUserAuthsFromZKData(byte[] data) 
-      throws DeserializationException {
+  public static MultiUserAuthorizations readUserAuthsFromZKData(byte[] data)
+    throws DeserializationException {
     if (ProtobufUtil.isPBMagicPrefix(data)) {
       int pblen = ProtobufUtil.lengthOfPBMagic();
       try {
@@ -167,9 +160,8 @@ public class VisibilityUtils {
    * @param conf The configuration to use
    * @return Stack of ScanLabelGenerator instances. ScanLabelGenerator classes can be specified in
    *         Configuration as comma separated list using key
-   *         "hbase.regionserver.scan.visibility.label.generator.class"
-   * @throws IllegalArgumentException
-   *           when any of the specified ScanLabelGenerator class can not be loaded.
+   *         "hbase.regionserver.scan.visibility.label.generator.class" when any of the specified
+   *         ScanLabelGenerator class can not be loaded.
    */
   public static List<ScanLabelGenerator> getScanLabelGenerators(Configuration conf) {
     // There can be n SLG specified as comma separated in conf
@@ -194,9 +186,9 @@ public class VisibilityUtils {
     // 2. DefinedSetFilterScanLabelGenerator
     // This stacking will achieve the following default behavior:
     // 1. If there is no Auths in the scan, we will obtain the global defined set for the user
-    //    from the labels table.
+    // from the labels table.
     // 2. If there is Auths in the scan, we will examine the passed in Auths and filter out the
-    //    labels that the user is not entitled to. Then use the resulting label set.
+    // labels that the user is not entitled to. Then use the resulting label set.
     if (slgs.isEmpty()) {
       slgs.add(ReflectionUtils.newInstance(FeedUserAuthScanLabelGenerator.class, conf));
       slgs.add(ReflectionUtils.newInstance(DefinedSetFilterScanLabelGenerator.class, conf));
@@ -210,7 +202,7 @@ public class VisibilityUtils {
    * @param tags - the array that will be populated if visibility tags are present
    * @return The visibility tags serialization format
    */
-  public static Byte extractVisibilityTags(Cell cell, List<Tag> tags) {
+  public static Byte extractVisibilityTags(ExtendedCell cell, List<Tag> tags) {
     Byte serializationFormat = null;
     Iterator<Tag> tagsIterator = PrivateCellUtil.tagsIterator(cell);
     while (tagsIterator.hasNext()) {
@@ -226,18 +218,15 @@ public class VisibilityUtils {
 
   /**
    * Extracts and partitions the visibility tags and nonVisibility Tags
-   *
-   * @param cell - the cell for which we would extract and partition the
-   * visibility and non visibility tags
-   * @param visTags
-   *          - all the visibilty tags of type TagType.VISIBILITY_TAG_TYPE would
-   *          be added to this list
+   * @param cell       - the cell for which we would extract and partition the visibility and non
+   *                   visibility tags - all the visibilty tags of type TagType.VISIBILITY_TAG_TYPE
+   *                   would be added to this list
    * @param nonVisTags - all the non visibility tags would be added to this list
-   * @return - the serailization format of the tag. Can be null if no tags are found or
-   * if there is no visibility tag found
+   * @return - the serailization format of the tag. Can be null if no tags are found or if there is
+   *         no visibility tag found
    */
-  public static Byte extractAndPartitionTags(Cell cell, List<Tag> visTags,
-      List<Tag> nonVisTags) {
+  public static Byte extractAndPartitionTags(ExtendedCell cell, List<Tag> visTags,
+    List<Tag> nonVisTags) {
     Byte serializationFormat = null;
     Iterator<Tag> tagsIterator = PrivateCellUtil.tagsIterator(cell);
     while (tagsIterator.hasNext()) {
@@ -254,7 +243,7 @@ public class VisibilityUtils {
     return serializationFormat;
   }
 
-  public static boolean isVisibilityTagsPresent(Cell cell) {
+  public static boolean isVisibilityTagsPresent(ExtendedCell cell) {
     Iterator<Tag> tagsIterator = PrivateCellUtil.tagsIterator(cell);
     while (tagsIterator.hasNext()) {
       Tag tag = tagsIterator.next();
@@ -266,15 +255,15 @@ public class VisibilityUtils {
   }
 
   public static Filter createVisibilityLabelFilter(Region region, Authorizations authorizations)
-      throws IOException {
+    throws IOException {
     Map<ByteRange, Integer> cfVsMaxVersions = new HashMap<>();
     for (ColumnFamilyDescriptor hcd : region.getTableDescriptor().getColumnFamilies()) {
       cfVsMaxVersions.put(new SimpleMutableByteRange(hcd.getName()), hcd.getMaxVersions());
     }
-    VisibilityLabelService vls = VisibilityLabelServiceManager.getInstance()
-        .getVisibilityLabelService();
-    Filter visibilityLabelFilter = new VisibilityLabelFilter(
-        vls.getVisibilityExpEvaluator(authorizations), cfVsMaxVersions);
+    VisibilityLabelService vls =
+      VisibilityLabelServiceManager.getInstance().getVisibilityLabelService();
+    Filter visibilityLabelFilter =
+      new VisibilityLabelFilter(vls.getVisibilityExpEvaluator(authorizations), cfVsMaxVersions);
     return visibilityLabelFilter;
   }
 
@@ -297,8 +286,8 @@ public class VisibilityUtils {
   }
 
   public static List<Tag> createVisibilityExpTags(String visExpression,
-      boolean withSerializationFormat, boolean checkAuths, Set<Integer> auths,
-      VisibilityLabelOrdinalProvider ordinalProvider) throws IOException {
+    boolean withSerializationFormat, boolean checkAuths, Set<Integer> auths,
+    VisibilityLabelOrdinalProvider ordinalProvider) throws IOException {
     ExpressionNode node = null;
     try {
       node = EXP_PARSER.parse(visExpression);
@@ -341,8 +330,8 @@ public class VisibilityUtils {
   }
 
   private static void getLabelOrdinals(ExpressionNode node, List<Integer> labelOrdinals,
-      Set<Integer> auths, boolean checkAuths, VisibilityLabelOrdinalProvider ordinalProvider)
-      throws IOException, InvalidLabelException {
+    Set<Integer> auths, boolean checkAuths, VisibilityLabelOrdinalProvider ordinalProvider)
+    throws IOException, InvalidLabelException {
     if (node.isSingleNode()) {
       String identifier = null;
       int labelOrdinal = 0;
@@ -355,8 +344,8 @@ public class VisibilityUtils {
         checkAuths(auths, labelOrdinal, identifier, checkAuths);
       } else {
         // This is a NOT node.
-        LeafExpressionNode lNode = (LeafExpressionNode) ((NonLeafExpressionNode) node)
-            .getChildExps().get(0);
+        LeafExpressionNode lNode =
+          (LeafExpressionNode) ((NonLeafExpressionNode) node).getChildExps().get(0);
         identifier = lNode.getIdentifier();
         labelOrdinal = ordinalProvider.getLabelOrdinal(identifier);
         checkAuths(auths, labelOrdinal, identifier, checkAuths);
@@ -376,16 +365,11 @@ public class VisibilityUtils {
 
   /**
    * This will sort the passed labels in ascending oder and then will write one after the other to
-   * the passed stream.
-   * @param labelOrdinals
-   *          Unsorted label ordinals
-   * @param dos
-   *          Stream where to write the labels.
-   * @throws IOException
-   *           When IOE during writes to Stream.
+   * the passed stream. Unsorted label ordinals Stream where to write the labels. When IOE during
+   * writes to Stream.
    */
   private static void writeLabelOrdinalsToStream(List<Integer> labelOrdinals, DataOutputStream dos)
-      throws IOException {
+    throws IOException {
     Collections.sort(labelOrdinals);
     for (Integer labelOrdinal : labelOrdinals) {
       StreamUtils.writeRawVInt32(dos, labelOrdinal);
@@ -393,11 +377,11 @@ public class VisibilityUtils {
   }
 
   private static void checkAuths(Set<Integer> auths, int labelOrdinal, String identifier,
-      boolean checkAuths) throws IOException {
+    boolean checkAuths) throws IOException {
     if (checkAuths) {
       if (auths == null || (!auths.contains(labelOrdinal))) {
         throw new AccessDeniedException("Visibility label " + identifier
-            + " not authorized for the user " + VisibilityUtils.getActiveUser().getShortName());
+          + " not authorized for the user " + VisibilityUtils.getActiveUser().getShortName());
       }
     }
   }

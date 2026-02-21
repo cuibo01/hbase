@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,7 +23,7 @@ import static org.junit.Assert.assertSame;
 
 import java.io.IOException;
 import java.util.Arrays;
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
@@ -39,7 +39,7 @@ public class TestAllowPartialScanResultCache {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestAllowPartialScanResultCache.class);
+    HBaseClassTestRule.forClass(TestAllowPartialScanResultCache.class);
 
   private static byte[] CF = Bytes.toBytes("cf");
 
@@ -63,8 +63,8 @@ public class TestAllowPartialScanResultCache {
     assertSame(ScanResultCache.EMPTY_RESULT_ARRAY,
       resultCache.addAndGet(ScanResultCache.EMPTY_RESULT_ARRAY, true));
 
-    Cell[] cells1 = createCells(CF, 1, 10);
-    Cell[] cells2 = createCells(CF, 2, 10);
+    ExtendedCell[] cells1 = createCells(CF, 1, 10);
+    ExtendedCell[] cells2 = createCells(CF, 2, 10);
 
     Result[] results1 = resultCache.addAndGet(
       new Result[] { Result.create(Arrays.copyOf(cells1, 5), null, false, true) }, false);
@@ -85,7 +85,7 @@ public class TestAllowPartialScanResultCache {
     }
 
     Result[] results3 =
-        resultCache.addAndGet(new Result[] { Result.create(cells1), Result.create(cells2) }, false);
+      resultCache.addAndGet(new Result[] { Result.create(cells1), Result.create(cells2) }, false);
     assertEquals(1, results3.length);
     assertEquals(2, Bytes.toInt(results3[0].getRow()));
     assertEquals(10, results3[0].rawCells().length);

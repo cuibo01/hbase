@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,27 +15,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.client;
 
-import static org.apache.hadoop.hbase.client.ConnectionUtils.SLEEP_DELTA_NS;
-import static org.apache.hadoop.hbase.client.ConnectionUtils.getPauseTime;
 import static org.apache.hadoop.hbase.client.ConnectionUtils.resetController;
 import static org.apache.hadoop.hbase.client.ConnectionUtils.translateException;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import org.apache.hadoop.hbase.CallQueueTooBigException;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
+import org.apache.hadoop.hbase.HBaseServerException;
 import org.apache.hadoop.hbase.NotServingRegionException;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotEnabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
+import org.apache.hadoop.hbase.client.backoff.HBaseServerExceptionPauseManager;
 import org.apache.hadoop.hbase.exceptions.ScannerResetException;
 import org.apache.hadoop.hbase.ipc.HBaseRpcController;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -58,10 +57,6 @@ public abstract class AsyncRpcRetryingCaller<T> {
 
   private final long startNs;
 
-  private final long pauseNs;
-
-  private final long pauseForCQTBENs;
-
   private int tries = 1;
 
   private final int maxAttempts;
@@ -80,14 +75,14 @@ public abstract class AsyncRpcRetryingCaller<T> {
 
   protected final HBaseRpcController controller;
 
+  private final HBaseServerExceptionPauseManager pauseManager;
+
   public AsyncRpcRetryingCaller(Timer retryTimer, AsyncConnectionImpl conn, int priority,
-      long pauseNs, long pauseForCQTBENs, int maxAttempts, long operationTimeoutNs,
-      long rpcTimeoutNs, int startLogErrorsCnt) {
+    long pauseNs, long pauseNsForServerOverloaded, int maxAttempts, long operationTimeoutNs,
+    long rpcTimeoutNs, int startLogErrorsCnt, Map<String, byte[]> requestAttributes) {
     this.retryTimer = retryTimer;
     this.conn = conn;
     this.priority = priority;
-    this.pauseNs = pauseNs;
-    this.pauseForCQTBENs = pauseForCQTBENs;
     this.maxAttempts = maxAttempts;
     this.operationTimeoutNs = operationTimeoutNs;
     this.rpcTimeoutNs = rpcTimeoutNs;
@@ -95,8 +90,11 @@ public abstract class AsyncRpcRetryingCaller<T> {
     this.future = new CompletableFuture<>();
     this.controller = conn.rpcControllerFactory.newController();
     this.controller.setPriority(priority);
+    this.controller.setRequestAttributes(requestAttributes);
     this.exceptions = new ArrayList<>();
     this.startNs = System.nanoTime();
+    this.pauseManager =
+      new HBaseServerExceptionPauseManager(pauseNs, pauseNsForServerOverloaded, operationTimeoutNs);
   }
 
   private long elapsedMs() {
@@ -104,7 +102,7 @@ public abstract class AsyncRpcRetryingCaller<T> {
   }
 
   protected final long remainingTimeNs() {
-    return operationTimeoutNs - (System.nanoTime() - startNs);
+    return pauseManager.remainingTimeNs(startNs);
   }
 
   protected final void completeExceptionally() {
@@ -123,23 +121,21 @@ public abstract class AsyncRpcRetryingCaller<T> {
     } else {
       callTimeoutNs = rpcTimeoutNs;
     }
-    resetController(controller, callTimeoutNs, priority);
+    resetController(controller, callTimeoutNs, priority, getTableName().orElse(null));
   }
 
   private void tryScheduleRetry(Throwable error) {
-    long pauseNsToUse = error instanceof CallQueueTooBigException ? pauseForCQTBENs : pauseNs;
-    long delayNs;
-    if (operationTimeoutNs > 0) {
-      long maxDelayNs = remainingTimeNs() - SLEEP_DELTA_NS;
-      if (maxDelayNs <= 0) {
-        completeExceptionally();
-        return;
-      }
-      delayNs = Math.min(maxDelayNs, getPauseTime(pauseNsToUse, tries - 1));
-    } else {
-      delayNs = getPauseTime(pauseNsToUse, tries - 1);
+    OptionalLong maybePauseNsToUse = pauseManager.getPauseNsFromException(error, tries, startNs);
+    if (!maybePauseNsToUse.isPresent()) {
+      completeExceptionally();
+      return;
     }
+    long delayNs = maybePauseNsToUse.getAsLong();
     tries++;
+    if (HBaseServerException.isServerOverloaded(error)) {
+      Optional<MetricsConnection> metrics = conn.getConnectionMetrics();
+      metrics.ifPresent(m -> m.incrementServerOverloadedBackoffTime(delayNs, TimeUnit.NANOSECONDS));
+    }
     retryTimer.newTimeout(t -> doCall(), delayNs, TimeUnit.NANOSECONDS);
   }
 
@@ -158,7 +154,7 @@ public abstract class AsyncRpcRetryingCaller<T> {
   }
 
   protected final void onError(Throwable t, Supplier<String> errMsg,
-      Consumer<Throwable> updateCachedLocation) {
+    Consumer<Throwable> updateCachedLocation) {
     if (future.isDone()) {
       // Give up if the future is already done, this is possible if user has already canceled the
       // future. And for timeline consistent read, we will also cancel some requests if we have
@@ -178,9 +174,9 @@ public abstract class AsyncRpcRetryingCaller<T> {
       return;
     }
     if (tries > startLogErrorsCnt) {
-      LOG.warn(errMsg.get() + ", tries = " + tries + ", maxAttempts = " + maxAttempts +
-        ", timeout = " + TimeUnit.NANOSECONDS.toMillis(operationTimeoutNs) +
-        " ms, time elapsed = " + elapsedMs() + " ms", error);
+      LOG.warn(errMsg.get() + ", tries = " + tries + ", maxAttempts = " + maxAttempts
+        + ", timeout = " + TimeUnit.NANOSECONDS.toMillis(operationTimeoutNs)
+        + " ms, time elapsed = " + elapsedMs() + " ms", error);
     }
     updateCachedLocation.accept(error);
     RetriesExhaustedException.ThrowableWithExtraContext qt =

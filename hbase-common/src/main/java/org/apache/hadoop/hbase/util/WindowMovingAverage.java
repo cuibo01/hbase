@@ -15,17 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.util;
 
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * Instead of calculate a whole time average, this class focus on the last N.
- * The last N is stored in a circle array.
+ * Instead of calculate a whole time average, this class focus on the last N. The last N is stored
+ * in a circle array.
  */
 @InterfaceAudience.Private
-public class WindowMovingAverage extends MovingAverage {
+public class WindowMovingAverage<T> extends MovingAverage<T> {
   protected final static int DEFAULT_SIZE = 5;
 
   // The last n statistics.
@@ -48,15 +47,15 @@ public class WindowMovingAverage extends MovingAverage {
 
   @Override
   protected void updateMostRecentTime(long elapsed) {
-    int index = moveForwardMostRecentPosistion();
+    int index = moveForwardMostRecentPosition();
     lastN[index] = elapsed;
   }
 
   @Override
   public double getAverageTime() {
-    return enoughStatistics() ?
-      (double) sum(getNumberOfStatistics()) / getNumberOfStatistics() :
-      (double) sum(getMostRecentPosistion() + 1) / (getMostRecentPosistion() + 1);
+    return enoughStatistics()
+      ? (double) sum(getNumberOfStatistics()) / getNumberOfStatistics()
+      : (double) sum(getMostRecentPosition() + 1) / (getMostRecentPosition() + 1);
   }
 
   /**
@@ -67,9 +66,7 @@ public class WindowMovingAverage extends MovingAverage {
     return oneRound;
   }
 
-  /**
-   * @return number of statistics
-   */
+  /** Returns number of statistics */
   protected int getNumberOfStatistics() {
     return lastN.length;
   }
@@ -77,7 +74,6 @@ public class WindowMovingAverage extends MovingAverage {
   /**
    * Get statistics at index.
    * @param index index of bar
-   * @return statistics
    */
   protected long getStatisticsAtIndex(int index) {
     if (index < 0 || index >= getNumberOfStatistics()) {
@@ -87,10 +83,8 @@ public class WindowMovingAverage extends MovingAverage {
     return lastN[index];
   }
 
-  /**
-   * @return index of most recent
-   */
-  protected int getMostRecentPosistion() {
+  /** Returns index of most recent */
+  protected int getMostRecentPosition() {
     return mostRecent;
   }
 
@@ -98,7 +92,7 @@ public class WindowMovingAverage extends MovingAverage {
    * Move forward the most recent index.
    * @return the most recent index
    */
-  protected int moveForwardMostRecentPosistion() {
+  protected int moveForwardMostRecentPosition() {
     int index = ++mostRecent;
     if (!oneRound && index == getNumberOfStatistics()) {
       // Back to the head of the lastN, from now on will

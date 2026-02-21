@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.quotas;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.util.concurrent.TimeUnit;
@@ -35,12 +36,12 @@ import org.junit.experimental.categories.Category;
 /**
  * Verify the behaviour of the Rate Limiter.
  */
-@Category({RegionServerTests.class, SmallTests.class})
+@Category({ RegionServerTests.class, SmallTests.class })
 public class TestRateLimiter {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestRateLimiter.class);
+    HBaseClassTestRule.forClass(TestRateLimiter.class);
 
   @Test
   public void testWaitIntervalTimeUnitSeconds() {
@@ -63,7 +64,7 @@ public class TestRateLimiter {
   }
 
   private void testWaitInterval(final TimeUnit timeUnit, final long limit,
-      final long expectedWaitInterval) {
+    final long expectedWaitInterval) {
     RateLimiter limiter = new AverageIntervalRateLimiter();
     limiter.set(limit, timeUnit);
 
@@ -71,7 +72,7 @@ public class TestRateLimiter {
     // consume all the available resources, one request at the time.
     // the wait interval should be 0
     for (int i = 0; i < (limit - 1); ++i) {
-      assertTrue(limiter.canExecute());
+      assertEquals(0, limiter.getWaitIntervalMs());
       limiter.consume();
       long waitInterval = limiter.waitInterval();
       assertEquals(0, waitInterval);
@@ -81,7 +82,7 @@ public class TestRateLimiter {
       // There is one resource available, so we should be able to
       // consume it without waiting.
       limiter.setNextRefillTime(limiter.getNextRefillTime() - nowTs);
-      assertTrue(limiter.canExecute());
+      assertEquals(0, limiter.getWaitIntervalMs());
       assertEquals(0, limiter.waitInterval());
       limiter.consume();
       // No more resources are available, we should wait for at least an interval.
@@ -94,8 +95,8 @@ public class TestRateLimiter {
       // artificially go into the past to prove that when too early we should fail.
       long temp = nowTs + 500;
       limiter.setNextRefillTime(limiter.getNextRefillTime() + temp);
-      assertFalse(limiter.canExecute());
-      //Roll back the nextRefillTime set to continue further testing
+      assertNotEquals(0, limiter.getWaitIntervalMs());
+      // Roll back the nextRefillTime set to continue further testing
       limiter.setNextRefillTime(limiter.getNextRefillTime() - temp);
     }
   }
@@ -107,19 +108,19 @@ public class TestRateLimiter {
 
     // 10 resources are available, but we need to consume 20 resources
     // Verify that we have to wait at least 1.1sec to have 1 resource available
-    assertTrue(limiter.canExecute());
+    assertEquals(0, limiter.getWaitIntervalMs());
     limiter.consume(20);
-    // To consume 1 resource wait for 100ms
-    assertEquals(100, limiter.waitInterval(1));
-    // To consume 10 resource wait for 1000ms
-    assertEquals(1000, limiter.waitInterval(10));
+    // We consumed twice the quota. Need to wait 1s to get back to 0, then another 100ms for the 1
+    assertEquals(1100, limiter.waitInterval(1));
+    // We consumed twice the quota. Need to wait 1s to get back to 0, then another 1s to get to 10
+    assertEquals(2000, limiter.waitInterval(10));
 
-    limiter.setNextRefillTime(limiter.getNextRefillTime() - 900);
-    // Verify that after 1sec the 1 resource is available
-    assertTrue(limiter.canExecute(1));
+    // Verify that after 1sec we need to wait for another 0.1sec to get a resource available
+    limiter.setNextRefillTime(limiter.getNextRefillTime() - 1000);
+    assertNotEquals(0, limiter.getWaitIntervalMs(1));
     limiter.setNextRefillTime(limiter.getNextRefillTime() - 100);
-    // Verify that after 1sec the 10 resource is available
-    assertTrue(limiter.canExecute());
+    // We've waited the full 1.1sec, should now have 1 available
+    assertEquals(0, limiter.getWaitIntervalMs(1));
     assertEquals(0, limiter.waitInterval());
   }
 
@@ -138,23 +139,21 @@ public class TestRateLimiter {
       }
     };
     EnvironmentEdgeManager.injectEdge(edge);
+    assertEquals(0, limiter.getWaitIntervalMs());
     // 10 resources are available, but we need to consume 20 resources
-    // Verify that we have to wait at least 1.1sec to have 1 resource available
-    assertTrue(limiter.canExecute());
     limiter.consume(20);
-    // To consume 1 resource also wait for 1000ms
-    assertEquals(1000, limiter.waitInterval(1));
-    // To consume 10 resource wait for 100ms
-    assertEquals(1000, limiter.waitInterval(10));
+    // We over-consumed by 10. Since this is a fixed interval refill, where
+    // each interval we refill the full limit amount, we need to wait 2 intervals -- first
+    // interval gets us from -10 to 0, second gets us from 0 to 10, though we just want the 1.
+    assertEquals(2000, limiter.waitInterval(1));
     EnvironmentEdgeManager.reset();
 
-    limiter.setNextRefillTime(limiter.getNextRefillTime() - 900);
     // Verify that after 1sec also no resource should be available
-    assertFalse(limiter.canExecute(1));
-    limiter.setNextRefillTime(limiter.getNextRefillTime() - 100);
-
-    // Verify that after 1sec the 10 resource is available
-    assertTrue(limiter.canExecute());
+    limiter.setNextRefillTime(limiter.getNextRefillTime() - 1000);
+    assertNotEquals(0, limiter.getWaitIntervalMs());
+    // Verify that after total 2sec the 10 resource is available
+    limiter.setNextRefillTime(limiter.getNextRefillTime() - 1000);
+    assertEquals(0, limiter.getWaitIntervalMs());
     assertEquals(0, limiter.waitInterval());
   }
 
@@ -163,12 +162,12 @@ public class TestRateLimiter {
     RateLimiter limiter = new FixedIntervalRateLimiter();
     limiter.set(10, TimeUnit.SECONDS);
 
-    assertTrue(limiter.canExecute(10));
+    assertEquals(0, limiter.getWaitIntervalMs(10));
     limiter.consume(3);
     assertEquals(7, limiter.getAvailable());
-    assertFalse(limiter.canExecute(10));
+    assertNotEquals(0, limiter.getWaitIntervalMs(10));
     limiter.setNextRefillTime(limiter.getNextRefillTime() - 1000);
-    assertTrue(limiter.canExecute(10));
+    assertEquals(0, limiter.getWaitIntervalMs(10));
     assertEquals(10, limiter.getAvailable());
   }
 
@@ -184,7 +183,7 @@ public class TestRateLimiter {
       limiter.setNextRefillTime(limiter.getNextRefillTime() - 500);
       for (int i = 0; i < 3; i++) {
         // 6 resources/sec < limit, so limiter.canExecute(nowTs, lastTs) should be true
-        assertEquals(true, limiter.canExecute());
+        assertEquals(limiter.getWaitIntervalMs(), 0);
         limiter.consume();
       }
     }
@@ -193,7 +192,8 @@ public class TestRateLimiter {
   @Test
   public void testCanExecuteOfAverageIntervalRateLimiter() throws InterruptedException {
     RateLimiter limiter = new AverageIntervalRateLimiter();
-    // when set limit is 100 per sec, this AverageIntervalRateLimiter will support at max 200 per sec
+    // when set limit is 100 per sec, this AverageIntervalRateLimiter will support at max 200 per
+    // sec
     limiter.set(100, TimeUnit.SECONDS);
     limiter.setNextRefillTime(EnvironmentEdgeManager.currentTime());
     assertEquals(50, testCanExecuteByRate(limiter, 50));
@@ -238,7 +238,7 @@ public class TestRateLimiter {
     int count = 0;
     while ((request++) < rate) {
       limiter.setNextRefillTime(limiter.getNextRefillTime() - limiter.getTimeUnitInMillis() / rate);
-      if (limiter.canExecute()) {
+      if (limiter.getWaitIntervalMs() == 0) {
         count++;
         limiter.consume();
       }
@@ -318,28 +318,28 @@ public class TestRateLimiter {
     assertEquals(limit, avgLimiter.getAvailable());
     assertEquals(limit, fixLimiter.getAvailable());
 
-    assertTrue(avgLimiter.canExecute(limit));
+    assertEquals(0, avgLimiter.getWaitIntervalMs(limit));
     avgLimiter.consume(limit);
 
-    assertTrue(fixLimiter.canExecute(limit));
+    assertEquals(0, fixLimiter.getWaitIntervalMs(limit));
     fixLimiter.consume(limit);
 
     // Make sure that available is Long.MAX_VALUE
-    assertTrue(limit == avgLimiter.getAvailable());
-    assertTrue(limit == fixLimiter.getAvailable());
+    assertEquals(limit, avgLimiter.getAvailable());
+    assertEquals(limit, fixLimiter.getAvailable());
 
     // after 100 millseconds, it should be able to execute limit as well
     testEdge.incValue(100);
 
-    assertTrue(avgLimiter.canExecute(limit));
+    assertEquals(0, avgLimiter.getWaitIntervalMs(limit));
     avgLimiter.consume(limit);
 
-    assertTrue(fixLimiter.canExecute(limit));
+    assertEquals(0, fixLimiter.getWaitIntervalMs(limit));
     fixLimiter.consume(limit);
 
     // Make sure that available is Long.MAX_VALUE
-    assertTrue(limit == avgLimiter.getAvailable());
-    assertTrue(limit == fixLimiter.getAvailable());
+    assertEquals(limit, avgLimiter.getAvailable());
+    assertEquals(limit, fixLimiter.getAvailable());
 
     EnvironmentEdgeManager.reset();
   }
@@ -359,50 +359,47 @@ public class TestRateLimiter {
     assertEquals(limit, avgLimiter.getAvailable());
     assertEquals(limit, fixLimiter.getAvailable());
 
-    assertTrue(avgLimiter.canExecute(limit / 2));
+    assertEquals(0, avgLimiter.getWaitIntervalMs(limit / 2));
     avgLimiter.consume(limit / 2);
 
-    assertTrue(fixLimiter.canExecute(limit / 2));
+    assertEquals(0, fixLimiter.getWaitIntervalMs(limit / 2));
     fixLimiter.consume(limit / 2);
 
     // Make sure that available is whatever left
-    assertTrue((limit - (limit / 2)) == avgLimiter.getAvailable());
-    assertTrue((limit - (limit / 2)) == fixLimiter.getAvailable());
+    assertEquals((limit - (limit / 2)), avgLimiter.getAvailable());
+    assertEquals((limit - (limit / 2)), fixLimiter.getAvailable());
 
     // after 100 millseconds, both should not be able to execute the limit
     testEdge.incValue(100);
 
-    assertFalse(avgLimiter.canExecute(limit));
-    assertFalse(fixLimiter.canExecute(limit));
+    assertNotEquals(0, avgLimiter.getWaitIntervalMs(limit));
+    assertNotEquals(0, fixLimiter.getWaitIntervalMs(limit));
 
     // after 500 millseconds, average interval limiter should be able to execute the limit
     testEdge.incValue(500);
-    assertTrue(avgLimiter.canExecute(limit));
-    assertFalse(fixLimiter.canExecute(limit));
+    assertEquals(0, avgLimiter.getWaitIntervalMs(limit));
+    assertNotEquals(0, fixLimiter.getWaitIntervalMs(limit));
 
     // Make sure that available is correct
-    assertTrue(limit == avgLimiter.getAvailable());
-    assertTrue((limit - (limit / 2)) == fixLimiter.getAvailable());
+    assertEquals(limit, avgLimiter.getAvailable());
+    assertEquals((limit - (limit / 2)), fixLimiter.getAvailable());
 
     // after 500 millseconds, both should be able to execute
     testEdge.incValue(500);
-    assertTrue(avgLimiter.canExecute(limit));
-    assertTrue(fixLimiter.canExecute(limit));
+    assertEquals(0, avgLimiter.getWaitIntervalMs(limit));
+    assertEquals(0, fixLimiter.getWaitIntervalMs(limit));
 
     // Make sure that available is Long.MAX_VALUE
-    assertTrue(limit == avgLimiter.getAvailable());
-    assertTrue(limit == fixLimiter.getAvailable());
+    assertEquals(limit, avgLimiter.getAvailable());
+    assertEquals(limit, fixLimiter.getAvailable());
 
     EnvironmentEdgeManager.reset();
   }
 
   /*
-   * This test case is tricky. Basically, it simulates the following events:
-   *           Thread-1                             Thread-2
-   * t0:  canExecute(100) and consume(100)
-   * t1:                                         canExecute(100), avail may be increased by 80
-   * t2:  consume(-80) as actual size is 20
-   * It will check if consume(-80) can handle overflow correctly.
+   * This test case is tricky. Basically, it simulates the following events: Thread-1 Thread-2 t0:
+   * canExecute(100) and consume(100) t1: canExecute(100), avail may be increased by 80 t2:
+   * consume(-80) as actual size is 20 It will check if consume(-80) can handle overflow correctly.
    */
   @Test
   public void testLimiterCompensationOverflow() throws InterruptedException {
@@ -417,19 +414,86 @@ public class TestRateLimiter {
     assertEquals(limit, avgLimiter.getAvailable());
 
     // The initial guess is that 100 bytes.
-    assertTrue(avgLimiter.canExecute(guessNumber));
+    assertEquals(0, avgLimiter.getWaitIntervalMs(guessNumber));
     avgLimiter.consume(guessNumber);
 
     // Make sure that available is whatever left
-    assertTrue((limit - guessNumber) == avgLimiter.getAvailable());
+    assertEquals((limit - guessNumber), avgLimiter.getAvailable());
 
     // Manually set avil to simulate that another thread call canExecute().
     // It is simulated by consume().
     avgLimiter.consume(-80);
-    assertTrue((limit - guessNumber + 80) == avgLimiter.getAvailable());
+    assertEquals((limit - guessNumber + 80), avgLimiter.getAvailable());
 
     // Now thread1 compensates 80
     avgLimiter.consume(-80);
-    assertTrue(limit == avgLimiter.getAvailable());
+    assertEquals(limit, avgLimiter.getAvailable());
+  }
+
+  @Test
+  public void itRunsFullWithPartialRefillInterval() {
+    RateLimiter limiter = new FixedIntervalRateLimiter(100);
+    limiter.set(10, TimeUnit.SECONDS);
+    assertEquals(0, limiter.getWaitIntervalMs());
+
+    // Consume the quota
+    limiter.consume(10);
+
+    // Need to wait 1s to acquire another resource
+    long waitInterval = limiter.waitInterval(10);
+    assertTrue(900 < waitInterval);
+    assertTrue(1000 >= waitInterval);
+    // We need to wait 2s to acquire more than 10 resources
+    waitInterval = limiter.waitInterval(20);
+    assertTrue(1900 < waitInterval);
+    assertTrue(2000 >= waitInterval);
+
+    limiter.setNextRefillTime(limiter.getNextRefillTime() - 1000);
+    // We've waited the full interval, so we should now have 10
+    assertEquals(0, limiter.getWaitIntervalMs(10));
+    assertEquals(0, limiter.waitInterval());
+  }
+
+  @Test
+  public void itRunsPartialRefillIntervals() {
+    RateLimiter limiter = new FixedIntervalRateLimiter(100);
+    limiter.set(10, TimeUnit.SECONDS);
+    assertEquals(0, limiter.getWaitIntervalMs());
+
+    // Consume the quota
+    limiter.consume(10);
+
+    // Need to wait 1s to acquire another resource
+    long waitInterval = limiter.waitInterval(10);
+    assertTrue(900 < waitInterval);
+    assertTrue(1000 >= waitInterval);
+    // We need to wait 2s to acquire more than 10 resources
+    waitInterval = limiter.waitInterval(20);
+    assertTrue(1900 < waitInterval);
+    assertTrue(2000 >= waitInterval);
+    // We need to wait 0<=x<=100ms to acquire 1 resource
+    waitInterval = limiter.waitInterval(1);
+    assertTrue(0 < waitInterval);
+    assertTrue(100 >= waitInterval);
+
+    limiter.setNextRefillTime(limiter.getNextRefillTime() - 500);
+    // We've waited half the interval, so we should now have half available
+    assertEquals(0, limiter.getWaitIntervalMs(5));
+    assertEquals(0, limiter.waitInterval());
+  }
+
+  @Test
+  public void itRunsRepeatedPartialRefillIntervals() {
+    RateLimiter limiter = new FixedIntervalRateLimiter(100);
+    limiter.set(10, TimeUnit.SECONDS);
+    assertEquals(0, limiter.getWaitIntervalMs());
+    // Consume the quota
+    limiter.consume(10);
+    for (int i = 0; i < 100; i++) {
+      limiter.setNextRefillTime(limiter.getNextRefillTime() - 100); // free 1 resource
+      limiter.consume(1);
+      assertFalse(limiter.isAvailable(1)); // all resources consumed
+      assertTrue(limiter.isAvailable(0)); // not negative
+    }
   }
 }

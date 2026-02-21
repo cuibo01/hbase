@@ -1,13 +1,13 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
+ * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
+ * regarding copyright ownership.  The ASF licenses this file
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
+ * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,11 +17,16 @@
  */
 package org.apache.hadoop.hbase.backup.impl;
 
+import static org.apache.hadoop.hbase.backup.BackupInfo.withState;
+
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -44,10 +49,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Base class for backup operation. Concrete implementation for
- * full and incremental backup are delegated to corresponding sub-classes:
- * {@link FullTableBackupClient} and {@link IncrementalTableBackupClient}
- *
+ * Base class for backup operation. Concrete implementation for full and incremental backup are
+ * delegated to corresponding sub-classes: {@link FullTableBackupClient} and
+ * {@link IncrementalTableBackupClient}
  */
 @InterfaceAudience.Private
 public abstract class TableBackupClient {
@@ -72,12 +76,12 @@ public abstract class TableBackupClient {
   }
 
   public TableBackupClient(final Connection conn, final String backupId, BackupRequest request)
-      throws IOException {
+    throws IOException {
     init(conn, backupId, request);
   }
 
   public void init(final Connection conn, final String backupId, BackupRequest request)
-      throws IOException {
+    throws IOException {
     if (request.getBackupType() == BackupType.FULL) {
       backupManager = new BackupManager(conn, conn.getConfiguration());
     } else {
@@ -88,9 +92,9 @@ public abstract class TableBackupClient {
     this.conn = conn;
     this.conf = conn.getConfiguration();
     this.fs = CommonFSUtils.getCurrentFileSystem(conf);
-    backupInfo =
-        backupManager.createBackupInfo(backupId, request.getBackupType(), tableList,
-          request.getTargetRootDir(), request.getTotalTasks(), request.getBandwidth());
+    backupInfo = backupManager.createBackupInfo(backupId, request.getBackupType(), tableList,
+      request.getTargetRootDir(), request.getTotalTasks(), request.getBandwidth(),
+      request.getNoChecksumVerify());
     if (tableList == null || tableList.isEmpty()) {
       this.tableList = new ArrayList<>(backupInfo.getTables());
     }
@@ -104,7 +108,7 @@ public abstract class TableBackupClient {
    * @throws IOException exception
    */
   protected void beginBackup(BackupManager backupManager, BackupInfo backupInfo)
-      throws IOException {
+    throws IOException {
 
     BackupSystemTable.snapshot(conn);
     backupManager.setBackupInfo(backupInfo);
@@ -136,7 +140,7 @@ public abstract class TableBackupClient {
    * @throws IOException exception
    */
   protected static void deleteSnapshots(final Connection conn, BackupInfo backupInfo,
-      Configuration conf) throws IOException {
+    Configuration conf) throws IOException {
     LOG.debug("Trying to delete snapshot for full backup.");
     for (String snapshotName : backupInfo.getSnapshotNames()) {
       if (snapshotName == null) {
@@ -148,7 +152,7 @@ public abstract class TableBackupClient {
         admin.deleteSnapshot(snapshotName);
       }
       LOG.debug("Deleting the snapshot " + snapshotName + " for backup " + backupInfo.getBackupId()
-          + " succeeded.");
+        + " succeeded.");
     }
   }
 
@@ -159,9 +163,8 @@ public abstract class TableBackupClient {
    */
   protected static void cleanupExportSnapshotLog(Configuration conf) throws IOException {
     FileSystem fs = CommonFSUtils.getCurrentFileSystem(conf);
-    Path stagingDir =
-        new Path(conf.get(BackupRestoreConstants.CONF_STAGING_ROOT, fs.getWorkingDirectory()
-            .toString()));
+    Path stagingDir = new Path(
+      conf.get(BackupRestoreConstants.CONF_STAGING_ROOT, fs.getWorkingDirectory().toString()));
     FileStatus[] files = CommonFSUtils.listStatus(fs, stagingDir);
     if (files == null) {
       return;
@@ -177,30 +180,29 @@ public abstract class TableBackupClient {
   }
 
   /**
-   * Clean up the uncompleted data at target directory if the ongoing backup has already entered
-   * the copy phase.
+   * Clean up the uncompleted data at target directory if the ongoing backup has already entered the
+   * copy phase.
    */
   protected static void cleanupTargetDir(BackupInfo backupInfo, Configuration conf) {
     try {
       // clean up the uncompleted data at target directory if the ongoing backup has already entered
       // the copy phase
-      LOG.debug("Trying to cleanup up target dir. Current backup phase: "
-          + backupInfo.getPhase());
-      if (backupInfo.getPhase().equals(BackupPhase.SNAPSHOTCOPY)
+      LOG.debug("Trying to cleanup up target dir. Current backup phase: " + backupInfo.getPhase());
+      if (
+        backupInfo.getPhase().equals(BackupPhase.SNAPSHOTCOPY)
           || backupInfo.getPhase().equals(BackupPhase.INCREMENTAL_COPY)
-          || backupInfo.getPhase().equals(BackupPhase.STORE_MANIFEST)) {
-        FileSystem outputFs =
-            FileSystem.get(new Path(backupInfo.getBackupRootDir()).toUri(), conf);
+          || backupInfo.getPhase().equals(BackupPhase.STORE_MANIFEST)
+      ) {
+        FileSystem outputFs = FileSystem.get(new Path(backupInfo.getBackupRootDir()).toUri(), conf);
 
         // now treat one backup as a transaction, clean up data that has been partially copied at
         // table level
         for (TableName table : backupInfo.getTables()) {
-          Path targetDirPath =
-              new Path(HBackupFileSystem.getTableBackupDir(backupInfo.getBackupRootDir(),
-                backupInfo.getBackupId(), table));
+          Path targetDirPath = new Path(HBackupFileSystem
+            .getTableBackupDir(backupInfo.getBackupRootDir(), backupInfo.getBackupId(), table));
           if (outputFs.delete(targetDirPath, true)) {
-            LOG.debug("Cleaning up uncompleted backup data at " + targetDirPath.toString()
-                + " done.");
+            LOG.debug(
+              "Cleaning up uncompleted backup data at " + targetDirPath.toString() + " done.");
           } else {
             LOG.debug("No data has been copied to " + targetDirPath.toString() + ".");
           }
@@ -216,18 +218,18 @@ public abstract class TableBackupClient {
 
     } catch (IOException e1) {
       LOG.error("Cleaning up uncompleted backup data of " + backupInfo.getBackupId() + " at "
-          + backupInfo.getBackupRootDir() + " failed due to " + e1.getMessage() + ".");
+        + backupInfo.getBackupRootDir() + " failed due to " + e1.getMessage() + ".");
     }
   }
 
   /**
    * Fail the overall backup.
    * @param backupInfo backup info
-   * @param e exception
+   * @param e          exception
    * @throws IOException exception
    */
   protected void failBackup(Connection conn, BackupInfo backupInfo, BackupManager backupManager,
-      Exception e, String msg, BackupType type, Configuration conf) throws IOException {
+    Exception e, String msg, BackupType type, Configuration conf) throws IOException {
     try {
       LOG.error(msg + getMessage(e), e);
       // If this is a cancel exception, then we've already cleaned.
@@ -238,10 +240,9 @@ public abstract class TableBackupClient {
       // set overall backup status: failed
       backupInfo.setState(BackupState.FAILED);
       // compose the backup failed data
-      String backupFailedData =
-          "BackupId=" + backupInfo.getBackupId() + ",startts=" + backupInfo.getStartTs()
-              + ",failedts=" + backupInfo.getCompleteTs() + ",failedphase=" + backupInfo.getPhase()
-              + ",failedmessage=" + backupInfo.getFailedMsg();
+      String backupFailedData = "BackupId=" + backupInfo.getBackupId() + ",startts="
+        + backupInfo.getStartTs() + ",failedts=" + backupInfo.getCompleteTs() + ",failedphase="
+        + backupInfo.getPhase() + ",failedmessage=" + backupInfo.getFailedMsg();
       LOG.error(backupFailedData);
       cleanupAndRestoreBackupSystem(conn, backupInfo, conf);
       // If backup session is updated to FAILED state - means we
@@ -256,7 +257,7 @@ public abstract class TableBackupClient {
   }
 
   public static void cleanupAndRestoreBackupSystem(Connection conn, BackupInfo backupInfo,
-      Configuration conf) throws IOException {
+    Configuration conf) throws IOException {
     BackupType type = backupInfo.getType();
     // if full backup, then delete HBase snapshots if there already are snapshots taken
     // and also clean up export snapshot log files if exist
@@ -273,52 +274,78 @@ public abstract class TableBackupClient {
   }
 
   /**
-   * Add manifest for the current backup. The manifest is stored within the table backup directory.
+   * Creates a manifest based on the provided info, and store it in the backup-specific directory.
    * @param backupInfo The current backup info
    * @throws IOException exception
    */
-  protected void addManifest(BackupInfo backupInfo, BackupManager backupManager, BackupType type,
-      Configuration conf) throws IOException {
+  protected void addManifest(BackupInfo backupInfo, BackupType type, Configuration conf)
+    throws IOException {
     // set the overall backup phase : store manifest
     backupInfo.setPhase(BackupPhase.STORE_MANIFEST);
 
-    BackupManifest manifest;
-
-    // Since we have each table's backup in its own directory structure,
-    // we'll store its manifest with the table directory.
-    for (TableName table : backupInfo.getTables()) {
-      manifest = new BackupManifest(backupInfo, table);
-      ArrayList<BackupImage> ancestors = backupManager.getAncestors(backupInfo, table);
-      for (BackupImage image : ancestors) {
-        manifest.addDependentImage(image);
-      }
-
-      if (type == BackupType.INCREMENTAL) {
-        // We'll store the log timestamps for this table only in its manifest.
-        Map<TableName, Map<String, Long>> tableTimestampMap = new HashMap<>();
-        tableTimestampMap.put(table, backupInfo.getIncrTimestampMap().get(table));
-        manifest.setIncrTimestampMap(tableTimestampMap);
-        ArrayList<BackupImage> ancestorss = backupManager.getAncestors(backupInfo);
-        for (BackupImage image : ancestorss) {
-          manifest.addDependentImage(image);
-        }
-      }
-      manifest.store(conf);
-    }
-
-    // For incremental backup, we store a overall manifest in
-    // <backup-root-dir>/WALs/<backup-id>
-    // This is used when created the next incremental backup
+    BackupManifest manifest = new BackupManifest(backupInfo);
     if (type == BackupType.INCREMENTAL) {
-      manifest = new BackupManifest(backupInfo);
       // set the table region server start and end timestamps for incremental backup
       manifest.setIncrTimestampMap(backupInfo.getIncrTimestampMap());
-      ArrayList<BackupImage> ancestors = backupManager.getAncestors(backupInfo);
-      for (BackupImage image : ancestors) {
-        manifest.addDependentImage(image);
-      }
-      manifest.store(conf);
     }
+    List<BackupImage> ancestors = getAncestors(backupInfo);
+    for (BackupImage image : ancestors) {
+      manifest.addDependentImage(image);
+    }
+    manifest.store(conf);
+  }
+
+  /**
+   * Gets the direct ancestors of the currently being created backup.
+   * @param backupInfo The backup info for the backup being created
+   */
+  protected List<BackupImage> getAncestors(BackupInfo backupInfo) throws IOException {
+    LOG.debug("Getting the direct ancestors of the current backup {}", backupInfo.getBackupId());
+
+    // Full backups do not have ancestors
+    if (backupInfo.getType() == BackupType.FULL) {
+      LOG.debug("Current backup is a full backup, no direct ancestor for it.");
+      return Collections.emptyList();
+    }
+
+    List<BackupImage> ancestors = new ArrayList<>();
+    Set<TableName> tablesToCover = new HashSet<>(backupInfo.getTables());
+
+    // Go over the backup history list from newest to oldest
+    List<BackupInfo> allHistoryList =
+      backupManager.getBackupHistory(withState(BackupState.COMPLETE));
+    for (BackupInfo backup : allHistoryList) {
+      // If the image has a different rootDir, it cannot be an ancestor.
+      if (!Objects.equals(backup.getBackupRootDir(), backupInfo.getBackupRootDir())) {
+        continue;
+      }
+
+      BackupImage.Builder builder = BackupImage.newBuilder();
+      BackupImage image = builder.withBackupId(backup.getBackupId()).withType(backup.getType())
+        .withRootDir(backup.getBackupRootDir()).withTableList(backup.getTableNames())
+        .withStartTime(backup.getStartTs()).withCompleteTime(backup.getCompleteTs()).build();
+
+      // The ancestors consist of the most recent FULL backups that cover the list of tables
+      // required in the new backup and all INCREMENTAL backups that came after one of those FULL
+      // backups.
+      if (backup.getType().equals(BackupType.INCREMENTAL)) {
+        ancestors.add(image);
+        LOG.debug("Dependent incremental backup image: {BackupID={}}", image.getBackupId());
+      } else {
+        if (tablesToCover.removeAll(new HashSet<>(image.getTableNames()))) {
+          ancestors.add(image);
+          LOG.debug("Dependent full backup image: {BackupID={}}", image.getBackupId());
+
+          if (tablesToCover.isEmpty()) {
+            LOG.debug("Got {} ancestors for the current backup.", ancestors.size());
+            return Collections.unmodifiableList(ancestors);
+          }
+        }
+      }
+    }
+
+    throw new IllegalStateException(
+      "Unable to find full backup that contains tables: " + tablesToCover);
   }
 
   /**
@@ -327,7 +354,7 @@ public abstract class TableBackupClient {
    * @return meta data dir
    */
   protected String obtainBackupMetaDataStr(BackupInfo backupInfo) {
-    StringBuffer sb = new StringBuffer();
+    StringBuilder sb = new StringBuilder();
     sb.append("type=" + backupInfo.getType() + ",tablelist=");
     for (TableName table : backupInfo.getTables()) {
       sb.append(table + ";");
@@ -341,44 +368,24 @@ public abstract class TableBackupClient {
   }
 
   /**
-   * Clean up directories with prefix "_distcp_logs-", which are generated when DistCp copying
-   * hlogs.
-   * @throws IOException exception
-   */
-  protected void cleanupDistCpLog(BackupInfo backupInfo, Configuration conf) throws IOException {
-    Path rootPath = new Path(backupInfo.getHLogTargetDir()).getParent();
-    FileStatus[] files = CommonFSUtils.listStatus(fs, rootPath);
-    if (files == null) {
-      return;
-    }
-    for (FileStatus file : files) {
-      if (file.getPath().getName().startsWith("_distcp_logs")) {
-        LOG.debug("Delete log files of DistCp: " + file.getPath().getName());
-        CommonFSUtils.delete(fs, file.getPath(), true);
-      }
-    }
-  }
-
-  /**
    * Complete the overall backup.
    * @param backupInfo backup info
    * @throws IOException exception
    */
-  protected void completeBackup(final Connection conn, BackupInfo backupInfo,
-      BackupManager backupManager, BackupType type, Configuration conf) throws IOException {
+  protected void completeBackup(final Connection conn, BackupInfo backupInfo, BackupType type,
+    Configuration conf) throws IOException {
     // set the complete timestamp of the overall backup
     backupInfo.setCompleteTs(EnvironmentEdgeManager.currentTime());
     // set overall backup status: complete
     backupInfo.setState(BackupState.COMPLETE);
     backupInfo.setProgress(100);
     // add and store the manifest for the backup
-    addManifest(backupInfo, backupManager, type, conf);
+    addManifest(backupInfo, type, conf);
 
     // compose the backup complete data
     String backupCompleteData =
-        obtainBackupMetaDataStr(backupInfo) + ",startts=" + backupInfo.getStartTs()
-            + ",completets=" + backupInfo.getCompleteTs() + ",bytescopied="
-            + backupInfo.getTotalBytesCopied();
+      obtainBackupMetaDataStr(backupInfo) + ",startts=" + backupInfo.getStartTs() + ",completets="
+        + backupInfo.getCompleteTs() + ",bytescopied=" + backupInfo.getTotalBytesCopied();
     if (LOG.isDebugEnabled()) {
       LOG.debug("Backup " + backupInfo.getBackupId() + " finished: " + backupCompleteData);
     }
@@ -387,11 +394,10 @@ public abstract class TableBackupClient {
     // - delete HBase snapshot
     // - clean up directories with prefix "exportSnapshot-", which are generated when exporting
     // snapshots
+    // incremental backups use distcp, which handles cleaning up its own directories
     if (type == BackupType.FULL) {
       deleteSnapshots(conn, backupInfo, conf);
       cleanupExportSnapshotLog(conf);
-    } else if (type == BackupType.INCREMENTAL) {
-      cleanupDistCpLog(backupInfo, conf);
     }
     BackupSystemTable.deleteSnapshot(conn);
     backupManager.updateBackupInfo(backupInfo);
@@ -404,23 +410,26 @@ public abstract class TableBackupClient {
 
   /**
    * Backup request execution.
-   *
    * @throws IOException if the execution of the backup fails
    */
   public abstract void execute() throws IOException;
 
   protected Stage getTestStage() {
-    return Stage.valueOf("stage_"+ conf.getInt(BACKUP_TEST_MODE_STAGE, 0));
+    return Stage.valueOf("stage_" + conf.getInt(BACKUP_TEST_MODE_STAGE, 0));
   }
 
   protected void failStageIf(Stage stage) throws IOException {
     Stage current = getTestStage();
     if (current == stage) {
-      throw new IOException("Failed stage " + stage+" in testing");
+      throw new IOException("Failed stage " + stage + " in testing");
     }
   }
 
   public enum Stage {
-    stage_0, stage_1, stage_2, stage_3, stage_4
+    stage_0,
+    stage_1,
+    stage_2,
+    stage_3,
+    stage_4
   }
 }

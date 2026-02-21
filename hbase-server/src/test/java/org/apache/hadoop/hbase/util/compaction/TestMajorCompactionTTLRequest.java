@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,11 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.util.compaction;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -28,7 +28,6 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
-
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.TableName;
@@ -36,19 +35,21 @@ import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.regionserver.HRegionFileSystem;
 import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerForTest;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
 
-@Category({SmallTests.class})
+@Category({ SmallTests.class })
 public class TestMajorCompactionTTLRequest extends TestMajorCompactionRequest {
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMajorCompactionTTLRequest.class);
+    HBaseClassTestRule.forClass(TestMajorCompactionTTLRequest.class);
 
   @Before
   @Override
@@ -69,7 +70,7 @@ public class TestMajorCompactionTTLRequest extends TestMajorCompactionRequest {
     MajorCompactionTTLRequest request = makeMockRequest(storeFiles);
     // All files are <= 100, so region should not be compacted.
     Optional<MajorCompactionRequest> result =
-        request.createRequest(mock(Connection.class), Sets.newHashSet(FAMILY), 10);
+      request.createRequest(mock(Connection.class), Sets.newHashSet(FAMILY), 10);
     assertFalse(result.isPresent());
 
     // All files are <= 100, so region should not be compacted yet.
@@ -82,7 +83,7 @@ public class TestMajorCompactionTTLRequest extends TestMajorCompactionRequest {
   }
 
   private MajorCompactionTTLRequest makeMockRequest(List<StoreFileInfo> storeFiles)
-      throws IOException {
+    throws IOException {
     Connection connection = mock(Connection.class);
     RegionInfo regionInfo = mock(RegionInfo.class);
     when(regionInfo.getEncodedName()).thenReturn("HBase");
@@ -90,6 +91,8 @@ public class TestMajorCompactionTTLRequest extends TestMajorCompactionRequest {
     MajorCompactionTTLRequest request = new MajorCompactionTTLRequest(connection, regionInfo);
     MajorCompactionTTLRequest spy = spy(request);
     HRegionFileSystem fileSystem = mockFileSystem(regionInfo, false, storeFiles);
+    StoreFileTrackerForTest sft = mockSFT(false, storeFiles);
+    doReturn(sft).when(spy).getStoreFileTracker(any(), any());
     doReturn(fileSystem).when(spy).getFileSystem();
     return spy;
   }

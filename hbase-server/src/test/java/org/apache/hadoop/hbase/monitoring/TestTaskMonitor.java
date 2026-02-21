@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,9 +19,12 @@ package org.apache.hadoop.hbase.monitoring;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -37,22 +40,22 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.skyscreamer.jsonassert.JSONAssert;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Category({MiscTests.class, SmallTests.class})
+@Category({ MiscTests.class, SmallTests.class })
 public class TestTaskMonitor {
   private static final Logger LOG = LoggerFactory.getLogger(TestTaskMonitor.class);
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestTaskMonitor.class);
+    HBaseClassTestRule.forClass(TestTaskMonitor.class);
 
   @Test
   public void testTaskMonitorBasics() {
     TaskMonitor tm = new TaskMonitor(new Configuration());
-    assertTrue("Task monitor should start empty",
-        tm.getTasks().isEmpty());
+    assertTrue("Task monitor should start empty", tm.getTasks().isEmpty());
 
     // Make a task and fetch it back out
     MonitoredTask task = tm.createStatus("Test task");
@@ -62,6 +65,8 @@ public class TestTaskMonitor {
     assertEquals(task.getDescription(), taskFromTm.getDescription());
     assertEquals(-1, taskFromTm.getCompletionTimestamp());
     assertEquals(MonitoredTask.State.RUNNING, taskFromTm.getState());
+    assertEquals(task.getStatus(), taskFromTm.getStatus());
+    assertEquals("status unset", taskFromTm.getStatus());
 
     // Mark it as finished
     task.markComplete("Finished!");
@@ -80,8 +85,7 @@ public class TestTaskMonitor {
   @Test
   public void testTasksGetAbortedOnLeak() throws InterruptedException {
     final TaskMonitor tm = new TaskMonitor(new Configuration());
-    assertTrue("Task monitor should start empty",
-        tm.getTasks().isEmpty());
+    assertTrue("Task monitor should start empty", tm.getTasks().isEmpty());
 
     final AtomicBoolean threadSuccess = new AtomicBoolean(false);
     // Make a task in some other thread and leak it
@@ -128,15 +132,15 @@ public class TestTaskMonitor {
   public void testDoNotPurgeRPCTask() throws Exception {
     int RPCTaskNums = 10;
     TaskMonitor tm = TaskMonitor.get();
-    for(int i = 0; i < RPCTaskNums; i++) {
+    for (int i = 0; i < RPCTaskNums; i++) {
       tm.createRPCStatus("PRCTask" + i);
     }
-    for(int i = 0; i < TaskMonitor.DEFAULT_MAX_TASKS; i++) {
+    for (int i = 0; i < TaskMonitor.DEFAULT_MAX_TASKS; i++) {
       tm.createStatus("otherTask" + i);
     }
     int remainRPCTask = 0;
-    for(MonitoredTask task: tm.getTasks()) {
-      if(task instanceof MonitoredRPCHandler) {
+    for (MonitoredTask task : tm.getTasks()) {
+      if (task instanceof MonitoredRPCHandler) {
         remainRPCTask++;
       }
     }
@@ -187,11 +191,11 @@ public class TestTaskMonitor {
     Mutation m = new Put(row);
     Query q = new Scan();
     String notOperation = "for test";
-    rpcHandlers.get(0).setRPC("operations", new Object[]{ m, q }, 3000);
-    rpcHandlers.get(1).setRPC("operations", new Object[]{ m, q }, 3000);
-    rpcHandlers.get(2).setRPC("operations", new Object[]{ m, q }, 3000);
-    rpcHandlers.get(3).setRPC("operations", new Object[]{ notOperation }, 3000);
-    rpcHandlers.get(4).setRPC("operations", new Object[]{ m, q }, 3000);
+    rpcHandlers.get(0).setRPC("operations", new Object[] { m, q }, 3000);
+    rpcHandlers.get(1).setRPC("operations", new Object[] { m, q }, 3000);
+    rpcHandlers.get(2).setRPC("operations", new Object[] { m, q }, 3000);
+    rpcHandlers.get(3).setRPC("operations", new Object[] { notOperation }, 3000);
+    rpcHandlers.get(4).setRPC("operations", new Object[] { m, q }, 3000);
     MonitoredRPCHandler completed = rpcHandlers.get(4);
     completed.markComplete("Completed!");
     // Test get tasks with filter
@@ -213,39 +217,53 @@ public class TestTaskMonitor {
     TaskMonitor tm = new TaskMonitor(new Configuration());
     MonitoredTask task = tm.createStatus("Test task");
     assertTrue(task.getStatusJournal().isEmpty());
-    task.disableStatusJournal();
     task.setStatus("status1");
     // journal should be empty since it is disabled
     assertTrue(task.getStatusJournal().isEmpty());
-    task.enableStatusJournal(true);
-    // check existing status entered in journal
-    assertEquals("status1", task.getStatusJournal().get(0).getStatus());
-    assertTrue(task.getStatusJournal().get(0).getTimeStamp() > 0);
-    task.disableStatusJournal();
+    task = tm.createStatus("Test task with journal", false, true);
     task.setStatus("status2");
-    // check status 2 not added since disabled
     assertEquals(1, task.getStatusJournal().size());
-    task.enableStatusJournal(false);
-    // size should still be 1 since we didn't include current status
-    assertEquals(1, task.getStatusJournal().size());
+    assertEquals("status2", task.getStatusJournal().get(0).getStatus());
     task.setStatus("status3");
+    assertEquals(2, task.getStatusJournal().size());
     assertEquals("status3", task.getStatusJournal().get(1).getStatus());
+    task.prettyPrintJournal();
     tm.shutdown();
   }
 
   @Test
+  public void testTaskGroup() {
+    TaskGroup group = TaskMonitor.createTaskGroup(true, "test task group");
+    group.addTask("task1");
+    MonitoredTask task2 = group.addTask("task2");
+    task2.setStatus("task2 status2");
+    task2.setStatus("task2 status3");
+    group.addTask("task3");
+    group.markComplete("group complete");
+    Collection<MonitoredTask> tasks = group.getTasks();
+    assertNotNull(tasks);
+    assertEquals(tasks.size(), 3);
+    for (MonitoredTask task : tasks) {
+      if (task.getDescription().equals("task2")) {
+        assertEquals(task.getStatusJournal().size(), 3);
+        task.prettyPrintJournal();
+      }
+    }
+  }
+
+  @Test
   public void testClone() throws Exception {
-    MonitoredRPCHandlerImpl monitor = new MonitoredRPCHandlerImpl();
+    MonitoredRPCHandlerImpl monitor = new MonitoredRPCHandlerImpl("test");
     monitor.abort("abort RPC");
     TestParam testParam = new TestParam("param1");
-    monitor.setRPC("method1", new Object[]{ testParam }, 0);
+    monitor.setRPC("method1", new Object[] { testParam }, 0);
     MonitoredRPCHandlerImpl clone = monitor.clone();
     assertEquals(clone.getDescription(), monitor.getDescription());
     assertEquals(clone.getState(), monitor.getState());
     assertEquals(clone.getStatus(), monitor.getStatus());
     assertEquals(clone.toString(), monitor.toString());
     assertEquals(clone.toMap(), monitor.toMap());
-    assertEquals(clone.toJSON(), monitor.toJSON());
+    JSONAssert.assertEquals(clone.toJSON(), monitor.toJSON(), true);
 
     // mark complete and make param dirty
     monitor.markComplete("complete RPC");
@@ -265,10 +283,9 @@ public class TestTaskMonitor {
       String.valueOf(((Map<String, Object>) clone.toMap().get("rpcCall")).get("params")));
 
     monitor.resume("resume");
-    monitor.setRPC("method2", new Object[]{new TestParam("param2")}, 1);
+    monitor.setRPC("method2", new Object[] { new TestParam("param2") }, 1);
     assertNotEquals(((Map<String, Object>) clone.toMap().get("rpcCall")).get("params"),
-      ((Map<String, Object>) monitor.toMap().get("rpcCall")).get(
-        "params"));
+      ((Map<String, Object>) monitor.toMap().get("rpcCall")).get("params"));
     LOG.info(String.valueOf(clone.toMap()));
     LOG.info(String.valueOf(monitor.toMap()));
     assertNotEquals(clone.toString(), monitor.toString());
@@ -294,4 +311,3 @@ public class TestTaskMonitor {
     }
   }
 }
-

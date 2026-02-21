@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.testclassification;
 
 /**
@@ -23,4 +22,5 @@ package org.apache.hadoop.hbase.testclassification;
  * {@code RecoverableZooKeeper}, not for tests which depend on ZooKeeper.
  */
 public interface ZKTests {
+  public static final String TAG = "org.apache.hadoop.hbase.testclassification.ZKTests";
 }

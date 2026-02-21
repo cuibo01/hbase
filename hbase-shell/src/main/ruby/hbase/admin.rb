@@ -27,6 +27,7 @@ java_import org.apache.hadoop.hbase.ServerName
 java_import org.apache.hadoop.hbase.TableName
 java_import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder
 java_import org.apache.hadoop.hbase.client.CoprocessorDescriptorBuilder
+java_import org.apache.hadoop.hbase.client.MobCompactPartitionPolicy
 java_import org.apache.hadoop.hbase.client.TableDescriptorBuilder
 java_import org.apache.hadoop.hbase.HConstants
 
@@ -113,6 +114,9 @@ module Hbase
     #----------------------------------------------------------------------------------------------
     # Switch compaction on/off at runtime on a region server
     def compaction_switch(on_or_off, regionserver_names)
+      unless /true|false/i.match(on_or_off.to_s)
+        raise ArgumentError, 'compaction_switch first argument only accepts "true" or "false"'
+      end
       region_servers = regionserver_names.flatten.compact
       servers = java.util.ArrayList.new
       if region_servers.any?
@@ -176,6 +180,12 @@ module Hbase
     alias hlog_roll wal_roll
 
     #----------------------------------------------------------------------------------------------
+    # Requests all region servers to roll wal writer
+    def wal_roll_all
+      @admin.rollAllWALWriters
+    end
+
+    #----------------------------------------------------------------------------------------------
     # Requests a table or region split
     def split(table_or_region_name, split_point = nil)
       split_point_bytes = nil
@@ -192,6 +202,16 @@ module Hbase
         else
           @admin.split(TableName.valueOf(table_or_region_name), split_point_bytes)
         end
+      end
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # Requests a region truncate
+    def truncate_region(region_name)
+      begin
+        org.apache.hadoop.hbase.util.FutureUtils.get(@admin.truncateRegionAsync(region_name.to_java_bytes))
+      rescue java.lang.IllegalArgumentException, org.apache.hadoop.hbase.UnknownRegionException
+        @admin.truncate_region(region_name.to_java_bytes)
       end
     end
 
@@ -475,8 +495,6 @@ module Hbase
         'admin',
         nil
       )
-      zk = @zk_wrapper.getRecoverableZooKeeper.getZooKeeper
-      @zk_main = org.apache.zookeeper.ZooKeeperMain.new(zk)
       org.apache.hadoop.hbase.zookeeper.ZKDump.dump(@zk_wrapper)
     end
 
@@ -773,6 +791,7 @@ module Hbase
       # Get table descriptor
       tdb = TableDescriptorBuilder.newBuilder(@admin.getDescriptor(table_name))
       hasTableUpdate = false
+      reopen_regions = true
 
       # Process all args
       args.each do |arg|
@@ -781,6 +800,14 @@ module Hbase
 
         # Normalize args to support shortcut delete syntax
         arg = { METHOD => 'delete', NAME => arg['delete'] } if arg['delete']
+
+        if arg.key?(REOPEN_REGIONS)
+          if !['true', 'false'].include?(arg[REOPEN_REGIONS].downcase)
+            raise(ArgumentError, "Invalid 'REOPEN_REGIONS' for non-boolean value.")
+          end
+          reopen_regions = JBoolean.valueOf(arg[REOPEN_REGIONS])
+          arg.delete(REOPEN_REGIONS)
+        end
 
         # There are 3 possible options.
         # 1) Column family spec. Distinguished by having a NAME and no METHOD.
@@ -905,9 +932,13 @@ module Hbase
 
       # Bulk apply all table modifications.
       if hasTableUpdate
-        future = @admin.modifyTableAsync(tdb.build)
-
-        if wait == true
+        future = @admin.modifyTableAsync(tdb.build, reopen_regions)
+        if reopen_regions == false
+          puts("WARNING: You are using REOPEN_REGIONS => 'false' to modify a table, which will
+          result in inconsistencies in the configuration of online regions and other risks. If you
+          encounter any issues, use the original 'alter' command to make the modification again!")
+          future.get
+        elsif wait == true
           puts 'Updating all regions with the new schema...'
           future.get
         end
@@ -923,15 +954,15 @@ module Hbase
         for v in cluster_metrics.getRegionStatesInTransition
           puts(format('    %s', v))
         end
-        master = cluster_metrics.getMaster
+        master = cluster_metrics.getMasterName
         unless master.nil?
           puts(format('active master:  %s:%d %d', master.getHostname, master.getPort, master.getStartcode))
           for task in cluster_metrics.getMasterTasks
             puts(format('    %s', task.toString))
           end
         end
-        puts(format('%d backup masters', cluster_metrics.getBackupMastersSize))
-        for server in cluster_metrics.getBackupMasters
+        puts(format('%d backup masters', cluster_metrics.getBackupMasterNames.size))
+        for server in cluster_metrics.getBackupMasterNames
           puts(format('    %s:%d %d', server.getHostname, server.getPort, server.getStartcode))
         end
         master_coprocs = @admin.getMasterCoprocessorNames.toString
@@ -946,7 +977,7 @@ module Hbase
             puts(format('        %s', region.getNameAsString.dump))
             puts(format('            %s', region.toString))
           end
-          for task in cluster_metrics.getLoad(server).getTasks
+          for task in cluster_metrics.getLiveServerMetrics.get(server).getTasks
             puts(format('        %s', task.toString))
           end
         end
@@ -960,25 +991,27 @@ module Hbase
                     servers: cluster_metrics.getLiveServerMetrics.size))
         cluster_metrics.getLiveServerMetrics.keySet.each do |server_name|
           sl = cluster_metrics.getLiveServerMetrics.get(server_name)
-          r_sink_string   = '      SINK:'
-          r_source_string = '       SOURCE:'
+          r_sink_string   = '        SINK:'
+          r_source_string = '        SOURCE:'
           r_load_sink = sl.getReplicationLoadSink
           next if r_load_sink.nil?
+
           if r_load_sink.getTimestampsOfLastAppliedOp() == r_load_sink.getTimestampStarted()
           # If we have applied no operations since we've started replication,
           # assume that we're not acting as a sink and don't print the normal information
-            r_sink_string << " TimeStampStarted=" + r_load_sink.getTimestampStarted().to_s
-            r_sink_string << ", Waiting for OPs... "
+            r_sink_string << "\n            TimeStampStarted=" + r_load_sink.getTimestampStarted().to_s
+            r_sink_string << ",\n            Waiting for OPs... "
           else
-            r_sink_string << " TimeStampStarted=" + r_load_sink.getTimestampStarted().to_s
-            r_sink_string << ", AgeOfLastAppliedOp=" + r_load_sink.getAgeOfLastAppliedOp().to_s
-            r_sink_string << ", TimeStampsOfLastAppliedOp=" +
-               (java.util.Date.new(r_load_sink.getTimestampsOfLastAppliedOp())).toString()
+            r_sink_string << "\n            TimeStampStarted=" + r_load_sink.getTimestampStarted().to_s
+            r_sink_string << ",\n            AgeOfLastAppliedOp=" + r_load_sink.getAgeOfLastAppliedOp().to_s
+            r_sink_string << ",\n            TimeStampsOfLastAppliedOp=" +
+               r_load_sink.getTimestampsOfLastAppliedOp().to_s
           end
 
           r_load_source_map = sl.getReplicationLoadSourceMap
           build_source_string(r_load_source_map, r_source_string)
-          puts(format('    %<host>s:', host: server_name.getHostname))
+
+          puts(format('    %<host>s:%<port>s %<startcode>s', host: server_name.getHostname, port:server_name.getPort, startcode: server_name.getStartcode))
           if type.casecmp('SOURCE').zero?
             puts(format('%<source>s', source: r_source_string))
           elsif type.casecmp('SINK').zero?
@@ -989,7 +1022,7 @@ module Hbase
           end
         end
       elsif format == 'tasks'
-        master = cluster_metrics.getMaster
+        master = cluster_metrics.getMasterName
         unless master.nil?
           puts(format('active master:  %s:%d %d', master.getHostname, master.getPort, master.getStartcode))
           printed = false
@@ -1002,11 +1035,11 @@ module Hbase
             puts('    no active tasks')
           end
         end
-        puts(format('%d live servers', cluster_metrics.getServersSize))
-        for server in cluster_metrics.getServers
-          puts(format('    %s:%d %d', server.getHostname, server.getPort, server.getStartcode))
+        puts(format('%d live servers', cluster_metrics.getLiveServerMetrics.size))
+        cluster_metrics.getLiveServerMetrics.keySet.each do |server_name|
+          puts(format('    %s:%d %d', server_name.getHostname, server_name.getPort, server_name.getStartcode))
           printed = false
-          for task in cluster_metrics.getLoad(server).getTasks
+          for task in cluster_metrics.getLiveServerMetrics.get(server_name).getTasks
             next unless task.getState.name == 'RUNNING'
             puts(format('        %s', task.toString))
             printed = true
@@ -1040,6 +1073,7 @@ module Hbase
       else
         puts "1 active master, #{cluster_metrics.getBackupMasterNames.size} backup masters,
               #{cluster_metrics.getLiveServerMetrics.size} servers,
+              #{cluster_metrics.getDecommissionedServerNames.size} decommissioned,
               #{cluster_metrics.getDeadServerNames.size} dead,
               #{format('%.4f', cluster_metrics.getAverageLoad)} average load"
       end
@@ -1047,19 +1081,20 @@ module Hbase
 
     def build_source_string(r_load_source_map, r_source_string)
       r_load_source_map.each do |peer, sources|
-        r_source_string << ' PeerID=' + peer
+        r_source_string << "\n            PeerID=" + peer
         sources.each do |source_load|
           build_queue_title(source_load, r_source_string)
           build_running_source_stats(source_load, r_source_string)
+          r_source_string << "\n"
         end
       end
     end
 
     def build_queue_title(source_load, r_source_string)
       r_source_string << if source_load.isRecovered
-                           "\n         Recovered Queue: "
+                           ",\n            Queue(Recovered)="
                          else
-                           "\n         Normal Queue: "
+                           ",\n            Queue(Normal)="
                          end
       r_source_string << source_load.getQueueId
     end
@@ -1068,45 +1103,43 @@ module Hbase
       if source_load.isRunning
         build_shipped_stats(source_load, r_source_string)
         build_load_general_stats(source_load, r_source_string)
-        r_source_string << ', Replication Lag=' +
+        r_source_string << ",\n            ReplicationLag=" +
                            source_load.getReplicationLag.to_s
       else
-        r_source_string << "\n           "
+        r_source_string << ",\n            IsRunning=false, "
         r_source_string << 'No Reader/Shipper threads runnning yet.'
       end
     end
 
     def build_shipped_stats(source_load, r_source_string)
       r_source_string << if source_load.getTimestampOfLastShippedOp.zero?
-                           "\n           " \
+                           ",\n            TimeStampOfLastShippedOp=0, " \
                            'No Ops shipped since last restart'
                          else
-                           "\n           AgeOfLastShippedOp=" +
+                           ",\n            AgeOfLastShippedOp=" +
                            source_load.getAgeOfLastShippedOp.to_s +
-                           ', TimeStampOfLastShippedOp=' +
-                           java.util.Date.new(source_load
-                             .getTimestampOfLastShippedOp).toString
+                           ",\n            TimeStampOfLastShippedOp=" +
+                           source_load.getTimestampOfLastShippedOp.to_s
                          end
     end
 
     def build_load_general_stats(source_load, r_source_string)
-      r_source_string << ', SizeOfLogQueue=' +
+      r_source_string << ",\n            SizeOfLogQueue=" +
                          source_load.getSizeOfLogQueue.to_s
-      r_source_string << ', EditsReadFromLogQueue=' +
+      r_source_string << ",\n            EditsReadFromLogQueue=" +
                          source_load.getEditsRead.to_s
-      r_source_string << ', OpsShippedToTarget=' +
+      r_source_string << ",\n            OpsShippedToTarget=" +
                          source_load.getOPsShipped.to_s
       build_edits_for_source(source_load, r_source_string)
     end
 
     def build_edits_for_source(source_load, r_source_string)
       if source_load.hasEditsSinceRestart
-        r_source_string << ', TimeStampOfNextToReplicate=' +
-                           java.util.Date.new(source_load
-                             .getTimeStampOfNextToReplicate).toString
+        r_source_string << ",\n            TimeStampOfNextToReplicate=" +
+                           source_load.getTimeStampOfNextToReplicate.to_s
       else
-        r_source_string << ', No edits for this source'
-        r_source_string << ' since it started'
+        r_source_string << ",\n            HasEditsSinceRestart=false, "
+        r_source_string << 'No edits for this source since it started'
       end
     end
 
@@ -1169,7 +1202,7 @@ module Hbase
         if org.apache.hadoop.hbase.regionserver.BloomType.constants.include?(bloomtype)
           cfdb.setBloomFilterType(org.apache.hadoop.hbase.regionserver.BloomType.valueOf(bloomtype))
         else
-          raise(ArgumentError, "BloomFilter type #{bloomtype} is not supported. Use one of " + org.apache.hadoop.hbase.regionserver.StoreFile::BloomType.constants.join(' '))
+          raise(ArgumentError, "BloomFilter type #{bloomtype} is not supported. Use one of " + org.apache.hadoop.hbase.regionserver.BloomType.constants.join(' '))
         end
       end
       if arg.include?(ColumnFamilyDescriptorBuilder::COMPRESSION)
@@ -1189,6 +1222,10 @@ module Hbase
           )
           cfdb.setEncryptionKey(org.apache.hadoop.hbase.security.EncryptionUtil.wrapKey(@conf, key,
                                                                                           algorithm))
+        end
+        if arg.include?(ColumnFamilyDescriptorBuilder::ENCRYPTION_KEY_NAMESPACE)
+          cfdb.setEncryptionKeyNamespace(arg.delete(
+            ColumnFamilyDescriptorBuilder::ENCRYPTION_KEY_NAMESPACE))
         end
       end
       if arg.include?(ColumnFamilyDescriptorBuilder::COMPRESSION_COMPACT)
@@ -1554,6 +1591,8 @@ module Hbase
     # Parse arguments and update TableDescriptorBuilder accordingly
     # rubocop:disable Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
     def update_tdb_from_arg(tdb, arg)
+      tdb.setErasureCodingPolicy(arg.delete(TableDescriptorBuilder::ERASURE_CODING_POLICY)) \
+        if arg.include?(TableDescriptorBuilder::ERASURE_CODING_POLICY)
       tdb.setMaxFileSize(arg.delete(TableDescriptorBuilder::MAX_FILESIZE)) if arg.include?(TableDescriptorBuilder::MAX_FILESIZE)
       tdb.setReadOnly(JBoolean.valueOf(arg.delete(TableDescriptorBuilder::READONLY))) if arg.include?(TableDescriptorBuilder::READONLY)
       tdb.setCompactionEnabled(JBoolean.valueOf(arg.delete(TableDescriptorBuilder::COMPACTION_ENABLED))) if arg.include?(TableDescriptorBuilder::COMPACTION_ENABLED)
@@ -1607,7 +1646,7 @@ module Hbase
     end
 
     #----------------------------------------------------------------------------------------------
-    # clear dead region servers
+    # list dead region servers
     def list_deadservers
       @admin.listDeadServers.to_a
     end
@@ -1626,6 +1665,12 @@ module Hbase
         end
       end
       @admin.clearDeadServers(servers).to_a
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # list unknown region servers
+    def list_unknownservers
+      @admin.listUnknownServers.to_a
     end
 
     #----------------------------------------------------------------------------------------------
@@ -1857,6 +1902,30 @@ module Hbase
       else
         java.util.Arrays.asList(server_names)
       end
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # Change table's sft
+    def modify_table_sft(tableName, sft)
+      @admin.modifyTableStoreFileTracker(tableName, sft)
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # Change table column family's sft
+    def modify_table_family_sft(tableName, family_bytes, sft)
+      @admin.modifyColumnFamilyStoreFileTracker(tableName, family_bytes, sft)
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # Flush master local region
+    def flush_master_store()
+      @admin.flushMasterStore()
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # Returns a list of enable or disabled tables in hbase
+    def list_tables_by_state(isEnabled)
+      @admin.listTableNamesByState(isEnabled).map(&:getNameAsString)
     end
   end
   # rubocop:enable Metrics/ClassLength

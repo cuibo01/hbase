@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -37,10 +37,10 @@ public class TestMetricsHeapMemoryManager {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMetricsHeapMemoryManager.class);
+    HBaseClassTestRule.forClass(TestMetricsHeapMemoryManager.class);
 
-  public static MetricsAssertHelper HELPER = CompatibilitySingletonFactory
-      .getInstance(MetricsAssertHelper.class);
+  public static MetricsAssertHelper HELPER =
+    CompatibilitySingletonFactory.getInstance(MetricsAssertHelper.class);
 
   private MetricsHeapMemoryManager hmm;
   private MetricsHeapMemoryManagerSource source;
@@ -74,11 +74,15 @@ public class TestMetricsHeapMemoryManager {
     hmm.updateBlockedFlushCount(200);
     hmm.updateUnblockedFlushCount(50);
     hmm.setCurMemStoreSizeGauge(256 * 1024 * 1024);
+    hmm.setCurMemStoreOnHeapSizeGauge(512 * 1024 * 1024);
+    hmm.setCurMemStoreOffHeapSizeGauge(128 * 1024 * 1024);
     hmm.setCurBlockCacheSizeGauge(100 * 1024 * 1024);
 
     HELPER.assertGauge("blockedFlushGauge", 200, source);
     HELPER.assertGauge("unblockedFlushGauge", 50, source);
     HELPER.assertGauge("memStoreSize", 256 * 1024 * 1024, source);
+    HELPER.assertGauge("memStoreOnHeapSize", 512 * 1024 * 1024, source);
+    HELPER.assertGauge("memStoreOffHeapSize", 128 * 1024 * 1024, source);
     HELPER.assertGauge("blockCacheSize", 100 * 1024 * 1024, source);
   }
 }

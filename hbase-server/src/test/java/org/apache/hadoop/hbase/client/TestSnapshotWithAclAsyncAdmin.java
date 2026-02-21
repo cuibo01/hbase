@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,11 +20,11 @@ package org.apache.hadoop.hbase.client;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
+import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.junit.ClassRule;
 import org.junit.experimental.categories.Category;
 
-@Category({ MediumTests.class, ClientTests.class })
+@Category({ ClientTests.class, LargeTests.class })
 public class TestSnapshotWithAclAsyncAdmin extends SnapshotWithAclTestBase {
 
   @ClassRule
@@ -41,7 +41,7 @@ public class TestSnapshotWithAclAsyncAdmin extends SnapshotWithAclTestBase {
 
   @Override
   protected void cloneSnapshot(String snapshotName, TableName tableName, boolean restoreAcl)
-      throws Exception {
+    throws Exception {
     try (AsyncConnection conn =
       ConnectionFactory.createAsyncConnection(TEST_UTIL.getConfiguration()).get()) {
       conn.getAdmin().cloneSnapshot(snapshotName, tableName, restoreAcl).get();
@@ -49,10 +49,11 @@ public class TestSnapshotWithAclAsyncAdmin extends SnapshotWithAclTestBase {
   }
 
   @Override
-  protected void restoreSnapshot(String snapshotName, boolean restoreAcl) throws Exception {
+  protected void restoreSnapshot(String snapshotName, boolean takeFailSafeSnapshot,
+    boolean restoreAcl) throws Exception {
     try (AsyncConnection conn =
       ConnectionFactory.createAsyncConnection(TEST_UTIL.getConfiguration()).get()) {
-      conn.getAdmin().restoreSnapshot(snapshotName, false, restoreAcl).get();
+      conn.getAdmin().restoreSnapshot(snapshotName, takeFailSafeSnapshot, restoreAcl).get();
     }
   }
 }

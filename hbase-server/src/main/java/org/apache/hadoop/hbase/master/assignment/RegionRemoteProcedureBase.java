@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.master.assignment;
 
 import java.io.IOException;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
@@ -29,6 +30,7 @@ import org.apache.hadoop.hbase.master.procedure.TableProcedureInterface;
 import org.apache.hadoop.hbase.procedure2.FailedRemoteDispatchException;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureEvent;
+import org.apache.hadoop.hbase.procedure2.ProcedureFutureUtil;
 import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
 import org.apache.hadoop.hbase.procedure2.ProcedureSuspendedException;
 import org.apache.hadoop.hbase.procedure2.ProcedureUtil;
@@ -40,10 +42,12 @@ import org.apache.hadoop.hbase.util.RetryCounter;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.RegionRemoteProcedureBaseState;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.RegionRemoteProcedureBaseStateData;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos.ProcedureState;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition.TransitionCode;
 
 /**
@@ -55,7 +59,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProto
  */
 @InterfaceAudience.Private
 public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedureEnv>
-    implements TableProcedureInterface, RemoteProcedure<MasterProcedureEnv, ServerName> {
+  implements TableProcedureInterface, RemoteProcedure<MasterProcedureEnv, ServerName> {
 
   private static final Logger LOG = LoggerFactory.getLogger(RegionRemoteProcedureBase.class);
 
@@ -72,11 +76,13 @@ public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedur
 
   private RetryCounter retryCounter;
 
+  private CompletableFuture<Void> future;
+
   protected RegionRemoteProcedureBase() {
   }
 
   protected RegionRemoteProcedureBase(TransitRegionStateProcedure parent, RegionInfo region,
-      ServerName targetServer) {
+    ServerName targetServer) {
     this.region = region;
     this.targetServer = targetServer;
     parent.attachRemoteProc(this);
@@ -84,19 +90,20 @@ public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedur
 
   @Override
   public Optional<RemoteProcedureDispatcher.RemoteOperation> remoteCallBuild(MasterProcedureEnv env,
-      ServerName remote) {
+    ServerName remote) {
     // REPORT_SUCCEED means that this remote open/close request already executed in RegionServer.
     // So return empty operation and RSProcedureDispatcher no need to send it again.
     if (state == RegionRemoteProcedureBaseState.REGION_REMOTE_PROCEDURE_REPORT_SUCCEED) {
       return Optional.empty();
     }
-    return Optional.of(newRemoteOperation());
+    return Optional.of(newRemoteOperation(env));
   }
 
-  protected abstract RemoteProcedureDispatcher.RemoteOperation newRemoteOperation();
+  protected abstract RemoteProcedureDispatcher.RemoteOperation
+    newRemoteOperation(MasterProcedureEnv env);
 
   @Override
-  public void remoteOperationCompleted(MasterProcedureEnv env) {
+  public void remoteOperationCompleted(MasterProcedureEnv env, byte[] remoteResultData) {
     // should not be called since we use reportRegionStateTransition to report the result
     throw new UnsupportedOperationException();
   }
@@ -148,6 +155,9 @@ public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedur
 
   @Override
   protected boolean waitInitialized(MasterProcedureEnv env) {
+    if (isCriticalSystemTable()) {
+      return false;
+    }
     if (TableName.isMetaTableName(getTableName())) {
       return false;
     }
@@ -169,29 +179,42 @@ public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedur
 
   // do some checks to see if the report is valid
   protected abstract void checkTransition(RegionStateNode regionNode, TransitionCode transitionCode,
-      long seqId) throws UnexpectedStateException;
+    long seqId) throws UnexpectedStateException;
 
   // change the in memory state of the regionNode, but do not update meta.
   protected abstract void updateTransitionWithoutPersistingToMeta(MasterProcedureEnv env,
-      RegionStateNode regionNode, TransitionCode transitionCode, long seqId) throws IOException;
+    RegionStateNode regionNode, TransitionCode transitionCode, long seqId) throws IOException;
 
   // A bit strange but the procedure store will throw RuntimeException if we can not persist the
   // state, so upper layer should take care of this...
   private void persistAndWake(MasterProcedureEnv env, RegionStateNode regionNode) {
-    env.getMasterServices().getMasterProcedureExecutor().getStore().update(this);
+    // The synchronization here is to guard with ProcedureExecutor.executeRollback, as here we will
+    // not hold the procedure execution lock, but we should not persist a procedure in ROLLEDBACK
+    // state to the procedure store.
+    // The ProcedureStore.update must be inside the lock, so here the check for procedure state and
+    // update could be atomic. In ProcedureExecutor.cleanupAfterRollbackOneStep, we will set the
+    // state to ROLLEDBACK, which will hold the same lock too as the Procedure.setState method is
+    // synchronized. This is the key to keep us safe.
+    synchronized (this) {
+      if (getState() == ProcedureState.ROLLEDBACK) {
+        LOG.warn("Procedure {} has already been rolled back, skip persistent", this);
+        return;
+      }
+      env.getMasterServices().getMasterProcedureExecutor().getStore().update(this);
+    }
     regionNode.getProcedureEvent().wake(env.getProcedureScheduler());
   }
 
   // should be called with RegionStateNode locked, to avoid race with the execute method below
   void reportTransition(MasterProcedureEnv env, RegionStateNode regionNode, ServerName serverName,
-      TransitionCode transitionCode, long seqId) throws IOException {
+    TransitionCode transitionCode, long seqId) throws IOException {
     if (state != RegionRemoteProcedureBaseState.REGION_REMOTE_PROCEDURE_DISPATCH) {
       // should be a retry
       return;
     }
     if (!targetServer.equals(serverName)) {
-      throw new UnexpectedStateException("Received report from " + serverName + ", expected " +
-        targetServer + ", " + regionNode + ", proc=" + this);
+      throw new UnexpectedStateException("Received report from " + serverName + ", expected "
+        + targetServer + ", " + regionNode + ", proc=" + this);
     }
     checkTransition(regionNode, transitionCode, seqId);
     // this state means we have received the report from RS, does not mean the result is fine, as we
@@ -245,7 +268,7 @@ public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedur
   }
 
   protected abstract void restoreSucceedState(AssignmentManager am, RegionStateNode regionNode,
-      long seqId) throws IOException;
+    long seqId) throws IOException;
 
   void stateLoaded(AssignmentManager am, RegionStateNode regionNode) {
     if (state == RegionRemoteProcedureBaseState.REGION_REMOTE_PROCEDURE_REPORT_SUCCEED) {
@@ -267,24 +290,58 @@ public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedur
     getParent(env).unattachRemoteProc(this);
   }
 
+  private CompletableFuture<Void> getFuture() {
+    return future;
+  }
+
+  private void setFuture(CompletableFuture<Void> f) {
+    future = f;
+  }
+
+  @Override
+  protected void beforeExec(MasterProcedureEnv env) throws ProcedureSuspendedException {
+    RegionStateNode regionNode = getRegionNode(env);
+    if (!regionNode.isLockedBy(this)) {
+      // The wake up action will be called under the lock inside RegionStateNode for implementing
+      // RegionStateNodeLock, so if we call ProcedureUtil.wakeUp where we will acquire the procedure
+      // execution lock directly, it may cause dead lock since in normal case procedure execution
+      // case, we will acquire the procedure execution lock first and then acquire the lock inside
+      // RegionStateNodeLock. This is the reason why we need to schedule the task to a thread pool
+      // and execute asynchronously.
+      regionNode.lock(this,
+        () -> env.getAsyncTaskExecutor().execute(() -> ProcedureFutureUtil.wakeUp(this, env)));
+    }
+  }
+
+  @Override
+  protected void afterExec(MasterProcedureEnv env) {
+    // only release the lock if there is no pending updating meta operation
+    if (future == null) {
+      RegionStateNode regionNode = getRegionNode(env);
+      // in beforeExec, we may throw ProcedureSuspendedException which means we do not get the lock,
+      // in this case we should not call unlock
+      if (regionNode.isLockedBy(this)) {
+        regionNode.unlock(this);
+      }
+    }
+  }
+
   @Override
   protected Procedure<MasterProcedureEnv>[] execute(MasterProcedureEnv env)
-      throws ProcedureYieldException, ProcedureSuspendedException, InterruptedException {
+    throws ProcedureYieldException, ProcedureSuspendedException, InterruptedException {
     RegionStateNode regionNode = getRegionNode(env);
-    regionNode.lock();
     try {
       switch (state) {
         case REGION_REMOTE_PROCEDURE_DISPATCH: {
           // The code which wakes us up also needs to lock the RSN so here we do not need to
-          // synchronize
-          // on the event.
+          // synchronize on the event.
           ProcedureEvent<?> event = regionNode.getProcedureEvent();
           try {
             env.getRemoteDispatcher().addOperationToNode(targetServer, this);
           } catch (FailedRemoteDispatchException e) {
-            LOG.warn("Can not add remote operation {} for region {} to server {}, this usually " +
-              "because the server is alread dead, give up and mark the procedure as complete, " +
-              "the parent procedure will take care of this.", this, region, targetServer, e);
+            LOG.warn("Can not add remote operation {} for region {} to server {}, this usually "
+              + "because the server is alread dead, give up and mark the procedure as complete, "
+              + "the parent procedure will take care of this.", this, region, targetServer, e);
             unattach(env);
             return null;
           }
@@ -293,16 +350,29 @@ public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedur
           throw new ProcedureSuspendedException();
         }
         case REGION_REMOTE_PROCEDURE_REPORT_SUCCEED:
-          env.getAssignmentManager().persistToMeta(regionNode);
-          unattach(env);
+          if (
+            ProcedureFutureUtil.checkFuture(this, this::getFuture, this::setFuture,
+              () -> unattach(env))
+          ) {
+            return null;
+          }
+          ProcedureFutureUtil.suspendIfNecessary(this, this::setFuture,
+            env.getAssignmentManager().persistToMeta(regionNode), env, () -> unattach(env));
           return null;
         case REGION_REMOTE_PROCEDURE_DISPATCH_FAIL:
           // the remote call is failed so we do not need to change the region state, just return.
           unattach(env);
           return null;
         case REGION_REMOTE_PROCEDURE_SERVER_CRASH:
-          env.getAssignmentManager().regionClosedAbnormally(regionNode);
-          unattach(env);
+          if (
+            ProcedureFutureUtil.checkFuture(this, this::getFuture, this::setFuture,
+              () -> unattach(env))
+          ) {
+            return null;
+          }
+          ProcedureFutureUtil.suspendIfNecessary(this, this::setFuture,
+            env.getAssignmentManager().regionClosedAbnormally(regionNode), env,
+            () -> unattach(env));
           return null;
         default:
           throw new IllegalStateException("Unknown state: " + state);
@@ -313,12 +383,7 @@ public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedur
       }
       long backoff = retryCounter.getBackoffTimeAndIncrementAttempts();
       LOG.warn("Failed updating meta, suspend {}secs {}; {};", backoff / 1000, this, regionNode, e);
-      setTimeout(Math.toIntExact(backoff));
-      setState(ProcedureProtos.ProcedureState.WAITING_TIMEOUT);
-      skipPersistence();
-      throw new ProcedureSuspendedException();
-    } finally {
-      regionNode.unlock();
+      throw suspend(Math.toIntExact(backoff), true);
     }
   }
 
@@ -367,11 +432,13 @@ public abstract class RegionRemoteProcedureBase extends Procedure<MasterProcedur
     getParent(env).attachRemoteProc(this);
   }
 
-  @Override public String getProcName() {
+  @Override
+  public String getProcName() {
     return getClass().getSimpleName() + " " + region.getEncodedName();
   }
 
-  @Override protected void toStringClassDetails(StringBuilder builder) {
+  @Override
+  protected void toStringClassDetails(StringBuilder builder) {
     builder.append(getProcName());
     if (targetServer != null) {
       builder.append(", server=");

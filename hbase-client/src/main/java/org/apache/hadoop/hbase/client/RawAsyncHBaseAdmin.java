@@ -24,6 +24,7 @@ import static org.apache.hadoop.hbase.util.FutureUtils.unwrapCompletionException
 
 import edu.umd.cs.findbugs.annotations.Nullable;
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -53,6 +54,7 @@ import org.apache.hadoop.hbase.ClientMetaTableAccessor;
 import org.apache.hadoop.hbase.ClusterMetrics;
 import org.apache.hadoop.hbase.ClusterMetrics.Option;
 import org.apache.hadoop.hbase.ClusterMetricsBuilder;
+import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
@@ -80,6 +82,7 @@ import org.apache.hadoop.hbase.quotas.QuotaFilter;
 import org.apache.hadoop.hbase.quotas.QuotaSettings;
 import org.apache.hadoop.hbase.quotas.QuotaTableUtil;
 import org.apache.hadoop.hbase.quotas.SpaceQuotaSnapshot;
+import org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
@@ -96,11 +99,13 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.ForeignExceptionUtil;
 import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.hbase.util.Strings;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
+import org.apache.hbase.thirdparty.com.google.protobuf.ByteString;
 import org.apache.hbase.thirdparty.com.google.protobuf.Message;
 import org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback;
 import org.apache.hbase.thirdparty.com.google.protobuf.RpcChannel;
@@ -130,6 +135,8 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CompactionS
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CompactionSwitchResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.FlushRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.FlushRegionResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetCachedFilesListRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetCachedFilesListResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetOnlineRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetOnlineRegionResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetRegionInfoRequest;
@@ -143,6 +150,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.StopServerR
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.UpdateConfigurationRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.UpdateConfigurationResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.LastHighestWalFilenum;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.NameStringPair;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.ProcedureDescription;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.RegionSpecifier.RegionSpecifierType;
@@ -178,6 +186,10 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.EnableTabl
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.EnableTableResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ExecProcedureRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ExecProcedureResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.FlushMasterStoreRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.FlushMasterStoreResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.FlushTableRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.FlushTableResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.GetClusterStatusRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.GetClusterStatusResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.GetCompletedSnapshotsRequest;
@@ -221,8 +233,12 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListNamesp
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListNamespacesResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableDescriptorsByNamespaceRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableDescriptorsByNamespaceResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableDescriptorsByStateRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableDescriptorsByStateResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableNamesByNamespaceRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableNamesByNamespaceResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableNamesByStateRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableNamesByStateResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.MajorCompactionTimestampForRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.MajorCompactionTimestampRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.MajorCompactionTimestampResponse;
@@ -247,8 +263,12 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.OfflineReg
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.OfflineRegionResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RecommissionRegionServerRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RecommissionRegionServerResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ReopenTableRegionsRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ReopenTableRegionsResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RestoreSnapshotRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RestoreSnapshotResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RollAllWALWritersRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RollAllWALWritersResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RunCatalogScanRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RunCatalogScanResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RunCleanerChoreRequest;
@@ -282,6 +302,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.TruncateTa
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.TruncateTableResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.UnassignRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.UnassignRegionResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.QuotaProtos.GetQuotaStatesRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.QuotaProtos.GetQuotaStatesResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.QuotaProtos.GetSpaceQuotaRegionSizesRequest;
@@ -323,10 +344,18 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.Enabl
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.EnableReplicationPeerResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.GetReplicationPeerConfigRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.GetReplicationPeerConfigResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.GetReplicationPeerModificationProceduresRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.GetReplicationPeerModificationProceduresResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.GetReplicationPeerStateRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.GetReplicationPeerStateResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.IsReplicationPeerModificationEnabledRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.IsReplicationPeerModificationEnabledResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.ListReplicationPeersRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.ListReplicationPeersResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.RemoveReplicationPeerRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.RemoveReplicationPeerResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.ReplicationPeerModificationSwitchRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.ReplicationPeerModificationSwitchResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.TransitReplicationPeerSyncReplicationStateRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.TransitReplicationPeerSyncReplicationStateResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.UpdateReplicationPeerConfigRequest;
@@ -364,7 +393,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   private final long pauseNs;
 
-  private final long pauseForCQTBENs;
+  private final long pauseNsForServerOverloaded;
 
   private final int maxAttempts;
 
@@ -373,22 +402,22 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   private final NonceGenerator ng;
 
   RawAsyncHBaseAdmin(AsyncConnectionImpl connection, HashedWheelTimer retryTimer,
-      AsyncAdminBuilderBase builder) {
+    AsyncAdminBuilderBase builder) {
     this.connection = connection;
     this.retryTimer = retryTimer;
     this.metaTable = connection.getTable(META_TABLE_NAME);
     this.rpcTimeoutNs = builder.rpcTimeoutNs;
     this.operationTimeoutNs = builder.operationTimeoutNs;
     this.pauseNs = builder.pauseNs;
-    if (builder.pauseForCQTBENs < builder.pauseNs) {
+    if (builder.pauseNsForServerOverloaded < builder.pauseNs) {
       LOG.warn(
-        "Configured value of pauseForCQTBENs is {} ms, which is less than" +
-          " the normal pause value {} ms, use the greater one instead",
-        TimeUnit.NANOSECONDS.toMillis(builder.pauseForCQTBENs),
+        "Configured value of pauseNsForServerOverloaded is {} ms, which is less than"
+          + " the normal pause value {} ms, use the greater one instead",
+        TimeUnit.NANOSECONDS.toMillis(builder.pauseNsForServerOverloaded),
         TimeUnit.NANOSECONDS.toMillis(builder.pauseNs));
-      this.pauseForCQTBENs = builder.pauseNs;
+      this.pauseNsForServerOverloaded = builder.pauseNs;
     } else {
-      this.pauseForCQTBENs = builder.pauseForCQTBENs;
+      this.pauseNsForServerOverloaded = builder.pauseNsForServerOverloaded;
     }
     this.maxAttempts = builder.maxAttempts;
     this.startLogErrorsCnt = builder.startLogErrorsCnt;
@@ -399,7 +428,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     return this.connection.callerFactory.<T> masterRequest()
       .rpcTimeout(rpcTimeoutNs, TimeUnit.NANOSECONDS)
       .operationTimeout(operationTimeoutNs, TimeUnit.NANOSECONDS)
-      .pause(pauseNs, TimeUnit.NANOSECONDS).pauseForCQTBE(pauseForCQTBENs, TimeUnit.NANOSECONDS)
+      .pause(pauseNs, TimeUnit.NANOSECONDS)
+      .pauseForServerOverloaded(pauseNsForServerOverloaded, TimeUnit.NANOSECONDS)
       .maxAttempts(maxAttempts).startLogErrorsCnt(startLogErrorsCnt);
   }
 
@@ -407,20 +437,21 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     return this.connection.callerFactory.<T> adminRequest()
       .rpcTimeout(rpcTimeoutNs, TimeUnit.NANOSECONDS)
       .operationTimeout(operationTimeoutNs, TimeUnit.NANOSECONDS)
-      .pause(pauseNs, TimeUnit.NANOSECONDS).pauseForCQTBE(pauseForCQTBENs, TimeUnit.NANOSECONDS)
+      .pause(pauseNs, TimeUnit.NANOSECONDS)
+      .pauseForServerOverloaded(pauseNsForServerOverloaded, TimeUnit.NANOSECONDS)
       .maxAttempts(maxAttempts).startLogErrorsCnt(startLogErrorsCnt);
   }
 
   @FunctionalInterface
   private interface MasterRpcCall<RESP, REQ> {
     void call(MasterService.Interface stub, HBaseRpcController controller, REQ req,
-        RpcCallback<RESP> done);
+      RpcCallback<RESP> done);
   }
 
   @FunctionalInterface
   private interface AdminRpcCall<RESP, REQ> {
     void call(AdminService.Interface stub, HBaseRpcController controller, REQ req,
-        RpcCallback<RESP> done);
+      RpcCallback<RESP> done);
   }
 
   @FunctionalInterface
@@ -429,8 +460,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private <PREQ, PRESP, RESP> CompletableFuture<RESP> call(HBaseRpcController controller,
-      MasterService.Interface stub, PREQ preq, MasterRpcCall<PRESP, PREQ> rpcCall,
-      Converter<RESP, PRESP> respConverter) {
+    MasterService.Interface stub, PREQ preq, MasterRpcCall<PRESP, PREQ> rpcCall,
+    Converter<RESP, PRESP> respConverter) {
     CompletableFuture<RESP> future = new CompletableFuture<>();
     rpcCall.call(stub, controller, preq, new RpcCallback<PRESP>() {
 
@@ -451,8 +482,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private <PREQ, PRESP, RESP> CompletableFuture<RESP> adminCall(HBaseRpcController controller,
-      AdminService.Interface stub, PREQ preq, AdminRpcCall<PRESP, PREQ> rpcCall,
-      Converter<RESP, PRESP> respConverter) {
+    AdminService.Interface stub, PREQ preq, AdminRpcCall<PRESP, PREQ> rpcCall,
+    Converter<RESP, PRESP> respConverter) {
     CompletableFuture<RESP> future = new CompletableFuture<>();
     rpcCall.call(stub, controller, preq, new RpcCallback<PRESP>() {
 
@@ -472,35 +503,72 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     return future;
   }
 
+  /**
+   * short-circuit call for
+   * {@link RawAsyncHBaseAdmin#procedureCall(Object, MasterRpcCall, Converter, Converter, ProcedureBiConsumer)}
+   * by ignoring procedure result
+   */
   private <PREQ, PRESP> CompletableFuture<Void> procedureCall(PREQ preq,
-      MasterRpcCall<PRESP, PREQ> rpcCall, Converter<Long, PRESP> respConverter,
-      ProcedureBiConsumer consumer) {
+    MasterRpcCall<PRESP, PREQ> rpcCall, Converter<Long, PRESP> respConverter,
+    ProcedureBiConsumer<Void> consumer) {
+    return procedureCall(preq, rpcCall, respConverter, result -> null, consumer);
+  }
+
+  /**
+   * short-circuit call for procedureCall(Consumer, Object, MasterRpcCall, Converter, Converter,
+   * ProcedureBiConsumer) by skip setting priority for request
+   */
+  private <PREQ, PRESP, PRES> CompletableFuture<PRES> procedureCall(PREQ preq,
+    MasterRpcCall<PRESP, PREQ> rpcCall, Converter<Long, PRESP> respConverter,
+    Converter<PRES, ByteString> resultConverter, ProcedureBiConsumer<PRES> consumer) {
     return procedureCall(b -> {
-    }, preq, rpcCall, respConverter, consumer);
+    }, preq, rpcCall, respConverter, resultConverter, consumer);
   }
 
+  /**
+   * short-circuit call for procedureCall(TableName, Object, MasterRpcCall, Converter, Converter,
+   * ProcedureBiConsumer) by ignoring procedure result
+   */
   private <PREQ, PRESP> CompletableFuture<Void> procedureCall(TableName tableName, PREQ preq,
-      MasterRpcCall<PRESP, PREQ> rpcCall, Converter<Long, PRESP> respConverter,
-      ProcedureBiConsumer consumer) {
-    return procedureCall(b -> b.priority(tableName), preq, rpcCall, respConverter, consumer);
+    MasterRpcCall<PRESP, PREQ> rpcCall, Converter<Long, PRESP> respConverter,
+    ProcedureBiConsumer<Void> consumer) {
+    return procedureCall(tableName, preq, rpcCall, respConverter, result -> null, consumer);
   }
 
-  private <PREQ, PRESP> CompletableFuture<Void> procedureCall(
-      Consumer<MasterRequestCallerBuilder<?>> prioritySetter, PREQ preq,
-      MasterRpcCall<PRESP, PREQ> rpcCall, Converter<Long, PRESP> respConverter,
-      ProcedureBiConsumer consumer) {
-    MasterRequestCallerBuilder<Long> builder = this.<Long> newMasterCaller().action((controller,
-        stub) -> this.<PREQ, PRESP, Long> call(controller, stub, preq, rpcCall, respConverter));
+  /**
+   * short-circuit call for procedureCall(Consumer, Object, MasterRpcCall, Converter, Converter,
+   * ProcedureBiConsumer) by skip setting priority for request
+   */
+  private <PREQ, PRESP, PRES> CompletableFuture<PRES> procedureCall(TableName tableName, PREQ preq,
+    MasterRpcCall<PRESP, PREQ> rpcCall, Converter<Long, PRESP> respConverter,
+    Converter<PRES, ByteString> resultConverter, ProcedureBiConsumer<PRES> consumer) {
+    return procedureCall(b -> b.priority(tableName), preq, rpcCall, respConverter, resultConverter,
+      consumer);
+  }
+
+  /**
+   * @param <PREQ>          type of request
+   * @param <PRESP>         type of response
+   * @param <PRES>          type of procedure call result
+   * @param prioritySetter  prioritySetter set priority by table for request
+   * @param preq            procedure call request
+   * @param rpcCall         procedure rpc call
+   * @param respConverter   extract proc id from procedure call response
+   * @param resultConverter extract result from procedure call result
+   * @param consumer        action performs on result
+   * @return procedure call result, null if procedure is void
+   */
+  private <PREQ, PRESP, PRES> CompletableFuture<PRES> procedureCall(
+    Consumer<MasterRequestCallerBuilder<?>> prioritySetter, PREQ preq,
+    MasterRpcCall<PRESP, PREQ> rpcCall, Converter<Long, PRESP> respConverter,
+    Converter<PRES, ByteString> resultConverter, ProcedureBiConsumer<PRES> consumer) {
+    MasterRequestCallerBuilder<Long> builder = this.<Long> newMasterCaller()
+      .action((controller, stub) -> this.call(controller, stub, preq, rpcCall, respConverter));
     prioritySetter.accept(builder);
     CompletableFuture<Long> procFuture = builder.call();
-    CompletableFuture<Void> future = waitProcedureResult(procFuture);
+    CompletableFuture<PRES> future = waitProcedureResult(procFuture, resultConverter);
     addListener(future, consumer);
     return future;
-  }
-
-  @FunctionalInterface
-  private interface TableOperator {
-    CompletableFuture<Void> operate(TableName table);
   }
 
   @Override
@@ -513,8 +581,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<List<TableDescriptor>> listTableDescriptors(boolean includeSysTables) {
-    return getTableDescriptors(RequestConverter.buildGetTableDescriptorsRequest(null,
-      includeSysTables));
+    return getTableDescriptors(
+      RequestConverter.buildGetTableDescriptorsRequest(null, includeSysTables));
   }
 
   /**
@@ -522,19 +590,17 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
    */
   @Override
   public CompletableFuture<List<TableDescriptor>> listTableDescriptors(Pattern pattern,
-      boolean includeSysTables) {
-    Preconditions.checkNotNull(pattern,
-      "pattern is null. If you don't specify a pattern, "
-          + "use listTableDescriptors(boolean) instead");
-    return getTableDescriptors(RequestConverter.buildGetTableDescriptorsRequest(pattern,
-      includeSysTables));
+    boolean includeSysTables) {
+    Preconditions.checkNotNull(pattern, "pattern is null. If you don't specify a pattern, "
+      + "use listTableDescriptors(boolean) instead");
+    return getTableDescriptors(
+      RequestConverter.buildGetTableDescriptorsRequest(pattern, includeSysTables));
   }
 
   @Override
   public CompletableFuture<List<TableDescriptor>> listTableDescriptors(List<TableName> tableNames) {
-    Preconditions.checkNotNull(tableNames,
-      "tableNames is null. If you don't specify tableNames, "
-          + "use listTableDescriptors(boolean) instead");
+    Preconditions.checkNotNull(tableNames, "tableNames is null. If you don't specify tableNames, "
+      + "use listTableDescriptors(boolean) instead");
     if (tableNames.isEmpty()) {
       return CompletableFuture.completedFuture(Collections.emptyList());
     }
@@ -542,13 +608,13 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<List<TableDescriptor>>
-      getTableDescriptors(GetTableDescriptorsRequest request) {
+    getTableDescriptors(GetTableDescriptorsRequest request) {
     return this.<List<TableDescriptor>> newMasterCaller()
-        .action((controller, stub) -> this
-            .<GetTableDescriptorsRequest, GetTableDescriptorsResponse, List<TableDescriptor>> call(
-              controller, stub, request, (s, c, req, done) -> s.getTableDescriptors(c, req, done),
-              (resp) -> ProtobufUtil.toTableDescriptorList(resp)))
-        .call();
+      .action((controller, stub) -> this.<GetTableDescriptorsRequest, GetTableDescriptorsResponse,
+        List<TableDescriptor>> call(controller, stub, request,
+          (s, c, req, done) -> s.getTableDescriptors(c, req, done),
+          (resp) -> ProtobufUtil.toTableDescriptorList(resp)))
+      .call();
   }
 
   @Override
@@ -557,54 +623,73 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
-  public CompletableFuture<List<TableName>>
-      listTableNames(Pattern pattern, boolean includeSysTables) {
+  public CompletableFuture<List<TableName>> listTableNames(Pattern pattern,
+    boolean includeSysTables) {
     Preconditions.checkNotNull(pattern,
-        "pattern is null. If you don't specify a pattern, use listTableNames(boolean) instead");
+      "pattern is null. If you don't specify a pattern, use listTableNames(boolean) instead");
     return getTableNames(RequestConverter.buildGetTableNamesRequest(pattern, includeSysTables));
   }
 
+  @Override
+  public CompletableFuture<List<TableName>> listTableNamesByState(boolean isEnabled) {
+    return this.<List<TableName>> newMasterCaller()
+      .action((controller, stub) -> this.<ListTableNamesByStateRequest,
+        ListTableNamesByStateResponse, List<TableName>> call(controller, stub,
+          ListTableNamesByStateRequest.newBuilder().setIsEnabled(isEnabled).build(),
+          (s, c, req, done) -> s.listTableNamesByState(c, req, done),
+          (resp) -> ProtobufUtil.toTableNameList(resp.getTableNamesList())))
+      .call();
+  }
+
   private CompletableFuture<List<TableName>> getTableNames(GetTableNamesRequest request) {
-    return this
-        .<List<TableName>> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<GetTableNamesRequest, GetTableNamesResponse, List<TableName>> call(controller,
-                stub, request, (s, c, req, done) -> s.getTableNames(c, req, done),
-                (resp) -> ProtobufUtil.toTableNameList(resp.getTableNamesList()))).call();
+    return this.<List<TableName>> newMasterCaller()
+      .action((controller, stub) -> this.<GetTableNamesRequest, GetTableNamesResponse,
+        List<TableName>> call(controller, stub, request,
+          (s, c, req, done) -> s.getTableNames(c, req, done),
+          (resp) -> ProtobufUtil.toTableNameList(resp.getTableNamesList())))
+      .call();
   }
 
   @Override
   public CompletableFuture<List<TableDescriptor>> listTableDescriptorsByNamespace(String name) {
-    return this.<List<TableDescriptor>> newMasterCaller().action((controller, stub) -> this
-        .<ListTableDescriptorsByNamespaceRequest, ListTableDescriptorsByNamespaceResponse,
-        List<TableDescriptor>> call(
-          controller, stub,
+    return this.<List<TableDescriptor>> newMasterCaller()
+      .action((controller, stub) -> this.<ListTableDescriptorsByNamespaceRequest,
+        ListTableDescriptorsByNamespaceResponse, List<TableDescriptor>> call(controller, stub,
           ListTableDescriptorsByNamespaceRequest.newBuilder().setNamespaceName(name).build(),
           (s, c, req, done) -> s.listTableDescriptorsByNamespace(c, req, done),
           (resp) -> ProtobufUtil.toTableDescriptorList(resp)))
-        .call();
+      .call();
+  }
+
+  @Override
+  public CompletableFuture<List<TableDescriptor>> listTableDescriptorsByState(boolean isEnabled) {
+    return this.<List<TableDescriptor>> newMasterCaller()
+      .action((controller, stub) -> this.<ListTableDescriptorsByStateRequest,
+        ListTableDescriptorsByStateResponse, List<TableDescriptor>> call(controller, stub,
+          ListTableDescriptorsByStateRequest.newBuilder().setIsEnabled(isEnabled).build(),
+          (s, c, req, done) -> s.listTableDescriptorsByState(c, req, done),
+          (resp) -> ProtobufUtil.toTableDescriptorList(resp)))
+      .call();
   }
 
   @Override
   public CompletableFuture<List<TableName>> listTableNamesByNamespace(String name) {
-    return this.<List<TableName>> newMasterCaller().action((controller, stub) -> this
-        .<ListTableNamesByNamespaceRequest, ListTableNamesByNamespaceResponse,
-        List<TableName>> call(
-          controller, stub,
+    return this.<List<TableName>> newMasterCaller()
+      .action((controller, stub) -> this.<ListTableNamesByNamespaceRequest,
+        ListTableNamesByNamespaceResponse, List<TableName>> call(controller, stub,
           ListTableNamesByNamespaceRequest.newBuilder().setNamespaceName(name).build(),
           (s, c, req, done) -> s.listTableNamesByNamespace(c, req, done),
           (resp) -> ProtobufUtil.toTableNameList(resp.getTableNameList())))
-        .call();
+      .call();
   }
 
   @Override
   public CompletableFuture<TableDescriptor> getDescriptor(TableName tableName) {
     CompletableFuture<TableDescriptor> future = new CompletableFuture<>();
     addListener(this.<List<TableSchema>> newMasterCaller().priority(tableName)
-      .action((controller, stub) -> this
-        .<GetTableDescriptorsRequest, GetTableDescriptorsResponse, List<TableSchema>> call(
-          controller, stub, RequestConverter.buildGetTableDescriptorsRequest(tableName),
+      .action((controller, stub) -> this.<GetTableDescriptorsRequest, GetTableDescriptorsResponse,
+        List<TableSchema>> call(controller, stub,
+          RequestConverter.buildGetTableDescriptorsRequest(tableName),
           (s, c, req, done) -> s.getTableDescriptors(c, req, done),
           (resp) -> resp.getTableSchemaList()))
       .call(), (tableSchemas, error) -> {
@@ -629,7 +714,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> createTable(TableDescriptor desc, byte[] startKey, byte[] endKey,
-      int numRegions) {
+    int numRegions) {
     try {
       return createTable(desc, getSplitKeys(startKey, endKey, numRegions));
     } catch (IllegalArgumentException e) {
@@ -640,7 +725,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   @Override
   public CompletableFuture<Void> createTable(TableDescriptor desc, byte[][] splitKeys) {
     Preconditions.checkNotNull(splitKeys, "splitKeys is null. If you don't specify splitKeys,"
-        + " use createTable(TableDescriptor) instead");
+      + " use createTable(TableDescriptor) instead");
     try {
       verifySplitKeys(splitKeys);
       return createTable(desc.getTableName(), RequestConverter.buildCreateTableRequest(desc,
@@ -659,17 +744,37 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> modifyTable(TableDescriptor desc) {
+    return modifyTable(desc, true);
+  }
+
+  @Override
+  public CompletableFuture<Void> modifyTable(TableDescriptor desc, boolean reopenRegions) {
     return this.<ModifyTableRequest, ModifyTableResponse> procedureCall(desc.getTableName(),
       RequestConverter.buildModifyTableRequest(desc.getTableName(), desc, ng.getNonceGroup(),
-        ng.newNonce()), (s, c, req, done) -> s.modifyTable(c, req, done),
-      (resp) -> resp.getProcId(), new ModifyTableProcedureBiConsumer(this, desc.getTableName()));
+        ng.newNonce(), reopenRegions),
+      (s, c, req, done) -> s.modifyTable(c, req, done), (resp) -> resp.getProcId(),
+      new ModifyTableProcedureBiConsumer(this, desc.getTableName()));
+  }
+
+  @Override
+  public CompletableFuture<Void> reopenTableRegions(TableName tableName) {
+    return reopenTableRegions(tableName, Collections.emptyList());
+  }
+
+  @Override
+  public CompletableFuture<Void> reopenTableRegions(TableName tableName, List<RegionInfo> regions) {
+    List<byte[]> regionNames = regions.stream().map(RegionInfo::getRegionName).toList();
+    return this.<ReopenTableRegionsRequest, ReopenTableRegionsResponse> procedureCall(tableName,
+      RequestConverter.buildReopenTableRegionsRequest(tableName, regionNames, ng.getNonceGroup(),
+        ng.newNonce()),
+      (s, c, req, done) -> s.reopenTableRegions(c, req, done), (resp) -> resp.getProcId(),
+      new ReopenTableRegionsProcedureBiConsumer(this, tableName));
   }
 
   @Override
   public CompletableFuture<Void> modifyTableStoreFileTracker(TableName tableName, String dstSFT) {
-    return this
-      .<ModifyTableStoreFileTrackerRequest, ModifyTableStoreFileTrackerResponse> procedureCall(
-        tableName,
+    return this.<ModifyTableStoreFileTrackerRequest,
+      ModifyTableStoreFileTrackerResponse> procedureCall(tableName,
         RequestConverter.buildModifyTableStoreFileTrackerRequest(tableName, dstSFT,
           ng.getNonceGroup(), ng.newNonce()),
         (s, c, req, done) -> s.modifyTableStoreFileTracker(c, req, done),
@@ -689,8 +794,9 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   public CompletableFuture<Void> truncateTable(TableName tableName, boolean preserveSplits) {
     return this.<TruncateTableRequest, TruncateTableResponse> procedureCall(tableName,
       RequestConverter.buildTruncateTableRequest(tableName, preserveSplits, ng.getNonceGroup(),
-        ng.newNonce()), (s, c, req, done) -> s.truncateTable(c, req, done),
-      (resp) -> resp.getProcId(), new TruncateTableProcedureBiConsumer(tableName));
+        ng.newNonce()),
+      (s, c, req, done) -> s.truncateTable(c, req, done), (resp) -> resp.getProcId(),
+      new TruncateTableProcedureBiConsumer(tableName));
   }
 
   @Override
@@ -710,18 +816,18 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   /**
-   * Utility for completing passed TableState {@link CompletableFuture} <code>future</code>
-   * using passed parameters. Sets error or boolean result ('true' if table matches
-   * the passed-in targetState).
+   * Utility for completing passed TableState {@link CompletableFuture} <code>future</code> using
+   * passed parameters. Sets error or boolean result ('true' if table matches the passed-in
+   * targetState).
    */
   private static CompletableFuture<Boolean> completeCheckTableState(
-      CompletableFuture<Boolean> future, TableState tableState, Throwable error,
-      TableState.State targetState, TableName tableName) {
+    CompletableFuture<Boolean> future, Optional<TableState> tableState, Throwable error,
+    TableState.State targetState, TableName tableName) {
     if (error != null) {
       future.completeExceptionally(error);
     } else {
-      if (tableState != null) {
-        future.complete(tableState.inStates(targetState));
+      if (tableState.isPresent()) {
+        future.complete(tableState.get().inStates(targetState));
       } else {
         future.completeExceptionally(new TableNotFoundException(tableName));
       }
@@ -737,8 +843,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     CompletableFuture<Boolean> future = new CompletableFuture<>();
     addListener(ClientMetaTableAccessor.getTableState(metaTable, tableName),
       (tableState, error) -> {
-        completeCheckTableState(future, tableState.isPresent() ? tableState.get() : null, error,
-          TableState.State.ENABLED, tableName);
+        completeCheckTableState(future, tableState, error, TableState.State.ENABLED, tableName);
       });
     return future;
   }
@@ -751,8 +856,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     CompletableFuture<Boolean> future = new CompletableFuture<>();
     addListener(ClientMetaTableAccessor.getTableState(metaTable, tableName),
       (tableState, error) -> {
-        completeCheckTableState(future, tableState.isPresent() ? tableState.get() : null, error,
-          TableState.State.DISABLED, tableName);
+        completeCheckTableState(future, tableState, error, TableState.State.DISABLED, tableName);
       });
     return future;
   }
@@ -776,8 +880,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       if (!enabled) {
         future.complete(false);
       } else {
-        addListener(
-          ClientMetaTableAccessor.getTableHRegionLocations(metaTable, tableName),
+        addListener(ClientMetaTableAccessor.getTableHRegionLocations(metaTable, tableName),
           (locations, error1) -> {
             if (error1 != null) {
               future.completeExceptionally(error1);
@@ -800,11 +903,12 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
-  public CompletableFuture<Void> addColumnFamily(
-      TableName tableName, ColumnFamilyDescriptor columnFamily) {
+  public CompletableFuture<Void> addColumnFamily(TableName tableName,
+    ColumnFamilyDescriptor columnFamily) {
     return this.<AddColumnRequest, AddColumnResponse> procedureCall(tableName,
       RequestConverter.buildAddColumnRequest(tableName, columnFamily, ng.getNonceGroup(),
-        ng.newNonce()), (s, c, req, done) -> s.addColumn(c, req, done), (resp) -> resp.getProcId(),
+        ng.newNonce()),
+      (s, c, req, done) -> s.addColumn(c, req, done), (resp) -> resp.getProcId(),
       new AddColumnFamilyProcedureBiConsumer(tableName));
   }
 
@@ -812,25 +916,26 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   public CompletableFuture<Void> deleteColumnFamily(TableName tableName, byte[] columnFamily) {
     return this.<DeleteColumnRequest, DeleteColumnResponse> procedureCall(tableName,
       RequestConverter.buildDeleteColumnRequest(tableName, columnFamily, ng.getNonceGroup(),
-        ng.newNonce()), (s, c, req, done) -> s.deleteColumn(c, req, done),
-      (resp) -> resp.getProcId(), new DeleteColumnFamilyProcedureBiConsumer(tableName));
+        ng.newNonce()),
+      (s, c, req, done) -> s.deleteColumn(c, req, done), (resp) -> resp.getProcId(),
+      new DeleteColumnFamilyProcedureBiConsumer(tableName));
   }
 
   @Override
   public CompletableFuture<Void> modifyColumnFamily(TableName tableName,
-      ColumnFamilyDescriptor columnFamily) {
+    ColumnFamilyDescriptor columnFamily) {
     return this.<ModifyColumnRequest, ModifyColumnResponse> procedureCall(tableName,
       RequestConverter.buildModifyColumnRequest(tableName, columnFamily, ng.getNonceGroup(),
-        ng.newNonce()), (s, c, req, done) -> s.modifyColumn(c, req, done),
-      (resp) -> resp.getProcId(), new ModifyColumnFamilyProcedureBiConsumer(tableName));
+        ng.newNonce()),
+      (s, c, req, done) -> s.modifyColumn(c, req, done), (resp) -> resp.getProcId(),
+      new ModifyColumnFamilyProcedureBiConsumer(tableName));
   }
 
   @Override
   public CompletableFuture<Void> modifyColumnFamilyStoreFileTracker(TableName tableName,
     byte[] family, String dstSFT) {
-    return this
-      .<ModifyColumnStoreFileTrackerRequest, ModifyColumnStoreFileTrackerResponse> procedureCall(
-        tableName,
+    return this.<ModifyColumnStoreFileTrackerRequest,
+      ModifyColumnStoreFileTrackerResponse> procedureCall(tableName,
         RequestConverter.buildModifyColumnStoreFileTrackerRequest(tableName, family, dstSFT,
           ng.getNonceGroup(), ng.newNonce()),
         (s, c, req, done) -> s.modifyColumnStoreFileTracker(c, req, done),
@@ -864,48 +969,45 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<NamespaceDescriptor> getNamespaceDescriptor(String name) {
-    return this
-        .<NamespaceDescriptor> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<GetNamespaceDescriptorRequest, GetNamespaceDescriptorResponse, NamespaceDescriptor>
-                  call(controller, stub, RequestConverter.buildGetNamespaceDescriptorRequest(name),
-                    (s, c, req, done) -> s.getNamespaceDescriptor(c, req, done), (resp)
-                      -> ProtobufUtil.toNamespaceDescriptor(resp.getNamespaceDescriptor()))).call();
+    return this.<NamespaceDescriptor> newMasterCaller()
+      .action((controller, stub) -> this.<GetNamespaceDescriptorRequest,
+        GetNamespaceDescriptorResponse, NamespaceDescriptor> call(controller, stub,
+          RequestConverter.buildGetNamespaceDescriptorRequest(name),
+          (s, c, req, done) -> s.getNamespaceDescriptor(c, req, done),
+          (resp) -> ProtobufUtil.toNamespaceDescriptor(resp.getNamespaceDescriptor())))
+      .call();
   }
 
   @Override
   public CompletableFuture<List<String>> listNamespaces() {
-    return this
-        .<List<String>> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<ListNamespacesRequest, ListNamespacesResponse, List<String>> call(
-                controller, stub, ListNamespacesRequest.newBuilder().build(), (s, c, req,
-                  done) -> s.listNamespaces(c, req, done),
-                (resp) -> resp.getNamespaceNameList())).call();
+    return this.<List<String>> newMasterCaller()
+      .action((controller, stub) -> this.<ListNamespacesRequest, ListNamespacesResponse,
+        List<String>> call(controller, stub, ListNamespacesRequest.newBuilder().build(),
+          (s, c, req, done) -> s.listNamespaces(c, req, done),
+          (resp) -> resp.getNamespaceNameList()))
+      .call();
   }
 
   @Override
   public CompletableFuture<List<NamespaceDescriptor>> listNamespaceDescriptors() {
-    return this
-        .<List<NamespaceDescriptor>> newMasterCaller().action((controller, stub) -> this
-              .<ListNamespaceDescriptorsRequest, ListNamespaceDescriptorsResponse,
-                  List<NamespaceDescriptor>> call(controller, stub,
-                  ListNamespaceDescriptorsRequest.newBuilder().build(), (s, c, req, done) ->
-                      s.listNamespaceDescriptors(c, req, done),
-                    (resp) -> ProtobufUtil.toNamespaceDescriptorList(resp))).call();
+    return this.<List<NamespaceDescriptor>> newMasterCaller()
+      .action((controller, stub) -> this.<ListNamespaceDescriptorsRequest,
+        ListNamespaceDescriptorsResponse, List<NamespaceDescriptor>> call(controller, stub,
+          ListNamespaceDescriptorsRequest.newBuilder().build(),
+          (s, c, req, done) -> s.listNamespaceDescriptors(c, req, done),
+          (resp) -> ProtobufUtil.toNamespaceDescriptorList(resp)))
+      .call();
   }
 
   @Override
   public CompletableFuture<List<RegionInfo>> getRegions(ServerName serverName) {
     return this.<List<RegionInfo>> newAdminCaller()
-        .action((controller, stub) -> this
-            .<GetOnlineRegionRequest, GetOnlineRegionResponse, List<RegionInfo>> adminCall(
-              controller, stub, RequestConverter.buildGetOnlineRegionRequest(),
-              (s, c, req, done) -> s.getOnlineRegion(c, req, done),
-              resp -> ProtobufUtil.getRegionInfos(resp)))
-        .serverName(serverName).call();
+      .action((controller, stub) -> this.<GetOnlineRegionRequest, GetOnlineRegionResponse,
+        List<RegionInfo>> adminCall(controller, stub,
+          RequestConverter.buildGetOnlineRegionRequest(),
+          (s, c, req, done) -> s.getOnlineRegion(c, req, done),
+          resp -> ProtobufUtil.getRegionInfos(resp)))
+      .serverName(serverName).call();
   }
 
   @Override
@@ -915,19 +1017,64 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         .thenApply(locs -> Stream.of(locs.getRegionLocations()).map(HRegionLocation::getRegion)
           .collect(Collectors.toList()));
     } else {
-      return ClientMetaTableAccessor.getTableHRegionLocations(metaTable, tableName)
-        .thenApply(
-          locs -> locs.stream().map(HRegionLocation::getRegion).collect(Collectors.toList()));
+      return ClientMetaTableAccessor.getTableHRegionLocations(metaTable, tableName).thenApply(
+        locs -> locs.stream().map(HRegionLocation::getRegion).collect(Collectors.toList()));
     }
   }
+
   @Override
   public CompletableFuture<Void> flush(TableName tableName) {
-    return flush(tableName, null);
+    return flush(tableName, Collections.emptyList());
   }
 
   @Override
   public CompletableFuture<Void> flush(TableName tableName, byte[] columnFamily) {
+    Preconditions.checkNotNull(columnFamily,
+      "columnFamily is null, If you don't specify a columnFamily, use flush(TableName) instead.");
+    return flush(tableName, Collections.singletonList(columnFamily));
+  }
+
+  @Override
+  public CompletableFuture<Void> flush(TableName tableName, List<byte[]> columnFamilyList) {
+    // This is for keeping compatibility with old implementation.
+    // If the server version is lower than the client version, it's possible that the
+    // flushTable method is not present in the server side, if so, we need to fall back
+    // to the old implementation.
+    Preconditions.checkNotNull(columnFamilyList,
+      "columnFamily is null, If you don't specify a columnFamily, use flush(TableName) instead.");
+    List<byte[]> columnFamilies = columnFamilyList.stream()
+      .filter(cf -> cf != null && cf.length > 0).distinct().collect(Collectors.toList());
+    FlushTableRequest request = RequestConverter.buildFlushTableRequest(tableName, columnFamilies,
+      ng.getNonceGroup(), ng.newNonce());
+    CompletableFuture<Void> procFuture = this.<FlushTableRequest, FlushTableResponse> procedureCall(
+      tableName, request, (s, c, req, done) -> s.flushTable(c, req, done),
+      (resp) -> resp.getProcId(), new FlushTableProcedureBiConsumer(tableName));
     CompletableFuture<Void> future = new CompletableFuture<>();
+    addListener(procFuture, (ret, error) -> {
+      if (error != null) {
+        if (
+          error instanceof TableNotFoundException || error instanceof TableNotEnabledException
+            || error instanceof NoSuchColumnFamilyException
+        ) {
+          future.completeExceptionally(error);
+        } else if (error instanceof DoNotRetryIOException) {
+          // usually this is caused by the method is not present on the server or
+          // the hbase hadoop version does not match the running hadoop version.
+          // if that happens, we need fall back to the old flush implementation.
+          LOG.info("Unrecoverable error in master side. Fallback to FlushTableProcedure V1", error);
+          legacyFlush(future, tableName, columnFamilies);
+        } else {
+          future.completeExceptionally(error);
+        }
+      } else {
+        future.complete(ret);
+      }
+    });
+    return future;
+  }
+
+  private void legacyFlush(CompletableFuture<Void> future, TableName tableName,
+    List<byte[]> columnFamilies) {
     addListener(tableExists(tableName), (exists, err) -> {
       if (err != null) {
         future.completeExceptionally(err);
@@ -941,11 +1088,13 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
             future.completeExceptionally(new TableNotEnabledException(tableName));
           } else {
             Map<String, String> props = new HashMap<>();
-            if (columnFamily != null) {
-              props.put(HConstants.FAMILY_KEY_STR, Bytes.toString(columnFamily));
+            if (columnFamilies != null && !columnFamilies.isEmpty()) {
+              props.put(HConstants.FAMILY_KEY_STR, Strings.JOINER
+                .join(columnFamilies.stream().map(Bytes::toString).collect(Collectors.toList())));
             }
-            addListener(execProcedure(FLUSH_TABLE_PROCEDURE_SIGNATURE, tableName.getNameAsString(),
-              props), (ret, err3) -> {
+            addListener(
+              execProcedure(FLUSH_TABLE_PROCEDURE_SIGNATURE, tableName.getNameAsString(), props),
+              (ret, err3) -> {
                 if (err3 != null) {
                   future.completeExceptionally(err3);
                 } else {
@@ -956,7 +1105,6 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         });
       }
     });
-    return future;
   }
 
   @Override
@@ -969,8 +1117,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   public CompletableFuture<Void> flushRegion(byte[] regionName, byte[] columnFamily) {
     Preconditions.checkNotNull(columnFamily, "columnFamily is null."
       + "If you don't specify a columnFamily, use flushRegion(regionName) instead");
-    return flushRegionInternal(regionName, columnFamily, false)
-      .thenAccept(r -> {});
+    return flushRegionInternal(regionName, columnFamily, false).thenAccept(r -> {
+    });
   }
 
   /**
@@ -979,8 +1127,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
    * As it exposes the protobuf message, please do <strong>NOT</strong> try to expose it as a public
    * API.
    */
-  CompletableFuture<FlushRegionResponse> flushRegionInternal(byte[] regionName,
-    byte[] columnFamily, boolean writeFlushWALMarker) {
+  CompletableFuture<FlushRegionResponse> flushRegionInternal(byte[] regionName, byte[] columnFamily,
+    boolean writeFlushWALMarker) {
     CompletableFuture<FlushRegionResponse> future = new CompletableFuture<>();
     addListener(getRegionLocation(regionName), (location, err) -> {
       if (err != null) {
@@ -993,14 +1141,14 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
           .completeExceptionally(new NoServerForRegionException(Bytes.toStringBinary(regionName)));
         return;
       }
-      addListener(
-        flush(serverName, location.getRegion(), columnFamily, writeFlushWALMarker),
+      addListener(flush(serverName, location.getRegion(), columnFamily, writeFlushWALMarker),
         (ret, err2) -> {
           if (err2 != null) {
             future.completeExceptionally(err2);
           } else {
             future.complete(ret);
-          }});
+          }
+        });
     });
     return future;
   }
@@ -1008,10 +1156,10 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   private CompletableFuture<FlushRegionResponse> flush(ServerName serverName, RegionInfo regionInfo,
     byte[] columnFamily, boolean writeFlushWALMarker) {
     return this.<FlushRegionResponse> newAdminCaller().serverName(serverName)
-      .action((controller, stub) -> this
-        .<FlushRegionRequest, FlushRegionResponse, FlushRegionResponse> adminCall(controller, stub,
-          RequestConverter.buildFlushRegionRequest(regionInfo.getRegionName(),
-            columnFamily, writeFlushWALMarker),
+      .action((controller, stub) -> this.<FlushRegionRequest, FlushRegionResponse,
+        FlushRegionResponse> adminCall(controller, stub,
+          RequestConverter.buildFlushRegionRequest(regionInfo.getRegionName(), columnFamily,
+            writeFlushWALMarker),
           (s, c, req, done) -> s.flushRegion(c, req, done), resp -> resp))
       .call();
   }
@@ -1026,11 +1174,9 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
       List<CompletableFuture<Void>> compactFutures = new ArrayList<>();
       if (hRegionInfos != null) {
-        hRegionInfos.forEach(
-          region -> compactFutures.add(
-            flush(sn, region, null, false).thenAccept(r -> {})
-          )
-        );
+        hRegionInfos
+          .forEach(region -> compactFutures.add(flush(sn, region, null, false).thenAccept(r -> {
+          })));
       }
       addListener(CompletableFuture.allOf(
         compactFutures.toArray(new CompletableFuture<?>[compactFutures.size()])), (ret, err2) -> {
@@ -1051,9 +1197,9 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> compact(TableName tableName, byte[] columnFamily,
-      CompactType compactType) {
+    CompactType compactType) {
     Preconditions.checkNotNull(columnFamily, "columnFamily is null. "
-        + "If you don't specify a columnFamily, use compact(TableName) instead");
+      + "If you don't specify a columnFamily, use compact(TableName) instead");
     return compact(tableName, columnFamily, false, compactType);
   }
 
@@ -1065,7 +1211,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   @Override
   public CompletableFuture<Void> compactRegion(byte[] regionName, byte[] columnFamily) {
     Preconditions.checkNotNull(columnFamily, "columnFamily is null."
-        + " If you don't specify a columnFamily, use compactRegion(regionName) instead");
+      + " If you don't specify a columnFamily, use compactRegion(regionName) instead");
     return compactRegion(regionName, columnFamily, false);
   }
 
@@ -1076,9 +1222,9 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> majorCompact(TableName tableName, byte[] columnFamily,
-      CompactType compactType) {
+    CompactType compactType) {
     Preconditions.checkNotNull(columnFamily, "columnFamily is null."
-        + "If you don't specify a columnFamily, use compact(TableName) instead");
+      + "If you don't specify a columnFamily, use compact(TableName) instead");
     return compact(tableName, columnFamily, true, compactType);
   }
 
@@ -1090,7 +1236,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   @Override
   public CompletableFuture<Void> majorCompactRegion(byte[] regionName, byte[] columnFamily) {
     Preconditions.checkNotNull(columnFamily, "columnFamily is null."
-        + " If you don't specify a columnFamily, use majorCompactRegion(regionName) instead");
+      + " If you don't specify a columnFamily, use majorCompactRegion(regionName) instead");
     return compactRegion(regionName, columnFamily, true);
   }
 
@@ -1128,7 +1274,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<Void> compactRegion(byte[] regionName, byte[] columnFamily,
-      boolean major) {
+    boolean major) {
     CompletableFuture<Void> future = new CompletableFuture<>();
     addListener(getRegionLocation(regionName), (location, err) -> {
       if (err != null) {
@@ -1162,8 +1308,10 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       addListener(connection.registry.getMetaRegionLocations(), (metaRegions, err) -> {
         if (err != null) {
           future.completeExceptionally(err);
-        } else if (metaRegions == null || metaRegions.isEmpty() ||
-          metaRegions.getDefaultRegionLocation() == null) {
+        } else if (
+          metaRegions == null || metaRegions.isEmpty()
+            || metaRegions.getDefaultRegionLocation() == null
+        ) {
           future.completeExceptionally(new IOException("meta region does not found"));
         } else {
           future.complete(Collections.singletonList(metaRegions.getDefaultRegionLocation()));
@@ -1180,7 +1328,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
    * Compact column family of a table, Asynchronous operation even if CompletableFuture.get()
    */
   private CompletableFuture<Void> compact(TableName tableName, byte[] columnFamily, boolean major,
-      CompactType compactType) {
+    CompactType compactType) {
     CompletableFuture<Void> future = new CompletableFuture<>();
 
     switch (compactType) {
@@ -1208,6 +1356,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
           }
           if (locations == null || locations.isEmpty()) {
             future.completeExceptionally(new TableNotFoundException(tableName));
+            return;
           }
           CompletableFuture<?>[] compactFutures =
             locations.stream().filter(l -> l.getRegion() != null)
@@ -1234,24 +1383,23 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
    * Compact the region at specific region server.
    */
   private CompletableFuture<Void> compact(final ServerName sn, final RegionInfo hri,
-      final boolean major, byte[] columnFamily) {
-    return this
-        .<Void> newAdminCaller()
-        .serverName(sn)
-        .action(
-          (controller, stub) -> this.<CompactRegionRequest, CompactRegionResponse, Void> adminCall(
-            controller, stub, RequestConverter.buildCompactRegionRequest(hri.getRegionName(),
-              major, columnFamily), (s, c, req, done) -> s.compactRegion(c, req, done),
-            resp -> null)).call();
+    final boolean major, byte[] columnFamily) {
+    return this.<Void> newAdminCaller().serverName(sn)
+      .action((controller, stub) -> this.<CompactRegionRequest, CompactRegionResponse,
+        Void> adminCall(controller, stub,
+          RequestConverter.buildCompactRegionRequest(hri.getRegionName(), major, columnFamily),
+          (s, c, req, done) -> s.compactRegion(c, req, done), resp -> null))
+      .call();
   }
 
   private byte[] toEncodeRegionName(byte[] regionName) {
-    return RegionInfo.isEncodedRegionName(regionName) ? regionName :
-      Bytes.toBytes(RegionInfo.encodeRegionName(regionName));
+    return RegionInfo.isEncodedRegionName(regionName)
+      ? regionName
+      : Bytes.toBytes(RegionInfo.encodeRegionName(regionName));
   }
 
   private void checkAndGetTableName(byte[] encodeRegionName, AtomicReference<TableName> tableName,
-      CompletableFuture<TableName> result) {
+    CompletableFuture<TableName> result) {
     addListener(getRegionLocation(encodeRegionName), (location, err) -> {
       if (err != null) {
         result.completeExceptionally(err);
@@ -1267,8 +1415,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         if (!tableName.get().equals(regionInfo.getTable())) {
           // tables of this two region should be same.
           result.completeExceptionally(
-            new IllegalArgumentException("Cannot merge regions from two different tables " +
-              tableName.get() + " and " + regionInfo.getTable()));
+            new IllegalArgumentException("Cannot merge regions from two different tables "
+              + tableName.get() + " and " + regionInfo.getTable()));
         } else {
           result.complete(tableName.get());
         }
@@ -1306,28 +1454,25 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<Boolean> setSplitOrMergeOn(boolean enabled, boolean synchronous,
-      MasterSwitchType switchType) {
+    MasterSwitchType switchType) {
     SetSplitOrMergeEnabledRequest request =
       RequestConverter.buildSetSplitOrMergeEnabledRequest(enabled, synchronous, switchType);
     return this.<Boolean> newMasterCaller()
-      .action((controller, stub) -> this
-        .<SetSplitOrMergeEnabledRequest, SetSplitOrMergeEnabledResponse, Boolean> call(controller,
-          stub, request, (s, c, req, done) -> s.setSplitOrMergeEnabled(c, req, done),
+      .action((controller, stub) -> this.<SetSplitOrMergeEnabledRequest,
+        SetSplitOrMergeEnabledResponse, Boolean> call(controller, stub, request,
+          (s, c, req, done) -> s.setSplitOrMergeEnabled(c, req, done),
           (resp) -> resp.getPrevValueList().get(0)))
       .call();
   }
 
   private CompletableFuture<Boolean> isSplitOrMergeOn(MasterSwitchType switchType) {
     IsSplitOrMergeEnabledRequest request =
-        RequestConverter.buildIsSplitOrMergeEnabledRequest(switchType);
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<IsSplitOrMergeEnabledRequest, IsSplitOrMergeEnabledResponse, Boolean> call(
-                controller, stub, request,
-                (s, c, req, done) -> s.isSplitOrMergeEnabled(c, req, done),
-                (resp) -> resp.getEnabled())).call();
+      RequestConverter.buildIsSplitOrMergeEnabledRequest(switchType);
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<IsSplitOrMergeEnabledRequest,
+        IsSplitOrMergeEnabledResponse, Boolean> call(controller, stub, request,
+          (s, c, req, done) -> s.isSplitOrMergeEnabled(c, req, done), (resp) -> resp.getEnabled()))
+      .call();
   }
 
   @Override
@@ -1356,9 +1501,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
 
       addListener(
-        this.procedureCall(tableName, request,
-          MasterService.Interface::mergeTableRegions, MergeTableRegionsResponse::getProcId,
-          new MergeTableRegionProcedureBiConsumer(tableName)),
+        this.procedureCall(tableName, request, MasterService.Interface::mergeTableRegions,
+          MergeTableRegionsResponse::getProcId, new MergeTableRegionProcedureBiConsumer(tableName)),
         (ret, err2) -> {
           if (err2 != null) {
             future.completeExceptionally(err2);
@@ -1404,8 +1548,10 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
                 for (HRegionLocation h : rl.getRegionLocations()) {
                   if (h != null && h.getServerName() != null) {
                     RegionInfo hri = h.getRegion();
-                    if (hri == null || hri.isSplitParent() ||
-                      hri.getReplicaId() != RegionInfo.DEFAULT_REPLICA_ID) {
+                    if (
+                      hri == null || hri.isSplitParent()
+                        || hri.getReplicaId() != RegionInfo.DEFAULT_REPLICA_ID
+                    ) {
                       continue;
                     }
                     splitFutures.add(split(hri, null));
@@ -1468,9 +1614,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
       RegionInfo regionInfo = location.getRegion();
       if (regionInfo.getReplicaId() != RegionInfo.DEFAULT_REPLICA_ID) {
-        future
-          .completeExceptionally(new IllegalArgumentException("Can't split replicas directly. " +
-            "Replicas are auto-split when their primary is split."));
+        future.completeExceptionally(new IllegalArgumentException("Can't split replicas directly. "
+          + "Replicas are auto-split when their primary is split."));
         return;
       }
       ServerName serverName = location.getServerName();
@@ -1502,9 +1647,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
       RegionInfo regionInfo = location.getRegion();
       if (regionInfo.getReplicaId() != RegionInfo.DEFAULT_REPLICA_ID) {
-        future
-          .completeExceptionally(new IllegalArgumentException("Can't split replicas directly. " +
-            "Replicas are auto-split when their primary is split."));
+        future.completeExceptionally(new IllegalArgumentException("Can't split replicas directly. "
+          + "Replicas are auto-split when their primary is split."));
         return;
       }
       ServerName serverName = location.getServerName();
@@ -1513,8 +1657,10 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
           .completeExceptionally(new NoServerForRegionException(Bytes.toStringBinary(regionName)));
         return;
       }
-      if (regionInfo.getStartKey() != null &&
-        Bytes.compareTo(regionInfo.getStartKey(), splitPoint) == 0) {
+      if (
+        regionInfo.getStartKey() != null
+          && Bytes.compareTo(regionInfo.getStartKey(), splitPoint) == 0
+      ) {
         future.completeExceptionally(
           new IllegalArgumentException("should not give a splitkey which equals to startkey!"));
         return;
@@ -1543,10 +1689,63 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     }
 
     addListener(
-      this.procedureCall(tableName,
-        request, MasterService.Interface::splitRegion, SplitTableRegionResponse::getProcId,
-        new SplitTableRegionProcedureBiConsumer(tableName)),
+      this.procedureCall(tableName, request, MasterService.Interface::splitRegion,
+        SplitTableRegionResponse::getProcId, new SplitTableRegionProcedureBiConsumer(tableName)),
       (ret, err2) -> {
+        if (err2 != null) {
+          future.completeExceptionally(err2);
+        } else {
+          future.complete(ret);
+        }
+      });
+    return future;
+  }
+
+  @Override
+  public CompletableFuture<Void> truncateRegion(byte[] regionName) {
+    CompletableFuture<Void> future = new CompletableFuture<>();
+    addListener(getRegionLocation(regionName), (location, err) -> {
+      if (err != null) {
+        future.completeExceptionally(err);
+        return;
+      }
+      RegionInfo regionInfo = location.getRegion();
+      if (regionInfo.getReplicaId() != RegionInfo.DEFAULT_REPLICA_ID) {
+        future.completeExceptionally(new IllegalArgumentException(
+          "Can't truncate replicas directly.Replicas are auto-truncated "
+            + "when their primary is truncated."));
+        return;
+      }
+      ServerName serverName = location.getServerName();
+      if (serverName == null) {
+        future
+          .completeExceptionally(new NoServerForRegionException(Bytes.toStringBinary(regionName)));
+        return;
+      }
+      addListener(truncateRegion(regionInfo), (ret, err2) -> {
+        if (err2 != null) {
+          future.completeExceptionally(err2);
+        } else {
+          future.complete(ret);
+        }
+      });
+    });
+    return future;
+  }
+
+  private CompletableFuture<Void> truncateRegion(final RegionInfo hri) {
+    CompletableFuture<Void> future = new CompletableFuture<>();
+    TableName tableName = hri.getTable();
+    final MasterProtos.TruncateRegionRequest request;
+    try {
+      request = RequestConverter.buildTruncateRegionRequest(hri, ng.getNonceGroup(), ng.newNonce());
+    } catch (DeserializationException e) {
+      future.completeExceptionally(e);
+      return future;
+    }
+    addListener(this.procedureCall(tableName, request, MasterService.Interface::truncateRegion,
+      MasterProtos.TruncateRegionResponse::getProcId,
+      new TruncateRegionProcedureBiConsumer(tableName)), (ret, err2) -> {
         if (err2 != null) {
           future.completeExceptionally(err2);
         } else {
@@ -1564,11 +1763,13 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         future.completeExceptionally(err);
         return;
       }
-      addListener(this.<Void> newMasterCaller().priority(regionInfo.getTable())
-        .action(((controller, stub) -> this.<AssignRegionRequest, AssignRegionResponse, Void> call(
-          controller, stub, RequestConverter.buildAssignRegionRequest(regionInfo.getRegionName()),
-          (s, c, req, done) -> s.assignRegion(c, req, done), resp -> null)))
-        .call(), (ret, err2) -> {
+      addListener(
+        this.<Void> newMasterCaller().priority(regionInfo.getTable())
+          .action((controller, stub) -> this.<AssignRegionRequest, AssignRegionResponse, Void> call(
+            controller, stub, RequestConverter.buildAssignRegionRequest(regionInfo.getRegionName()),
+            (s, c, req, done) -> s.assignRegion(c, req, done), resp -> null))
+          .call(),
+        (ret, err2) -> {
           if (err2 != null) {
             future.completeExceptionally(err2);
           } else {
@@ -1589,10 +1790,10 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
       addListener(
         this.<Void> newMasterCaller().priority(regionInfo.getTable())
-          .action(((controller, stub) -> this
-            .<UnassignRegionRequest, UnassignRegionResponse, Void> call(controller, stub,
+          .action((controller, stub) -> this.<UnassignRegionRequest, UnassignRegionResponse,
+            Void> call(controller, stub,
               RequestConverter.buildUnassignRegionRequest(regionInfo.getRegionName()),
-              (s, c, req, done) -> s.unassignRegion(c, req, done), resp -> null)))
+              (s, c, req, done) -> s.unassignRegion(c, req, done), resp -> null))
           .call(),
         (ret, err2) -> {
           if (err2 != null) {
@@ -1613,14 +1814,11 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         future.completeExceptionally(err);
         return;
       }
-      addListener(
-        this.<Void> newMasterCaller().priority(regionInfo.getTable())
-          .action(((controller, stub) -> this
-            .<OfflineRegionRequest, OfflineRegionResponse, Void> call(controller, stub,
-              RequestConverter.buildOfflineRegionRequest(regionInfo.getRegionName()),
-              (s, c, req, done) -> s.offlineRegion(c, req, done), resp -> null)))
-          .call(),
-        (ret, err2) -> {
+      addListener(this.<Void> newMasterCaller().priority(regionInfo.getTable())
+        .action((controller, stub) -> this.<OfflineRegionRequest, OfflineRegionResponse, Void> call(
+          controller, stub, RequestConverter.buildOfflineRegionRequest(regionInfo.getRegionName()),
+          (s, c, req, done) -> s.offlineRegion(c, req, done), resp -> null))
+        .call(), (ret, err2) -> {
           if (err2 != null) {
             future.completeExceptionally(err2);
           } else {
@@ -1687,50 +1885,49 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> setQuota(QuotaSettings quota) {
-    return this
-        .<Void> newMasterCaller()
-        .action(
-          (controller, stub) -> this.<SetQuotaRequest, SetQuotaResponse, Void> call(controller,
-            stub, QuotaSettings.buildSetQuotaRequestProto(quota),
-            (s, c, req, done) -> s.setQuota(c, req, done), (resp) -> null)).call();
+    return this.<Void> newMasterCaller()
+      .action((controller, stub) -> this.<SetQuotaRequest, SetQuotaResponse, Void> call(controller,
+        stub, QuotaSettings.buildSetQuotaRequestProto(quota),
+        (s, c, req, done) -> s.setQuota(c, req, done), (resp) -> null))
+      .call();
   }
 
   @Override
   public CompletableFuture<List<QuotaSettings>> getQuota(QuotaFilter filter) {
     CompletableFuture<List<QuotaSettings>> future = new CompletableFuture<>();
     Scan scan = QuotaTableUtil.makeScan(filter);
-    this.connection.getTableBuilder(QuotaTableUtil.QUOTA_TABLE_NAME).build()
-        .scan(scan, new AdvancedScanResultConsumer() {
-          List<QuotaSettings> settings = new ArrayList<>();
+    this.connection.getTableBuilder(QuotaTableUtil.QUOTA_TABLE_NAME).build().scan(scan,
+      new AdvancedScanResultConsumer() {
+        List<QuotaSettings> settings = new ArrayList<>();
 
-          @Override
-          public void onNext(Result[] results, ScanController controller) {
-            for (Result result : results) {
-              try {
-                QuotaTableUtil.parseResultToCollection(result, settings);
-              } catch (IOException e) {
-                controller.terminate();
-                future.completeExceptionally(e);
-              }
+        @Override
+        public void onNext(Result[] results, ScanController controller) {
+          for (Result result : results) {
+            try {
+              QuotaTableUtil.parseResultToCollection(result, settings);
+            } catch (IOException e) {
+              controller.terminate();
+              future.completeExceptionally(e);
             }
           }
+        }
 
-          @Override
-          public void onError(Throwable error) {
-            future.completeExceptionally(error);
-          }
+        @Override
+        public void onError(Throwable error) {
+          future.completeExceptionally(error);
+        }
 
-          @Override
-          public void onComplete() {
-            future.complete(settings);
-          }
-        });
+        @Override
+        public void onComplete() {
+          future.complete(settings);
+        }
+      });
     return future;
   }
 
   @Override
-  public CompletableFuture<Void> addReplicationPeer(String peerId,
-      ReplicationPeerConfig peerConfig, boolean enabled) {
+  public CompletableFuture<Void> addReplicationPeer(String peerId, ReplicationPeerConfig peerConfig,
+    boolean enabled) {
     return this.<AddReplicationPeerRequest, AddReplicationPeerResponse> procedureCall(
       RequestConverter.buildAddReplicationPeerRequest(peerId, peerConfig, enabled),
       (s, c, req, done) -> s.addReplicationPeer(c, req, done), (resp) -> resp.getProcId(),
@@ -1763,18 +1960,20 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<ReplicationPeerConfig> getReplicationPeerConfig(String peerId) {
-    return this.<ReplicationPeerConfig> newMasterCaller().action((controller, stub) -> this
-      .<GetReplicationPeerConfigRequest, GetReplicationPeerConfigResponse, ReplicationPeerConfig>
-          call(controller, stub, RequestConverter.buildGetReplicationPeerConfigRequest(peerId),
-            (s, c, req, done) -> s.getReplicationPeerConfig(c, req, done),
-            (resp) -> ReplicationPeerConfigUtil.convert(resp.getPeerConfig()))).call();
+    return this.<ReplicationPeerConfig> newMasterCaller()
+      .action((controller, stub) -> this.<GetReplicationPeerConfigRequest,
+        GetReplicationPeerConfigResponse, ReplicationPeerConfig> call(controller, stub,
+          RequestConverter.buildGetReplicationPeerConfigRequest(peerId),
+          (s, c, req, done) -> s.getReplicationPeerConfig(c, req, done),
+          (resp) -> ReplicationPeerConfigUtil.convert(resp.getPeerConfig())))
+      .call();
   }
 
   @Override
   public CompletableFuture<Void> updateReplicationPeerConfig(String peerId,
-      ReplicationPeerConfig peerConfig) {
-    return this
-      .<UpdateReplicationPeerConfigRequest, UpdateReplicationPeerConfigResponse> procedureCall(
+    ReplicationPeerConfig peerConfig) {
+    return this.<UpdateReplicationPeerConfigRequest,
+      UpdateReplicationPeerConfigResponse> procedureCall(
         RequestConverter.buildUpdateReplicationPeerConfigRequest(peerId, peerConfig),
         (s, c, req, done) -> s.updateReplicationPeerConfig(c, req, done),
         (resp) -> resp.getProcId(),
@@ -1783,24 +1982,24 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> transitReplicationPeerSyncReplicationState(String peerId,
-      SyncReplicationState clusterState) {
+    SyncReplicationState clusterState) {
     return this.<TransitReplicationPeerSyncReplicationStateRequest,
-        TransitReplicationPeerSyncReplicationStateResponse> procedureCall(
+      TransitReplicationPeerSyncReplicationStateResponse> procedureCall(
         RequestConverter.buildTransitReplicationPeerSyncReplicationStateRequest(peerId,
           clusterState),
-          (s, c, req, done) -> s.transitReplicationPeerSyncReplicationState(c, req, done),
-          (resp) -> resp.getProcId(), new ReplicationProcedureBiConsumer(peerId,
-            () -> "TRANSIT_REPLICATION_PEER_SYNCHRONOUS_REPLICATION_STATE"));
+        (s, c, req, done) -> s.transitReplicationPeerSyncReplicationState(c, req, done),
+        (resp) -> resp.getProcId(), new ReplicationProcedureBiConsumer(peerId,
+          () -> "TRANSIT_REPLICATION_PEER_SYNCHRONOUS_REPLICATION_STATE"));
   }
 
   @Override
   public CompletableFuture<Void> appendReplicationPeerTableCFs(String id,
-      Map<TableName, List<String>> tableCfs) {
+    Map<TableName, List<String>> tableCfs) {
     if (tableCfs == null) {
       return failedFuture(new ReplicationException("tableCfs is null"));
     }
 
-    CompletableFuture<Void> future = new CompletableFuture<Void>();
+    CompletableFuture<Void> future = new CompletableFuture<>();
     addListener(getReplicationPeerConfig(id), (peerConfig, error) -> {
       if (!completeExceptionally(future, error)) {
         ReplicationPeerConfig newPeerConfig =
@@ -1817,12 +2016,12 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> removeReplicationPeerTableCFs(String id,
-      Map<TableName, List<String>> tableCfs) {
+    Map<TableName, List<String>> tableCfs) {
     if (tableCfs == null) {
       return failedFuture(new ReplicationException("tableCfs is null"));
     }
 
-    CompletableFuture<Void> future = new CompletableFuture<Void>();
+    CompletableFuture<Void> future = new CompletableFuture<>();
     addListener(getReplicationPeerConfig(id), (peerConfig, error) -> {
       if (!completeExceptionally(future, error)) {
         ReplicationPeerConfig newPeerConfig = null;
@@ -1855,17 +2054,16 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     return listReplicationPeers(RequestConverter.buildListReplicationPeersRequest(pattern));
   }
 
-  private CompletableFuture<List<ReplicationPeerDescription>> listReplicationPeers(
-      ListReplicationPeersRequest request) {
-    return this
-        .<List<ReplicationPeerDescription>> newMasterCaller()
-        .action(
-          (controller, stub) -> this.<ListReplicationPeersRequest, ListReplicationPeersResponse,
-              List<ReplicationPeerDescription>> call(controller, stub, request,
-                (s, c, req, done) -> s.listReplicationPeers(c, req, done),
-                (resp) -> resp.getPeerDescList().stream()
-                    .map(ReplicationPeerConfigUtil::toReplicationPeerDescription)
-                    .collect(Collectors.toList()))).call();
+  private CompletableFuture<List<ReplicationPeerDescription>>
+    listReplicationPeers(ListReplicationPeersRequest request) {
+    return this.<List<ReplicationPeerDescription>> newMasterCaller()
+      .action((controller, stub) -> this.<ListReplicationPeersRequest, ListReplicationPeersResponse,
+        List<ReplicationPeerDescription>> call(controller, stub, request,
+          (s, c, req, done) -> s.listReplicationPeers(c, req, done),
+          (resp) -> resp.getPeerDescList().stream()
+            .map(ReplicationPeerConfigUtil::toReplicationPeerDescription)
+            .collect(Collectors.toList())))
+      .call();
   }
 
   @Override
@@ -1901,62 +2099,73 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       return failedFuture(e);
     }
     CompletableFuture<Void> future = new CompletableFuture<>();
-    final SnapshotRequest request = SnapshotRequest.newBuilder().setSnapshot(snapshot).build();
-    addListener(this.<Long> newMasterCaller()
-      .action((controller, stub) -> this.<SnapshotRequest, SnapshotResponse, Long> call(controller,
-        stub, request, (s, c, req, done) -> s.snapshot(c, req, done),
-        resp -> resp.getExpectedTimeout()))
-      .call(), (expectedTimeout, err) -> {
+    final SnapshotRequest request = SnapshotRequest.newBuilder().setSnapshot(snapshot)
+      .setNonceGroup(ng.getNonceGroup()).setNonce(ng.newNonce()).build();
+    addListener(this.<SnapshotResponse> newMasterCaller()
+      .action((controller, stub) -> this.<SnapshotRequest, SnapshotResponse, SnapshotResponse> call(
+        controller, stub, request, (s, c, req, done) -> s.snapshot(c, req, done), resp -> resp))
+      .call(), (resp, err) -> {
         if (err != null) {
           future.completeExceptionally(err);
           return;
         }
-        TimerTask pollingTask = new TimerTask() {
-          int tries = 0;
-          long startTime = EnvironmentEdgeManager.currentTime();
-          long endTime = startTime + expectedTimeout;
-          long maxPauseTime = expectedTimeout / maxAttempts;
-
-          @Override
-          public void run(Timeout timeout) throws Exception {
-            if (EnvironmentEdgeManager.currentTime() < endTime) {
-              addListener(isSnapshotFinished(snapshotDesc), (done, err2) -> {
-                if (err2 != null) {
-                  future.completeExceptionally(err2);
-                } else if (done) {
-                  future.complete(null);
-                } else {
-                  // retry again after pauseTime.
-                  long pauseTime =
-                    ConnectionUtils.getPauseTime(TimeUnit.NANOSECONDS.toMillis(pauseNs), ++tries);
-                  pauseTime = Math.min(pauseTime, maxPauseTime);
-                  AsyncConnectionImpl.RETRY_TIMER.newTimeout(this, pauseTime,
-                    TimeUnit.MILLISECONDS);
-                }
-              });
-            } else {
-              future.completeExceptionally(
-                new SnapshotCreationException("Snapshot '" + snapshot.getName() +
-                  "' wasn't completed in expectedTime:" + expectedTimeout + " ms", snapshotDesc));
-            }
-          }
-        };
-        AsyncConnectionImpl.RETRY_TIMER.newTimeout(pollingTask, 1, TimeUnit.MILLISECONDS);
+        waitSnapshotFinish(snapshotDesc, future, resp);
       });
     return future;
   }
 
+  // This is for keeping compatibility with old implementation.
+  // If there is a procId field in the response, then the snapshot will be operated with a
+  // SnapshotProcedure, otherwise the snapshot will be coordinated by zk.
+  private void waitSnapshotFinish(SnapshotDescription snapshot, CompletableFuture<Void> future,
+    SnapshotResponse resp) {
+    if (resp.hasProcId()) {
+      getProcedureResult(resp.getProcId(), src -> null, future, 0);
+      addListener(future, new SnapshotProcedureBiConsumer(snapshot.getTableName()));
+    } else {
+      long expectedTimeout = resp.getExpectedTimeout();
+      TimerTask pollingTask = new TimerTask() {
+        int tries = 0;
+        long startTime = EnvironmentEdgeManager.currentTime();
+        long endTime = startTime + expectedTimeout;
+        long maxPauseTime = expectedTimeout / maxAttempts;
+
+        @Override
+        public void run(Timeout timeout) throws Exception {
+          if (EnvironmentEdgeManager.currentTime() < endTime) {
+            addListener(isSnapshotFinished(snapshot), (done, err2) -> {
+              if (err2 != null) {
+                future.completeExceptionally(err2);
+              } else if (done) {
+                future.complete(null);
+              } else {
+                // retry again after pauseTime.
+                long pauseTime =
+                  ConnectionUtils.getPauseTime(TimeUnit.NANOSECONDS.toMillis(pauseNs), ++tries);
+                pauseTime = Math.min(pauseTime, maxPauseTime);
+                AsyncConnectionImpl.RETRY_TIMER.newTimeout(this, pauseTime, TimeUnit.MILLISECONDS);
+              }
+            });
+          } else {
+            future
+              .completeExceptionally(new SnapshotCreationException("Snapshot '" + snapshot.getName()
+                + "' wasn't completed in expectedTime:" + expectedTimeout + " ms", snapshot));
+          }
+        }
+      };
+      AsyncConnectionImpl.RETRY_TIMER.newTimeout(pollingTask, 1, TimeUnit.MILLISECONDS);
+    }
+  }
+
   @Override
   public CompletableFuture<Boolean> isSnapshotFinished(SnapshotDescription snapshot) {
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this.<IsSnapshotDoneRequest, IsSnapshotDoneResponse, Boolean> call(
-            controller,
-            stub,
-            IsSnapshotDoneRequest.newBuilder()
-                .setSnapshot(ProtobufUtil.createHBaseProtosSnapshotDesc(snapshot)).build(), (s, c,
-                req, done) -> s.isSnapshotDone(c, req, done), resp -> resp.getDone())).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<IsSnapshotDoneRequest, IsSnapshotDoneResponse,
+        Boolean> call(controller, stub,
+          IsSnapshotDoneRequest.newBuilder()
+            .setSnapshot(ProtobufUtil.createHBaseProtosSnapshotDesc(snapshot)).build(),
+          (s, c, req, done) -> s.isSnapshotDone(c, req, done), resp -> resp.getDone()))
+      .call();
   }
 
   @Override
@@ -1969,7 +2178,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> restoreSnapshot(String snapshotName, boolean takeFailSafeSnapshot,
-      boolean restoreAcl) {
+    boolean restoreAcl) {
     CompletableFuture<Void> future = new CompletableFuture<>();
     addListener(listSnapshots(Pattern.compile(snapshotName)), (snapshotDescriptions, err) -> {
       if (err != null) {
@@ -1986,8 +2195,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         }
       }
       if (tableName == null) {
-        future.completeExceptionally(new RestoreSnapshotException(
-          "Unable to find the table name for snapshot=" + snapshotName));
+        future.completeExceptionally(
+          new RestoreSnapshotException("The snapshot " + snapshotName + " does not exist."));
         return;
       }
       final TableName finalTableName = tableName;
@@ -2016,7 +2225,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<Void> restoreSnapshot(String snapshotName, TableName tableName,
-      boolean takeFailSafeSnapshot, boolean restoreAcl) {
+    boolean takeFailSafeSnapshot, boolean restoreAcl) {
     if (takeFailSafeSnapshot) {
       CompletableFuture<Void> future = new CompletableFuture<>();
       // Step.1 Take a snapshot of the current state
@@ -2037,17 +2246,26 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
             (void2, err2) -> {
               if (err2 != null) {
                 // Step.3.a Something went wrong during the restore and try to rollback.
-                addListener(
-                  internalRestoreSnapshot(failSafeSnapshotSnapshotName, tableName, restoreAcl,
-                    null),
-                  (void3, err3) -> {
+                addListener(internalRestoreSnapshot(failSafeSnapshotSnapshotName, tableName,
+                  restoreAcl, null), (void3, err3) -> {
                     if (err3 != null) {
                       future.completeExceptionally(err3);
                     } else {
-                      String msg =
-                        "Restore snapshot=" + snapshotName + " failed. Rollback to snapshot=" +
-                          failSafeSnapshotSnapshotName + " succeeded.";
-                      future.completeExceptionally(new RestoreSnapshotException(msg, err2));
+                      // If fail to restore snapshot but rollback successfully, delete the
+                      // restore-failsafe snapshot.
+                      LOG.info(
+                        "Deleting restore-failsafe snapshot: " + failSafeSnapshotSnapshotName);
+                      addListener(deleteSnapshot(failSafeSnapshotSnapshotName), (ret4, err4) -> {
+                        if (err4 != null) {
+                          LOG.error("Unable to remove the failsafe snapshot: {}",
+                            failSafeSnapshotSnapshotName, err4);
+                        }
+                        String msg =
+                          "Restore snapshot=" + snapshotName + " failed, Rollback to snapshot="
+                            + failSafeSnapshotSnapshotName + " succeeded.";
+                        LOG.error(msg);
+                        future.completeExceptionally(new RestoreSnapshotException(msg, err2));
+                      });
                     }
                   });
               } else {
@@ -2072,7 +2290,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private <T> void completeConditionalOnFuture(CompletableFuture<T> dependentFuture,
-      CompletableFuture<T> parentFuture) {
+    CompletableFuture<T> parentFuture) {
     addListener(parentFuture, (res, err) -> {
       if (err != null) {
         dependentFuture.completeExceptionally(err);
@@ -2084,7 +2302,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> cloneSnapshot(String snapshotName, TableName tableName,
-      boolean restoreAcl, String customSFT) {
+    boolean restoreAcl, String customSFT) {
     CompletableFuture<Void> future = new CompletableFuture<>();
     addListener(tableExists(tableName), (exists, err) -> {
       if (err != null) {
@@ -2100,7 +2318,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<Void> internalRestoreSnapshot(String snapshotName, TableName tableName,
-      boolean restoreAcl, String customSFT) {
+    boolean restoreAcl, String customSFT) {
     SnapshotProtos.SnapshotDescription snapshot = SnapshotProtos.SnapshotDescription.newBuilder()
       .setName(snapshotName).setTable(tableName.getNameAsString()).build();
     try {
@@ -2111,14 +2329,14 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     RestoreSnapshotRequest.Builder builder =
       RestoreSnapshotRequest.newBuilder().setSnapshot(snapshot).setNonceGroup(ng.getNonceGroup())
         .setNonce(ng.newNonce()).setRestoreACL(restoreAcl);
-    if(customSFT != null){
+    if (customSFT != null) {
       builder.setCustomSFT(customSFT);
     }
-    return waitProcedureResult(this.<Long> newMasterCaller().action((controller, stub) -> this
-      .<RestoreSnapshotRequest, RestoreSnapshotResponse, Long> call(controller, stub,
-        builder.build(),
-        (s, c, req, done) -> s.restoreSnapshot(c, req, done), (resp) -> resp.getProcId()))
-      .call());
+    return waitProcedureResult(this.<Long> newMasterCaller()
+      .action((controller, stub) -> this.<RestoreSnapshotRequest, RestoreSnapshotResponse,
+        Long> call(controller, stub, builder.build(),
+          (s, c, req, done) -> s.restoreSnapshot(c, req, done), (resp) -> resp.getProcId()))
+      .call(), result -> null);
   }
 
   @Override
@@ -2134,33 +2352,34 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<List<SnapshotDescription>> getCompletedSnapshots(Pattern pattern) {
-    return this.<List<SnapshotDescription>> newMasterCaller().action((controller, stub) -> this
-        .<GetCompletedSnapshotsRequest, GetCompletedSnapshotsResponse, List<SnapshotDescription>>
-        call(controller, stub, GetCompletedSnapshotsRequest.newBuilder().build(),
+    return this.<List<SnapshotDescription>> newMasterCaller()
+      .action((controller, stub) -> this.<GetCompletedSnapshotsRequest,
+        GetCompletedSnapshotsResponse, List<SnapshotDescription>> call(controller, stub,
+          GetCompletedSnapshotsRequest.newBuilder().build(),
           (s, c, req, done) -> s.getCompletedSnapshots(c, req, done),
           resp -> ProtobufUtil.toSnapshotDescriptionList(resp, pattern)))
-        .call();
+      .call();
   }
 
   @Override
   public CompletableFuture<List<SnapshotDescription>> listTableSnapshots(Pattern tableNamePattern) {
     Preconditions.checkNotNull(tableNamePattern, "tableNamePattern is null."
-        + " If you don't specify a tableNamePattern, use listSnapshots() instead");
+      + " If you don't specify a tableNamePattern, use listSnapshots() instead");
     return getCompletedSnapshots(tableNamePattern, null);
   }
 
   @Override
   public CompletableFuture<List<SnapshotDescription>> listTableSnapshots(Pattern tableNamePattern,
-      Pattern snapshotNamePattern) {
+    Pattern snapshotNamePattern) {
     Preconditions.checkNotNull(tableNamePattern, "tableNamePattern is null."
-        + " If you don't specify a tableNamePattern, use listSnapshots(Pattern) instead");
+      + " If you don't specify a tableNamePattern, use listSnapshots(Pattern) instead");
     Preconditions.checkNotNull(snapshotNamePattern, "snapshotNamePattern is null."
-        + " If you don't specify a snapshotNamePattern, use listTableSnapshots(Pattern) instead");
+      + " If you don't specify a snapshotNamePattern, use listTableSnapshots(Pattern) instead");
     return getCompletedSnapshots(tableNamePattern, snapshotNamePattern);
   }
 
-  private CompletableFuture<List<SnapshotDescription>> getCompletedSnapshots(
-      Pattern tableNamePattern, Pattern snapshotNamePattern) {
+  private CompletableFuture<List<SnapshotDescription>>
+    getCompletedSnapshots(Pattern tableNamePattern, Pattern snapshotNamePattern) {
     CompletableFuture<List<SnapshotDescription>> future = new CompletableFuture<>();
     addListener(listTableNames(tableNamePattern, false), (tableNames, err) -> {
       if (err != null) {
@@ -2201,29 +2420,29 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   @Override
   public CompletableFuture<Void> deleteSnapshots(Pattern snapshotNamePattern) {
     Preconditions.checkNotNull(snapshotNamePattern, "snapshotNamePattern is null."
-        + " If you don't specify a snapshotNamePattern, use deleteSnapshots() instead");
+      + " If you don't specify a snapshotNamePattern, use deleteSnapshots() instead");
     return internalDeleteSnapshots(null, snapshotNamePattern);
   }
 
   @Override
   public CompletableFuture<Void> deleteTableSnapshots(Pattern tableNamePattern) {
     Preconditions.checkNotNull(tableNamePattern, "tableNamePattern is null."
-        + " If you don't specify a tableNamePattern, use deleteSnapshots() instead");
+      + " If you don't specify a tableNamePattern, use deleteSnapshots() instead");
     return internalDeleteSnapshots(tableNamePattern, null);
   }
 
   @Override
   public CompletableFuture<Void> deleteTableSnapshots(Pattern tableNamePattern,
-      Pattern snapshotNamePattern) {
+    Pattern snapshotNamePattern) {
     Preconditions.checkNotNull(tableNamePattern, "tableNamePattern is null."
-        + " If you don't specify a tableNamePattern, use deleteSnapshots(Pattern) instead");
+      + " If you don't specify a tableNamePattern, use deleteSnapshots(Pattern) instead");
     Preconditions.checkNotNull(snapshotNamePattern, "snapshotNamePattern is null."
-        + " If you don't specify a snapshotNamePattern, use deleteSnapshots(Pattern) instead");
+      + " If you don't specify a snapshotNamePattern, use deleteSnapshots(Pattern) instead");
     return internalDeleteSnapshots(tableNamePattern, snapshotNamePattern);
   }
 
   private CompletableFuture<Void> internalDeleteSnapshots(Pattern tableNamePattern,
-      Pattern snapshotNamePattern) {
+    Pattern snapshotNamePattern) {
     CompletableFuture<List<SnapshotDescription>> listSnapshotsFuture;
     if (tableNamePattern == null) {
       listSnapshotsFuture = getCompletedSnapshots(snapshotNamePattern);
@@ -2231,7 +2450,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       listSnapshotsFuture = getCompletedSnapshots(tableNamePattern, snapshotNamePattern);
     }
     CompletableFuture<Void> future = new CompletableFuture<>();
-    addListener(listSnapshotsFuture, ((snapshotDescriptions, err) -> {
+    addListener(listSnapshotsFuture, (snapshotDescriptions, err) -> {
       if (err != null) {
         future.completeExceptionally(err);
         return;
@@ -2248,25 +2467,23 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
             future.complete(v);
           }
         });
-    }));
+    });
     return future;
   }
 
   private CompletableFuture<Void> internalDeleteSnapshot(SnapshotDescription snapshot) {
-    return this
-        .<Void> newMasterCaller()
-        .action(
-          (controller, stub) -> this.<DeleteSnapshotRequest, DeleteSnapshotResponse, Void> call(
-            controller,
-            stub,
-            DeleteSnapshotRequest.newBuilder()
-                .setSnapshot(ProtobufUtil.createHBaseProtosSnapshotDesc(snapshot)).build(), (s, c,
-                req, done) -> s.deleteSnapshot(c, req, done), resp -> null)).call();
+    return this.<Void> newMasterCaller()
+      .action((controller, stub) -> this.<DeleteSnapshotRequest, DeleteSnapshotResponse, Void> call(
+        controller, stub,
+        DeleteSnapshotRequest.newBuilder()
+          .setSnapshot(ProtobufUtil.createHBaseProtosSnapshotDesc(snapshot)).build(),
+        (s, c, req, done) -> s.deleteSnapshot(c, req, done), resp -> null))
+      .call();
   }
 
   @Override
   public CompletableFuture<Void> execProcedure(String signature, String instance,
-      Map<String, String> props) {
+    Map<String, String> props) {
     CompletableFuture<Void> future = new CompletableFuture<>();
     ProcedureDescription procDesc =
       ProtobufUtil.buildProcedureDescription(signature, instance, props);
@@ -2305,8 +2522,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
                 }
               });
             } else {
-              future.completeExceptionally(new IOException("Procedure '" + signature + " : " +
-                instance + "' wasn't completed in expectedTime:" + expectedTimeout + " ms"));
+              future.completeExceptionally(new IOException("Procedure '" + signature + " : "
+                + instance + "' wasn't completed in expectedTime:" + expectedTimeout + " ms"));
             }
           }
         };
@@ -2318,29 +2535,28 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<byte[]> execProcedureWithReturn(String signature, String instance,
-      Map<String, String> props) {
+    Map<String, String> props) {
     ProcedureDescription proDesc =
-        ProtobufUtil.buildProcedureDescription(signature, instance, props);
+      ProtobufUtil.buildProcedureDescription(signature, instance, props);
     return this.<byte[]> newMasterCaller()
-        .action(
-          (controller, stub) -> this.<ExecProcedureRequest, ExecProcedureResponse, byte[]> call(
-            controller, stub, ExecProcedureRequest.newBuilder().setProcedure(proDesc).build(),
-            (s, c, req, done) -> s.execProcedureWithRet(c, req, done),
-            resp -> resp.hasReturnData() ? resp.getReturnData().toByteArray() : null))
-        .call();
+      .action((controller, stub) -> this.<ExecProcedureRequest, ExecProcedureResponse, byte[]> call(
+        controller, stub, ExecProcedureRequest.newBuilder().setProcedure(proDesc).build(),
+        (s, c, req, done) -> s.execProcedureWithRet(c, req, done),
+        resp -> resp.hasReturnData() ? resp.getReturnData().toByteArray() : null))
+      .call();
   }
 
   @Override
   public CompletableFuture<Boolean> isProcedureFinished(String signature, String instance,
-      Map<String, String> props) {
+    Map<String, String> props) {
     ProcedureDescription proDesc =
-        ProtobufUtil.buildProcedureDescription(signature, instance, props);
+      ProtobufUtil.buildProcedureDescription(signature, instance, props);
     return this.<Boolean> newMasterCaller()
-        .action((controller, stub) -> this
-            .<IsProcedureDoneRequest, IsProcedureDoneResponse, Boolean> call(controller, stub,
-              IsProcedureDoneRequest.newBuilder().setProcedure(proDesc).build(),
-              (s, c, req, done) -> s.isProcedureDone(c, req, done), resp -> resp.getDone()))
-        .call();
+      .action(
+        (controller, stub) -> this.<IsProcedureDoneRequest, IsProcedureDoneResponse, Boolean> call(
+          controller, stub, IsProcedureDoneRequest.newBuilder().setProcedure(proDesc).build(),
+          (s, c, req, done) -> s.isProcedureDone(c, req, done), resp -> resp.getDone()))
+      .call();
   }
 
   @Override
@@ -2349,66 +2565,61 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       (controller, stub) -> this.<AbortProcedureRequest, AbortProcedureResponse, Boolean> call(
         controller, stub, AbortProcedureRequest.newBuilder().setProcId(procId).build(),
         (s, c, req, done) -> s.abortProcedure(c, req, done), resp -> resp.getIsProcedureAborted()))
-        .call();
+      .call();
   }
 
   @Override
   public CompletableFuture<String> getProcedures() {
-    return this
-        .<String> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<GetProceduresRequest, GetProceduresResponse, String> call(
-                controller, stub, GetProceduresRequest.newBuilder().build(),
-                (s, c, req, done) -> s.getProcedures(c, req, done),
-                resp -> ProtobufUtil.toProcedureJson(resp.getProcedureList()))).call();
+    return this.<String> newMasterCaller()
+      .action((controller, stub) -> this.<GetProceduresRequest, GetProceduresResponse, String> call(
+        controller, stub, GetProceduresRequest.newBuilder().build(),
+        (s, c, req, done) -> s.getProcedures(c, req, done),
+        resp -> ProtobufUtil.toProcedureJson(resp.getProcedureList())))
+      .call();
   }
 
   @Override
   public CompletableFuture<String> getLocks() {
-    return this
-        .<String> newMasterCaller()
-        .action(
-          (controller, stub) -> this.<GetLocksRequest, GetLocksResponse, String> call(
-            controller, stub, GetLocksRequest.newBuilder().build(),
-            (s, c, req, done) -> s.getLocks(c, req, done),
-            resp -> ProtobufUtil.toLockJson(resp.getLockList()))).call();
+    return this.<String> newMasterCaller()
+      .action(
+        (controller, stub) -> this.<GetLocksRequest, GetLocksResponse, String> call(controller,
+          stub, GetLocksRequest.newBuilder().build(), (s, c, req, done) -> s.getLocks(c, req, done),
+          resp -> ProtobufUtil.toLockJson(resp.getLockList())))
+      .call();
   }
 
   @Override
-  public CompletableFuture<Void> decommissionRegionServers(
-      List<ServerName> servers, boolean offload) {
+  public CompletableFuture<Void> decommissionRegionServers(List<ServerName> servers,
+    boolean offload) {
     return this.<Void> newMasterCaller()
-        .action((controller, stub) -> this
-          .<DecommissionRegionServersRequest, DecommissionRegionServersResponse, Void> call(
-            controller, stub,
-              RequestConverter.buildDecommissionRegionServersRequest(servers, offload),
-            (s, c, req, done) -> s.decommissionRegionServers(c, req, done), resp -> null))
-        .call();
+      .action((controller, stub) -> this.<DecommissionRegionServersRequest,
+        DecommissionRegionServersResponse, Void> call(controller, stub,
+          RequestConverter.buildDecommissionRegionServersRequest(servers, offload),
+          (s, c, req, done) -> s.decommissionRegionServers(c, req, done), resp -> null))
+      .call();
   }
 
   @Override
   public CompletableFuture<List<ServerName>> listDecommissionedRegionServers() {
     return this.<List<ServerName>> newMasterCaller()
-        .action((controller, stub) -> this
-          .<ListDecommissionedRegionServersRequest, ListDecommissionedRegionServersResponse,
-            List<ServerName>> call(
-              controller, stub, ListDecommissionedRegionServersRequest.newBuilder().build(),
-              (s, c, req, done) -> s.listDecommissionedRegionServers(c, req, done),
-              resp -> resp.getServerNameList().stream().map(ProtobufUtil::toServerName)
-                  .collect(Collectors.toList())))
-        .call();
+      .action((controller, stub) -> this.<ListDecommissionedRegionServersRequest,
+        ListDecommissionedRegionServersResponse, List<ServerName>> call(controller, stub,
+          ListDecommissionedRegionServersRequest.newBuilder().build(),
+          (s, c, req, done) -> s.listDecommissionedRegionServers(c, req, done),
+          resp -> resp.getServerNameList().stream().map(ProtobufUtil::toServerName)
+            .collect(Collectors.toList())))
+      .call();
   }
 
   @Override
   public CompletableFuture<Void> recommissionRegionServer(ServerName server,
-      List<byte[]> encodedRegionNames) {
+    List<byte[]> encodedRegionNames) {
     return this.<Void> newMasterCaller()
-        .action((controller, stub) ->
-            this.<RecommissionRegionServerRequest, RecommissionRegionServerResponse, Void> call(
-                controller, stub, RequestConverter.buildRecommissionRegionServerRequest(
-                    server, encodedRegionNames), (s, c, req, done) -> s.recommissionRegionServer(
-                        c, req, done), resp -> null)).call();
+      .action((controller, stub) -> this.<RecommissionRegionServerRequest,
+        RecommissionRegionServerResponse, Void> call(controller, stub,
+          RequestConverter.buildRecommissionRegionServerRequest(server, encodedRegionNames),
+          (s, c, req, done) -> s.recommissionRegionServer(c, req, done), resp -> null))
+      .call();
   }
 
   /**
@@ -2440,8 +2651,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       // it needs to throw out IllegalArgumentException in case tableName is passed in.
       RegionInfo regionInfo;
       try {
-        regionInfo = CatalogFamilyFormat.parseRegionInfoFromRegionName(
-          regionNameOrEncodedRegionName);
+        regionInfo =
+          CatalogFamilyFormat.parseRegionInfoFromRegionName(regionNameOrEncodedRegionName);
       } catch (IOException ioe) {
         return failedFuture(new IllegalArgumentException(ioe.getMessage()));
       }
@@ -2465,8 +2676,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
       if (!location.isPresent() || location.get().getRegion() == null) {
         returnedFuture.completeExceptionally(
-          new UnknownRegionException("Invalid region name or encoded region name: " +
-            Bytes.toStringBinary(regionNameOrEncodedRegionName)));
+          new UnknownRegionException("Invalid region name or encoded region name: "
+            + Bytes.toStringBinary(regionNameOrEncodedRegionName)));
       } else {
         returnedFuture.complete(location.get());
       }
@@ -2485,10 +2696,12 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       return failedFuture(new IllegalArgumentException("Passed region name can't be null"));
     }
 
-    if (Bytes.equals(regionNameOrEncodedRegionName,
-      RegionInfoBuilder.FIRST_META_REGIONINFO.getRegionName()) ||
+    if (
       Bytes.equals(regionNameOrEncodedRegionName,
-        RegionInfoBuilder.FIRST_META_REGIONINFO.getEncodedNameAsBytes())) {
+        RegionInfoBuilder.FIRST_META_REGIONINFO.getRegionName())
+        || Bytes.equals(regionNameOrEncodedRegionName,
+          RegionInfoBuilder.FIRST_META_REGIONINFO.getEncodedNameAsBytes())
+    ) {
       return CompletableFuture.completedFuture(RegionInfoBuilder.FIRST_META_REGIONINFO);
     }
 
@@ -2529,20 +2742,20 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
       if (lastKey != null && Bytes.equals(splitKey, lastKey)) {
         throw new IllegalArgumentException("All split keys must be unique, " + "found duplicate: "
-            + Bytes.toStringBinary(splitKey) + ", " + Bytes.toStringBinary(lastKey));
+          + Bytes.toStringBinary(splitKey) + ", " + Bytes.toStringBinary(lastKey));
       }
       lastKey = splitKey;
     }
   }
 
-  private static abstract class ProcedureBiConsumer implements BiConsumer<Void, Throwable> {
+  private static abstract class ProcedureBiConsumer<T> implements BiConsumer<T, Throwable> {
 
     abstract void onFinished();
 
     abstract void onError(Throwable error);
 
     @Override
-    public void accept(Void v, Throwable error) {
+    public void accept(T value, Throwable error) {
       if (error != null) {
         onError(error);
         return;
@@ -2551,7 +2764,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     }
   }
 
-  private static abstract class TableProcedureBiConsumer extends ProcedureBiConsumer {
+  private static abstract class TableProcedureBiConsumer extends ProcedureBiConsumer<Void> {
     protected final TableName tableName;
 
     TableProcedureBiConsumer(TableName tableName) {
@@ -2562,7 +2775,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
     String getDescription() {
       return "Operation: " + getOperationType() + ", " + "Table Name: "
-          + tableName.getNameWithNamespaceInclAsString();
+        + tableName.getNameWithNamespaceInclAsString();
     }
 
     @Override
@@ -2576,7 +2789,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     }
   }
 
-  private static abstract class NamespaceProcedureBiConsumer extends ProcedureBiConsumer {
+  private static abstract class NamespaceProcedureBiConsumer extends ProcedureBiConsumer<Void> {
     protected final String namespaceName;
 
     NamespaceProcedureBiConsumer(String namespaceName) {
@@ -2591,12 +2804,25 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
     @Override
     void onFinished() {
-      LOG.info(getDescription() + " completed");
+      LOG.info("{} completed", getDescription());
     }
 
     @Override
     void onError(Throwable error) {
-      LOG.info(getDescription() + " failed with " + error.getMessage());
+      LOG.info("{} failed with {}", getDescription(), error.getMessage());
+    }
+  }
+
+  private static class RestoreBackupSystemTableProcedureBiConsumer extends ProcedureBiConsumer {
+
+    @Override
+    void onFinished() {
+      LOG.info("RestoreBackupSystemTableProcedure completed");
+    }
+
+    @Override
+    void onError(Throwable error) {
+      LOG.info("RestoreBackupSystemTableProcedure failed with {}", error.getMessage());
     }
   }
 
@@ -2621,6 +2847,18 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     @Override
     String getOperationType() {
       return "MODIFY";
+    }
+  }
+
+  private static class ReopenTableRegionsProcedureBiConsumer extends TableProcedureBiConsumer {
+
+    ReopenTableRegionsProcedureBiConsumer(AsyncAdmin admin, TableName tableName) {
+      super(tableName);
+    }
+
+    @Override
+    String getOperationType() {
+      return "REOPEN_TABLE_REGIONS";
     }
   }
 
@@ -2740,6 +2978,18 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     }
   }
 
+  private static class FlushTableProcedureBiConsumer extends TableProcedureBiConsumer {
+
+    FlushTableProcedureBiConsumer(TableName tableName) {
+      super(tableName);
+    }
+
+    @Override
+    String getOperationType() {
+      return "FLUSH";
+    }
+  }
+
   private static class CreateNamespaceProcedureBiConsumer extends NamespaceProcedureBiConsumer {
 
     CreateNamespaceProcedureBiConsumer(String namespaceName) {
@@ -2800,7 +3050,30 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     }
   }
 
-  private static class ReplicationProcedureBiConsumer extends ProcedureBiConsumer {
+  private static class TruncateRegionProcedureBiConsumer extends TableProcedureBiConsumer {
+
+    TruncateRegionProcedureBiConsumer(TableName tableName) {
+      super(tableName);
+    }
+
+    @Override
+    String getOperationType() {
+      return "TRUNCATE_REGION";
+    }
+  }
+
+  private static class SnapshotProcedureBiConsumer extends TableProcedureBiConsumer {
+    SnapshotProcedureBiConsumer(TableName tableName) {
+      super(tableName);
+    }
+
+    @Override
+    String getOperationType() {
+      return "SNAPSHOT";
+    }
+  }
+
+  private static class ReplicationProcedureBiConsumer extends ProcedureBiConsumer<Void> {
     private final String peerId;
     private final Supplier<String> getOperation;
 
@@ -2815,45 +3088,66 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
     @Override
     void onFinished() {
-      LOG.info(getDescription() + " completed");
+      LOG.info("{} completed", getDescription());
     }
 
     @Override
     void onError(Throwable error) {
-      LOG.info(getDescription() + " failed with " + error.getMessage());
+      LOG.info("{} failed with {}", getDescription(), error.getMessage());
     }
   }
 
-  private CompletableFuture<Void> waitProcedureResult(CompletableFuture<Long> procFuture) {
-    CompletableFuture<Void> future = new CompletableFuture<>();
+  private static final class RollAllWALWritersBiConsumer
+    extends ProcedureBiConsumer<Map<ServerName, Long>> {
+
+    @Override
+    void onFinished() {
+      LOG.info("Rolling all WAL writers completed");
+    }
+
+    @Override
+    void onError(Throwable error) {
+      LOG.warn("Rolling all WAL writers failed with {}", error.getMessage());
+    }
+  }
+
+  private <T> CompletableFuture<T> waitProcedureResult(CompletableFuture<Long> procFuture,
+    Converter<T, ByteString> converter) {
+    CompletableFuture<T> future = new CompletableFuture<>();
     addListener(procFuture, (procId, error) -> {
       if (error != null) {
         future.completeExceptionally(error);
         return;
       }
-      getProcedureResult(procId, future, 0);
+      getProcedureResult(procId, converter, future, 0);
     });
     return future;
   }
 
-  private void getProcedureResult(long procId, CompletableFuture<Void> future, int retries) {
+  private <T> void getProcedureResult(long procId, Converter<T, ByteString> converter,
+    CompletableFuture<T> future, int retries) {
     addListener(
       this.<GetProcedureResultResponse> newMasterCaller()
-        .action((controller, stub) -> this
-          .<GetProcedureResultRequest, GetProcedureResultResponse, GetProcedureResultResponse> call(
-            controller, stub, GetProcedureResultRequest.newBuilder().setProcId(procId).build(),
+        .action((controller, stub) -> this.<GetProcedureResultRequest, GetProcedureResultResponse,
+          GetProcedureResultResponse> call(controller, stub,
+            GetProcedureResultRequest.newBuilder().setProcId(procId).build(),
             (s, c, req, done) -> s.getProcedureResult(c, req, done), (resp) -> resp))
         .call(),
       (response, error) -> {
         if (error != null) {
-          LOG.warn("failed to get the procedure result procId={}", procId,
-            ConnectionUtils.translateException(error));
-          retryTimer.newTimeout(t -> getProcedureResult(procId, future, retries + 1),
-            ConnectionUtils.getPauseTime(pauseNs, retries), TimeUnit.NANOSECONDS);
+          Throwable exc = ConnectionUtils.translateException(error);
+          if (exc instanceof DoNotRetryIOException) {
+            // stop retrying on DNRIOE
+            future.completeExceptionally(exc);
+          } else {
+            LOG.warn("failed to get the procedure result procId={}", procId, exc);
+            retryTimer.newTimeout(t -> getProcedureResult(procId, converter, future, retries + 1),
+              ConnectionUtils.getPauseTime(pauseNs, retries), TimeUnit.NANOSECONDS);
+          }
           return;
         }
         if (response.getState() == GetProcedureResultResponse.State.RUNNING) {
-          retryTimer.newTimeout(t -> getProcedureResult(procId, future, retries + 1),
+          retryTimer.newTimeout(t -> getProcedureResult(procId, converter, future, retries + 1),
             ConnectionUtils.getPauseTime(pauseNs, retries), TimeUnit.NANOSECONDS);
           return;
         }
@@ -2861,7 +3155,11 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
           IOException ioe = ForeignExceptionUtil.toIOException(response.getException());
           future.completeExceptionally(ioe);
         } else {
-          future.complete(null);
+          try {
+            future.complete(converter.convert(response.getResult()));
+          } catch (IOException e) {
+            future.completeExceptionally(e);
+          }
         }
       });
   }
@@ -2887,14 +3185,13 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<ClusterMetrics> getClusterMetrics(EnumSet<Option> options) {
-    return this
-        .<ClusterMetrics> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<GetClusterStatusRequest, GetClusterStatusResponse, ClusterMetrics> call(controller,
-                stub, RequestConverter.buildGetClusterStatusRequest(options),
-                (s, c, req, done) -> s.getClusterStatus(c, req, done),
-                resp -> ClusterMetricsBuilder.toClusterMetrics(resp.getClusterStatus()))).call();
+    return this.<ClusterMetrics> newMasterCaller()
+      .action((controller, stub) -> this.<GetClusterStatusRequest, GetClusterStatusResponse,
+        ClusterMetrics> call(controller, stub,
+          RequestConverter.buildGetClusterStatusRequest(options),
+          (s, c, req, done) -> s.getClusterStatus(c, req, done),
+          resp -> ClusterMetricsBuilder.toClusterMetrics(resp.getClusterStatus())))
+      .call();
   }
 
   @Override
@@ -2928,14 +3225,11 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> updateConfiguration(ServerName serverName) {
-    return this
-        .<Void> newAdminCaller()
-        .action(
-          (controller, stub) -> this
-              .<UpdateConfigurationRequest, UpdateConfigurationResponse, Void> adminCall(
-                controller, stub, UpdateConfigurationRequest.getDefaultInstance(),
-                (s, c, req, done) -> s.updateConfiguration(controller, req, done), resp -> null))
-        .serverName(serverName).call();
+    return this.<Void> newAdminCaller()
+      .action((controller, stub) -> this.<UpdateConfigurationRequest, UpdateConfigurationResponse,
+        Void> adminCall(controller, stub, UpdateConfigurationRequest.getDefaultInstance(),
+          (s, c, req, done) -> s.updateConfiguration(controller, req, done), resp -> null))
+      .serverName(serverName).call();
   }
 
   @Override
@@ -2968,73 +3262,79 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   @Override
   public CompletableFuture<Void> updateConfiguration(String groupName) {
     CompletableFuture<Void> future = new CompletableFuture<Void>();
-    addListener(
-      getRSGroup(groupName),
-      (rsGroupInfo, err) -> {
-        if (err != null) {
-          future.completeExceptionally(err);
-        } else if (rsGroupInfo == null) {
-          future.completeExceptionally(
-            new IllegalArgumentException("Group does not exist: " + groupName));
-        } else {
-          addListener(getClusterMetrics(EnumSet.of(Option.SERVERS_NAME)), (status, err2) -> {
-            if (err2 != null) {
-              future.completeExceptionally(err2);
-            } else {
-              List<CompletableFuture<Void>> futures = new ArrayList<>();
-              List<ServerName> groupServers = status.getServersName().stream().filter(
-                s -> rsGroupInfo.containsServer(s.getAddress())).collect(Collectors.toList());
-              groupServers.forEach(server -> futures.add(updateConfiguration(server)));
-              addListener(
-                CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[futures.size()])),
-                (result, err3) -> {
-                  if (err3 != null) {
-                    future.completeExceptionally(err3);
-                  } else {
-                    future.complete(result);
-                  }
-                });
-            }
-          });
-        }
-      });
+    addListener(getRSGroup(groupName), (rsGroupInfo, err) -> {
+      if (err != null) {
+        future.completeExceptionally(err);
+      } else if (rsGroupInfo == null) {
+        future.completeExceptionally(
+          new IllegalArgumentException("Group does not exist: " + groupName));
+      } else {
+        addListener(getClusterMetrics(EnumSet.of(Option.SERVERS_NAME)), (status, err2) -> {
+          if (err2 != null) {
+            future.completeExceptionally(err2);
+          } else {
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            List<ServerName> groupServers = status.getServersName().stream()
+              .filter(s -> rsGroupInfo.containsServer(s.getAddress())).collect(Collectors.toList());
+            groupServers.forEach(server -> futures.add(updateConfiguration(server)));
+            addListener(
+              CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[futures.size()])),
+              (result, err3) -> {
+                if (err3 != null) {
+                  future.completeExceptionally(err3);
+                } else {
+                  future.complete(result);
+                }
+              });
+          }
+        });
+      }
+    });
     return future;
   }
 
   @Override
   public CompletableFuture<Void> rollWALWriter(ServerName serverName) {
+    return this.<Void> newAdminCaller()
+      .action((controller, stub) -> this.<RollWALWriterRequest, RollWALWriterResponse,
+        Void> adminCall(controller, stub, RequestConverter.buildRollWALWriterRequest(),
+          (s, c, req, done) -> s.rollWALWriter(controller, req, done), resp -> null))
+      .serverName(serverName).call();
+  }
+
+  @Override
+  public CompletableFuture<Map<ServerName, Long>> rollAllWALWriters() {
     return this
-        .<Void> newAdminCaller()
-        .action(
-          (controller, stub) -> this.<RollWALWriterRequest, RollWALWriterResponse, Void> adminCall(
-            controller, stub, RequestConverter.buildRollWALWriterRequest(),
-            (s, c, req, done) -> s.rollWALWriter(controller, req, done), resp -> null))
-        .serverName(serverName).call();
+      .<RollAllWALWritersRequest, RollAllWALWritersResponse,
+        Map<ServerName,
+          Long>> procedureCall(
+            RequestConverter.buildRollAllWALWritersRequest(ng.getNonceGroup(), ng.newNonce()),
+            (s, c, req, done) -> s.rollAllWALWriters(c, req, done), resp -> resp.getProcId(),
+            result -> LastHighestWalFilenum.parseFrom(result.toByteArray()).getFileNumMap()
+              .entrySet().stream().collect(Collectors
+                .toUnmodifiableMap(e -> ServerName.valueOf(e.getKey()), Map.Entry::getValue)),
+            new RollAllWALWritersBiConsumer());
   }
 
   @Override
   public CompletableFuture<Void> clearCompactionQueues(ServerName serverName, Set<String> queues) {
-    return this
-        .<Void> newAdminCaller()
-        .action(
-          (controller, stub) -> this
-              .<ClearCompactionQueuesRequest, ClearCompactionQueuesResponse, Void> adminCall(
-                controller, stub, RequestConverter.buildClearCompactionQueuesRequest(queues), (s,
-                    c, req, done) -> s.clearCompactionQueues(controller, req, done), resp -> null))
-        .serverName(serverName).call();
+    return this.<Void> newAdminCaller()
+      .action((controller, stub) -> this.<ClearCompactionQueuesRequest,
+        ClearCompactionQueuesResponse, Void> adminCall(controller, stub,
+          RequestConverter.buildClearCompactionQueuesRequest(queues),
+          (s, c, req, done) -> s.clearCompactionQueues(controller, req, done), resp -> null))
+      .serverName(serverName).call();
   }
 
   @Override
   public CompletableFuture<List<SecurityCapability>> getSecurityCapabilities() {
-    return this
-        .<List<SecurityCapability>> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<SecurityCapabilitiesRequest, SecurityCapabilitiesResponse, List<SecurityCapability>>
-                  call(controller, stub, SecurityCapabilitiesRequest.newBuilder().build(),
-                    (s, c, req, done) -> s.getSecurityCapabilities(c, req, done),
-                    (resp) -> ProtobufUtil.toSecurityCapabilityList(resp.getCapabilitiesList())))
-        .call();
+    return this.<List<SecurityCapability>> newMasterCaller()
+      .action((controller, stub) -> this.<SecurityCapabilitiesRequest, SecurityCapabilitiesResponse,
+        List<SecurityCapability>> call(controller, stub,
+          SecurityCapabilitiesRequest.newBuilder().build(),
+          (s, c, req, done) -> s.getSecurityCapabilities(c, req, done),
+          (resp) -> ProtobufUtil.toSecurityCapabilityList(resp.getCapabilitiesList())))
+      .call();
   }
 
   @Override
@@ -3044,37 +3344,35 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<List<RegionMetrics>> getRegionMetrics(ServerName serverName,
-      TableName tableName) {
+    TableName tableName) {
     Preconditions.checkNotNull(tableName,
       "tableName is null. If you don't specify a tableName, use getRegionLoads() instead");
     return getRegionMetrics(RequestConverter.buildGetRegionLoadRequest(tableName), serverName);
   }
 
   private CompletableFuture<List<RegionMetrics>> getRegionMetrics(GetRegionLoadRequest request,
-      ServerName serverName) {
+    ServerName serverName) {
     return this.<List<RegionMetrics>> newAdminCaller()
-        .action((controller, stub) -> this
-            .<GetRegionLoadRequest, GetRegionLoadResponse, List<RegionMetrics>>
-              adminCall(controller, stub, request, (s, c, req, done) ->
-                s.getRegionLoad(controller, req, done), RegionMetricsBuilder::toRegionMetrics))
-        .serverName(serverName).call();
+      .action((controller, stub) -> this.<GetRegionLoadRequest, GetRegionLoadResponse,
+        List<RegionMetrics>> adminCall(controller, stub, request,
+          (s, c, req, done) -> s.getRegionLoad(controller, req, done),
+          RegionMetricsBuilder::toRegionMetrics))
+      .serverName(serverName).call();
   }
 
   @Override
   public CompletableFuture<Boolean> isMasterInMaintenanceMode() {
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<IsInMaintenanceModeRequest, IsInMaintenanceModeResponse, Boolean> call(controller,
-                stub, IsInMaintenanceModeRequest.newBuilder().build(),
-                (s, c, req, done) -> s.isMasterInMaintenanceMode(c, req, done),
-                resp -> resp.getInMaintenanceMode())).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<IsInMaintenanceModeRequest, IsInMaintenanceModeResponse,
+        Boolean> call(controller, stub, IsInMaintenanceModeRequest.newBuilder().build(),
+          (s, c, req, done) -> s.isMasterInMaintenanceMode(c, req, done),
+          resp -> resp.getInMaintenanceMode()))
+      .call();
   }
 
   @Override
   public CompletableFuture<CompactionState> getCompactionState(TableName tableName,
-      CompactType compactType) {
+    CompactType compactType) {
     CompletableFuture<CompactionState> future = new CompletableFuture<>();
 
     switch (compactType) {
@@ -3087,9 +3385,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
           RegionInfo regionInfo = RegionInfo.createMobRegionInfo(tableName);
 
           addListener(this.<GetRegionInfoResponse> newAdminCaller().serverName(serverName)
-            .action((controller, stub) -> this
-              .<GetRegionInfoRequest, GetRegionInfoResponse, GetRegionInfoResponse> adminCall(
-                controller, stub,
+            .action((controller, stub) -> this.<GetRegionInfoRequest, GetRegionInfoResponse,
+              GetRegionInfoResponse> adminCall(controller, stub,
                 RequestConverter.buildGetRegionInfoRequest(regionInfo.getRegionName(), true),
                 (s, c, req, done) -> s.getRegionInfo(controller, req, done), resp -> resp))
             .call(), (resp2, err2) -> {
@@ -3184,9 +3481,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
       addListener(
         this.<GetRegionInfoResponse> newAdminCaller()
-          .action((controller, stub) -> this
-            .<GetRegionInfoRequest, GetRegionInfoResponse, GetRegionInfoResponse> adminCall(
-              controller, stub,
+          .action((controller, stub) -> this.<GetRegionInfoRequest, GetRegionInfoResponse,
+            GetRegionInfoResponse> adminCall(controller, stub,
               RequestConverter.buildGetRegionInfoRequest(location.getRegion().getRegionName(),
                 true),
               (s, c, req, done) -> s.getRegionInfo(controller, req, done), resp -> resp))
@@ -3208,18 +3504,19 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Optional<Long>> getLastMajorCompactionTimestamp(TableName tableName) {
-    MajorCompactionTimestampRequest request =
-        MajorCompactionTimestampRequest.newBuilder()
-            .setTableName(ProtobufUtil.toProtoTableName(tableName)).build();
-    return this.<Optional<Long>> newMasterCaller().action((controller, stub) ->
-        this.<MajorCompactionTimestampRequest, MajorCompactionTimestampResponse, Optional<Long>>
-            call(controller, stub, request, (s, c, req, done) -> s.getLastMajorCompactionTimestamp(
-                c, req, done), ProtobufUtil::toOptionalTimestamp)).call();
+    MajorCompactionTimestampRequest request = MajorCompactionTimestampRequest.newBuilder()
+      .setTableName(ProtobufUtil.toProtoTableName(tableName)).build();
+    return this.<Optional<Long>> newMasterCaller()
+      .action((controller, stub) -> this.<MajorCompactionTimestampRequest,
+        MajorCompactionTimestampResponse, Optional<Long>> call(controller, stub, request,
+          (s, c, req, done) -> s.getLastMajorCompactionTimestamp(c, req, done),
+          ProtobufUtil::toOptionalTimestamp))
+      .call();
   }
 
   @Override
-  public CompletableFuture<Optional<Long>> getLastMajorCompactionTimestampForRegion(
-      byte[] regionName) {
+  public CompletableFuture<Optional<Long>>
+    getLastMajorCompactionTimestampForRegion(byte[] regionName) {
     CompletableFuture<Optional<Long>> future = new CompletableFuture<>();
     // regionName may be a full region name or encoded region name, so getRegionInfo(byte[]) first
     addListener(getRegionInfo(regionName), (region, err) -> {
@@ -3231,12 +3528,11 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         MajorCompactionTimestampForRegionRequest.newBuilder();
       builder.setRegion(
         RequestConverter.buildRegionSpecifier(RegionSpecifierType.REGION_NAME, regionName));
-      addListener(this.<Optional<Long>> newMasterCaller().action((controller, stub) -> this
-        .<MajorCompactionTimestampForRegionRequest,
-        MajorCompactionTimestampResponse, Optional<Long>> call(
-          controller, stub, builder.build(),
-          (s, c, req, done) -> s.getLastMajorCompactionTimestampForRegion(c, req, done),
-          ProtobufUtil::toOptionalTimestamp))
+      addListener(this.<Optional<Long>> newMasterCaller()
+        .action((controller, stub) -> this.<MajorCompactionTimestampForRegionRequest,
+          MajorCompactionTimestampResponse, Optional<Long>> call(controller, stub, builder.build(),
+            (s, c, req, done) -> s.getLastMajorCompactionTimestampForRegion(c, req, done),
+            ProtobufUtil::toOptionalTimestamp))
         .call(), (timestamp, err2) -> {
           if (err2 != null) {
             future.completeExceptionally(err2);
@@ -3250,7 +3546,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Map<ServerName, Boolean>> compactionSwitch(boolean switchState,
-      List<String> serverNamesList) {
+    List<String> serverNamesList) {
     CompletableFuture<Map<ServerName, Boolean>> future = new CompletableFuture<>();
     addListener(getRegionServerList(serverNamesList), (serverNames, err) -> {
       if (err != null) {
@@ -3320,20 +3616,19 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<Boolean> switchCompact(ServerName serverName, boolean onOrOff) {
-    return this
-        .<Boolean>newAdminCaller()
-        .serverName(serverName)
-        .action((controller, stub) -> this.<CompactionSwitchRequest, CompactionSwitchResponse,
-            Boolean>adminCall(controller, stub,
-            CompactionSwitchRequest.newBuilder().setEnabled(onOrOff).build(), (s, c, req, done) ->
-            s.compactionSwitch(c, req, done), resp -> resp.getPrevState())).call();
+    return this.<Boolean> newAdminCaller().serverName(serverName)
+      .action((controller, stub) -> this.<CompactionSwitchRequest, CompactionSwitchResponse,
+        Boolean> adminCall(controller, stub,
+          CompactionSwitchRequest.newBuilder().setEnabled(onOrOff).build(),
+          (s, c, req, done) -> s.compactionSwitch(c, req, done), resp -> resp.getPrevState()))
+      .call();
   }
 
   @Override
   public CompletableFuture<Boolean> balancerSwitch(boolean on, boolean drainRITs) {
     return this.<Boolean> newMasterCaller()
-      .action((controller, stub) -> this
-        .<SetBalancerRunningRequest, SetBalancerRunningResponse, Boolean> call(controller, stub,
+      .action((controller, stub) -> this.<SetBalancerRunningRequest, SetBalancerRunningResponse,
+        Boolean> call(controller, stub,
           RequestConverter.buildSetBalancerRunningRequest(on, drainRITs),
           (s, c, req, done) -> s.setBalancerRunning(c, req, done),
           (resp) -> resp.getPrevBalanceValue()))
@@ -3342,47 +3637,40 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<BalanceResponse> balance(BalanceRequest request) {
-    return this
-        .<BalanceResponse> newMasterCaller()
-        .action(
-          (controller, stub) -> this.<MasterProtos.BalanceRequest, MasterProtos.BalanceResponse, BalanceResponse> call(controller,
-            stub, ProtobufUtil.toBalanceRequest(request),
-            (s, c, req, done) -> s.balance(c, req, done), (resp) -> ProtobufUtil.toBalanceResponse(resp))).call();
+    return this.<BalanceResponse> newMasterCaller()
+      .action((controller, stub) -> this.<MasterProtos.BalanceRequest, MasterProtos.BalanceResponse,
+        BalanceResponse> call(controller, stub, ProtobufUtil.toBalanceRequest(request),
+          (s, c, req, done) -> s.balance(c, req, done),
+          (resp) -> ProtobufUtil.toBalanceResponse(resp)))
+      .call();
   }
-
 
   @Override
   public CompletableFuture<Boolean> isBalancerEnabled() {
-    return this
-        .<Boolean> newMasterCaller()
-        .action((controller, stub) ->
-              this.<IsBalancerEnabledRequest, IsBalancerEnabledResponse, Boolean> call(controller,
-            stub, RequestConverter.buildIsBalancerEnabledRequest(), (s, c, req, done)
-                  -> s.isBalancerEnabled(c, req, done), (resp) -> resp.getEnabled())).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<IsBalancerEnabledRequest, IsBalancerEnabledResponse,
+        Boolean> call(controller, stub, RequestConverter.buildIsBalancerEnabledRequest(),
+          (s, c, req, done) -> s.isBalancerEnabled(c, req, done), (resp) -> resp.getEnabled()))
+      .call();
   }
 
   @Override
   public CompletableFuture<Boolean> normalizerSwitch(boolean on) {
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<SetNormalizerRunningRequest, SetNormalizerRunningResponse, Boolean> call(
-                controller, stub, RequestConverter.buildSetNormalizerRunningRequest(on), (s, c,
-                    req, done) -> s.setNormalizerRunning(c, req, done), (resp) -> resp
-                    .getPrevNormalizerValue())).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<SetNormalizerRunningRequest, SetNormalizerRunningResponse,
+        Boolean> call(controller, stub, RequestConverter.buildSetNormalizerRunningRequest(on),
+          (s, c, req, done) -> s.setNormalizerRunning(c, req, done),
+          (resp) -> resp.getPrevNormalizerValue()))
+      .call();
   }
 
   @Override
   public CompletableFuture<Boolean> isNormalizerEnabled() {
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<IsNormalizerEnabledRequest, IsNormalizerEnabledResponse, Boolean> call(controller,
-                stub, RequestConverter.buildIsNormalizerEnabledRequest(),
-                (s, c, req, done) -> s.isNormalizerEnabled(c, req, done),
-                (resp) -> resp.getEnabled())).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<IsNormalizerEnabledRequest, IsNormalizerEnabledResponse,
+        Boolean> call(controller, stub, RequestConverter.buildIsNormalizerEnabledRequest(),
+          (s, c, req, done) -> s.isNormalizerEnabled(c, req, done), (resp) -> resp.getEnabled()))
+      .call();
   }
 
   @Override
@@ -3391,91 +3679,74 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<Boolean> normalize(NormalizeRequest request) {
-    return this
-      .<Boolean> newMasterCaller()
-      .action(
-        (controller, stub) -> this.call(
-          controller, stub, request, MasterService.Interface::normalize,
-          NormalizeResponse::getNormalizerRan))
-      .call();
+    return this.<Boolean> newMasterCaller().action((controller, stub) -> this.call(controller, stub,
+      request, MasterService.Interface::normalize, NormalizeResponse::getNormalizerRan)).call();
   }
 
   @Override
   public CompletableFuture<Boolean> cleanerChoreSwitch(boolean enabled) {
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<SetCleanerChoreRunningRequest, SetCleanerChoreRunningResponse, Boolean> call(
-                controller, stub, RequestConverter.buildSetCleanerChoreRunningRequest(enabled), (s,
-                    c, req, done) -> s.setCleanerChoreRunning(c, req, done), (resp) -> resp
-                    .getPrevValue())).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<SetCleanerChoreRunningRequest,
+        SetCleanerChoreRunningResponse, Boolean> call(controller, stub,
+          RequestConverter.buildSetCleanerChoreRunningRequest(enabled),
+          (s, c, req, done) -> s.setCleanerChoreRunning(c, req, done),
+          (resp) -> resp.getPrevValue()))
+      .call();
   }
 
   @Override
   public CompletableFuture<Boolean> isCleanerChoreEnabled() {
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<IsCleanerChoreEnabledRequest, IsCleanerChoreEnabledResponse, Boolean> call(
-                controller, stub, RequestConverter.buildIsCleanerChoreEnabledRequest(), (s, c, req,
-                    done) -> s.isCleanerChoreEnabled(c, req, done), (resp) -> resp.getValue()))
-        .call();
+    return this.<Boolean> newMasterCaller()
+      .action(
+        (controller, stub) -> this.<IsCleanerChoreEnabledRequest, IsCleanerChoreEnabledResponse,
+          Boolean> call(controller, stub, RequestConverter.buildIsCleanerChoreEnabledRequest(),
+            (s, c, req, done) -> s.isCleanerChoreEnabled(c, req, done), (resp) -> resp.getValue()))
+      .call();
   }
 
   @Override
   public CompletableFuture<Boolean> runCleanerChore() {
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<RunCleanerChoreRequest, RunCleanerChoreResponse, Boolean> call(controller, stub,
-                RequestConverter.buildRunCleanerChoreRequest(),
-                (s, c, req, done) -> s.runCleanerChore(c, req, done),
-                (resp) -> resp.getCleanerChoreRan())).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<RunCleanerChoreRequest, RunCleanerChoreResponse,
+        Boolean> call(controller, stub, RequestConverter.buildRunCleanerChoreRequest(),
+          (s, c, req, done) -> s.runCleanerChore(c, req, done),
+          (resp) -> resp.getCleanerChoreRan()))
+      .call();
   }
 
   @Override
   public CompletableFuture<Boolean> catalogJanitorSwitch(boolean enabled) {
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<EnableCatalogJanitorRequest, EnableCatalogJanitorResponse, Boolean> call(
-                controller, stub, RequestConverter.buildEnableCatalogJanitorRequest(enabled), (s,
-                    c, req, done) -> s.enableCatalogJanitor(c, req, done), (resp) -> resp
-                    .getPrevValue())).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<EnableCatalogJanitorRequest, EnableCatalogJanitorResponse,
+        Boolean> call(controller, stub, RequestConverter.buildEnableCatalogJanitorRequest(enabled),
+          (s, c, req, done) -> s.enableCatalogJanitor(c, req, done), (resp) -> resp.getPrevValue()))
+      .call();
   }
 
   @Override
   public CompletableFuture<Boolean> isCatalogJanitorEnabled() {
-    return this
-        .<Boolean> newMasterCaller()
-        .action(
-          (controller, stub) -> this
-              .<IsCatalogJanitorEnabledRequest, IsCatalogJanitorEnabledResponse, Boolean> call(
-                controller, stub, RequestConverter.buildIsCatalogJanitorEnabledRequest(), (s, c,
-                    req, done) -> s.isCatalogJanitorEnabled(c, req, done), (resp) -> resp
-                    .getValue())).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<IsCatalogJanitorEnabledRequest,
+        IsCatalogJanitorEnabledResponse, Boolean> call(controller, stub,
+          RequestConverter.buildIsCatalogJanitorEnabledRequest(),
+          (s, c, req, done) -> s.isCatalogJanitorEnabled(c, req, done), (resp) -> resp.getValue()))
+      .call();
   }
 
   @Override
   public CompletableFuture<Integer> runCatalogJanitor() {
-    return this
-        .<Integer> newMasterCaller()
-        .action(
-          (controller, stub) -> this.<RunCatalogScanRequest, RunCatalogScanResponse, Integer> call(
-            controller, stub, RequestConverter.buildCatalogScanRequest(),
-            (s, c, req, done) -> s.runCatalogScan(c, req, done), (resp) -> resp.getScanResult()))
-        .call();
+    return this.<Integer> newMasterCaller()
+      .action((controller, stub) -> this.<RunCatalogScanRequest, RunCatalogScanResponse,
+        Integer> call(controller, stub, RequestConverter.buildCatalogScanRequest(),
+          (s, c, req, done) -> s.runCatalogScan(c, req, done), (resp) -> resp.getScanResult()))
+      .call();
   }
 
   @Override
   public <S, R> CompletableFuture<R> coprocessorService(Function<RpcChannel, S> stubMaker,
-      ServiceCaller<S, R> callable) {
+    ServiceCaller<S, R> callable) {
     MasterCoprocessorRpcChannelImpl channel =
-        new MasterCoprocessorRpcChannelImpl(this.<Message> newMasterCaller());
+      new MasterCoprocessorRpcChannelImpl(this.<Message> newMasterCaller());
     S stub = stubMaker.apply(channel);
     CompletableFuture<R> future = new CompletableFuture<>();
     ClientCoprocessorRpcController controller = new ClientCoprocessorRpcController();
@@ -3491,10 +3762,9 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public <S, R> CompletableFuture<R> coprocessorService(Function<RpcChannel, S> stubMaker,
-      ServiceCaller<S, R> callable, ServerName serverName) {
-    RegionServerCoprocessorRpcChannelImpl channel =
-        new RegionServerCoprocessorRpcChannelImpl(this.<Message> newServerCaller().serverName(
-          serverName));
+    ServiceCaller<S, R> callable, ServerName serverName) {
+    RegionServerCoprocessorRpcChannelImpl channel = new RegionServerCoprocessorRpcChannelImpl(
+      this.<Message> newServerCaller().serverName(serverName));
     S stub = stubMaker.apply(channel);
     CompletableFuture<R> future = new CompletableFuture<>();
     ClientCoprocessorRpcController controller = new ClientCoprocessorRpcController();
@@ -3511,9 +3781,9 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   @Override
   public CompletableFuture<List<ServerName>> clearDeadServers(List<ServerName> servers) {
     return this.<List<ServerName>> newMasterCaller()
-      .action((controller, stub) -> this
-        .<ClearDeadServersRequest, ClearDeadServersResponse, List<ServerName>> call(
-          controller, stub, RequestConverter.buildClearDeadServersRequest(servers),
+      .action((controller, stub) -> this.<ClearDeadServersRequest, ClearDeadServersResponse,
+        List<ServerName>> call(controller, stub,
+          RequestConverter.buildClearDeadServersRequest(servers),
           (s, c, req, done) -> s.clearDeadServers(c, req, done),
           (resp) -> ProtobufUtil.toServerNameList(resp.getServerNameList())))
       .call();
@@ -3523,7 +3793,8 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
     return this.connection.callerFactory.<T> serverRequest()
       .rpcTimeout(rpcTimeoutNs, TimeUnit.NANOSECONDS)
       .operationTimeout(operationTimeoutNs, TimeUnit.NANOSECONDS)
-      .pause(pauseNs, TimeUnit.NANOSECONDS).pauseForCQTBE(pauseForCQTBENs, TimeUnit.NANOSECONDS)
+      .pause(pauseNs, TimeUnit.NANOSECONDS)
+      .pauseForServerOverloaded(pauseNsForServerOverloaded, TimeUnit.NANOSECONDS)
       .maxAttempts(maxAttempts).startLogErrorsCnt(startLogErrorsCnt);
   }
 
@@ -3625,10 +3896,10 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
    * <li>Throw an exception if the table exists on peer cluster but descriptors are not same.</li>
    * </ol>
    * @param tableName name of the table to sync to the peer
-   * @param splits table split keys
+   * @param splits    table split keys
    */
   private CompletableFuture<Void> checkAndSyncTableToPeerClusters(TableName tableName,
-      byte[][] splits) {
+    byte[][] splits) {
     CompletableFuture<Void> future = new CompletableFuture<>();
     addListener(listReplicationPeers(), (peers, err) -> {
       if (err != null) {
@@ -3659,16 +3930,18 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<Void> trySyncTableToPeerCluster(TableName tableName, byte[][] splits,
-      ReplicationPeerDescription peer) {
-    Configuration peerConf = null;
+    ReplicationPeerDescription peer) {
+    Configuration peerConf;
     try {
-      peerConf =
-        ReplicationPeerConfigUtil.getPeerClusterConfiguration(connection.getConfiguration(), peer);
+      peerConf = ReplicationPeerConfigUtil
+        .getPeerClusterConfiguration(connection.getConfiguration(), peer.getPeerConfig());
     } catch (IOException e) {
       return failedFuture(e);
     }
+    URI connectionUri =
+      ConnectionRegistryFactory.tryParseAsConnectionURI(peer.getPeerConfig().getClusterKey());
     CompletableFuture<Void> future = new CompletableFuture<>();
-    addListener(ConnectionFactory.createAsyncConnection(peerConf), (conn, err) -> {
+    addListener(ConnectionFactory.createAsyncConnection(connectionUri, peerConf), (conn, err) -> {
       if (err != null) {
         future.completeExceptionally(err);
         return;
@@ -3715,7 +3988,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<Void> compareTableWithPeerCluster(TableName tableName,
-      TableDescriptor tableDesc, ReplicationPeerDescription peer, AsyncAdmin peerAdmin) {
+    TableDescriptor tableDesc, ReplicationPeerDescription peer, AsyncAdmin peerAdmin) {
     CompletableFuture<Void> future = new CompletableFuture<>();
     addListener(peerAdmin.getDescriptor(tableName), (peerTableDesc, err) -> {
       if (err != null) {
@@ -3724,15 +3997,15 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
       if (peerTableDesc == null) {
         future.completeExceptionally(
-          new IllegalArgumentException("Failed to get table descriptor for table " +
-            tableName.getNameAsString() + " from peer cluster " + peer.getPeerId()));
+          new IllegalArgumentException("Failed to get table descriptor for table "
+            + tableName.getNameAsString() + " from peer cluster " + peer.getPeerId()));
         return;
       }
       if (TableDescriptor.COMPARATOR_IGNORE_REPLICATION.compare(peerTableDesc, tableDesc) != 0) {
         future.completeExceptionally(new IllegalArgumentException(
-          "Table " + tableName.getNameAsString() + " exists in peer cluster " + peer.getPeerId() +
-            ", but the table descriptors are not same when compared with source cluster." +
-            " Thus can not enable the table's replication switch."));
+          "Table " + tableName.getNameAsString() + " exists in peer cluster " + peer.getPeerId()
+            + ", but the table descriptors are not same when compared with source cluster."
+            + " Thus can not enable the table's replication switch."));
         return;
       }
       future.complete(null);
@@ -3769,6 +4042,86 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       }
     });
     return future;
+  }
+
+  @Override
+  public CompletableFuture<Boolean> isReplicationPeerEnabled(String peerId) {
+    GetReplicationPeerStateRequest.Builder request = GetReplicationPeerStateRequest.newBuilder();
+    request.setPeerId(peerId);
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<GetReplicationPeerStateRequest,
+        GetReplicationPeerStateResponse, Boolean> call(controller, stub, request.build(),
+          (s, c, req, done) -> s.isReplicationPeerEnabled(c, req, done),
+          resp -> resp.getIsEnabled()))
+      .call();
+  }
+
+  private void waitUntilAllReplicationPeerModificationProceduresDone(
+    CompletableFuture<Boolean> future, boolean prevOn, int retries) {
+    CompletableFuture<List<ProcedureProtos.Procedure>> callFuture =
+      this.<List<ProcedureProtos.Procedure>> newMasterCaller()
+        .action((controller, stub) -> this.<GetReplicationPeerModificationProceduresRequest,
+          GetReplicationPeerModificationProceduresResponse, List<ProcedureProtos.Procedure>> call(
+            controller, stub, GetReplicationPeerModificationProceduresRequest.getDefaultInstance(),
+            (s, c, req, done) -> s.getReplicationPeerModificationProcedures(c, req, done),
+            resp -> resp.getProcedureList()))
+        .call();
+    addListener(callFuture, (r, e) -> {
+      if (e != null) {
+        future.completeExceptionally(e);
+      } else if (r.isEmpty()) {
+        // we are done
+        future.complete(prevOn);
+      } else {
+        // retry later to see if the procedures are done
+        retryTimer.newTimeout(
+          t -> waitUntilAllReplicationPeerModificationProceduresDone(future, prevOn, retries + 1),
+          ConnectionUtils.getPauseTime(pauseNs, retries), TimeUnit.NANOSECONDS);
+      }
+    });
+  }
+
+  @Override
+  public CompletableFuture<Boolean> replicationPeerModificationSwitch(boolean on,
+    boolean drainProcedures) {
+    ReplicationPeerModificationSwitchRequest request =
+      ReplicationPeerModificationSwitchRequest.newBuilder().setOn(on).build();
+    CompletableFuture<Boolean> callFuture = this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<ReplicationPeerModificationSwitchRequest,
+        ReplicationPeerModificationSwitchResponse, Boolean> call(controller, stub, request,
+          (s, c, req, done) -> s.replicationPeerModificationSwitch(c, req, done),
+          resp -> resp.getPreviousValue()))
+      .call();
+    // if we do not need to wait all previous peer modification procedure done, or we are enabling
+    // peer modification, just return here.
+    if (!drainProcedures || on) {
+      return callFuture;
+    }
+    // otherwise we need to wait until all previous peer modification procedure done
+    CompletableFuture<Boolean> future = new CompletableFuture<>();
+    addListener(callFuture, (prevOn, err) -> {
+      if (err != null) {
+        future.completeExceptionally(err);
+        return;
+      }
+      // even if the previous state is disabled, we still need to wait here, as there could be
+      // another client thread which called this method just before us and have already changed the
+      // state to off, but there are still peer modification procedures not finished, so we should
+      // also wait here.
+      waitUntilAllReplicationPeerModificationProceduresDone(future, prevOn, 0);
+    });
+    return future;
+  }
+
+  @Override
+  public CompletableFuture<Boolean> isReplicationPeerModificationEnabled() {
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.<IsReplicationPeerModificationEnabledRequest,
+        IsReplicationPeerModificationEnabledResponse, Boolean> call(controller, stub,
+          IsReplicationPeerModificationEnabledRequest.getDefaultInstance(),
+          (s, c, req, done) -> s.isReplicationPeerModificationEnabled(c, req, done),
+          (resp) -> resp.getEnabled()))
+      .call();
   }
 
   @Override
@@ -3810,7 +4163,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> cloneTableSchema(TableName tableName, TableName newTableName,
-      boolean preserveSplits) {
+    boolean preserveSplits) {
     CompletableFuture<Void> future = new CompletableFuture<>();
     addListener(tableExists(tableName), (exist, err) -> {
       if (err != null) {
@@ -3868,73 +4221,71 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   }
 
   private CompletableFuture<CacheEvictionStats> clearBlockCache(ServerName serverName,
-      List<RegionInfo> hris) {
-    return this.<CacheEvictionStats> newAdminCaller().action((controller, stub) -> this
-      .<ClearRegionBlockCacheRequest, ClearRegionBlockCacheResponse, CacheEvictionStats> adminCall(
-        controller, stub, RequestConverter.buildClearRegionBlockCacheRequest(hris),
-        (s, c, req, done) -> s.clearRegionBlockCache(controller, req, done),
-        resp -> ProtobufUtil.toCacheEvictionStats(resp.getStats())))
+    List<RegionInfo> hris) {
+    return this.<CacheEvictionStats> newAdminCaller()
+      .action((controller, stub) -> this.<ClearRegionBlockCacheRequest,
+        ClearRegionBlockCacheResponse, CacheEvictionStats> adminCall(controller, stub,
+          RequestConverter.buildClearRegionBlockCacheRequest(hris),
+          (s, c, req, done) -> s.clearRegionBlockCache(controller, req, done),
+          resp -> ProtobufUtil.toCacheEvictionStats(resp.getStats())))
       .serverName(serverName).call();
   }
 
   @Override
   public CompletableFuture<Boolean> switchRpcThrottle(boolean enable) {
     CompletableFuture<Boolean> future = this.<Boolean> newMasterCaller()
-        .action((controller, stub) -> this
-            .<SwitchRpcThrottleRequest, SwitchRpcThrottleResponse, Boolean> call(controller, stub,
-              SwitchRpcThrottleRequest.newBuilder().setRpcThrottleEnabled(enable).build(),
-              (s, c, req, done) -> s.switchRpcThrottle(c, req, done),
-              resp -> resp.getPreviousRpcThrottleEnabled()))
-        .call();
+      .action((controller, stub) -> this.<SwitchRpcThrottleRequest, SwitchRpcThrottleResponse,
+        Boolean> call(controller, stub,
+          SwitchRpcThrottleRequest.newBuilder().setRpcThrottleEnabled(enable).build(),
+          (s, c, req, done) -> s.switchRpcThrottle(c, req, done),
+          resp -> resp.getPreviousRpcThrottleEnabled()))
+      .call();
     return future;
   }
 
   @Override
   public CompletableFuture<Boolean> isRpcThrottleEnabled() {
     CompletableFuture<Boolean> future = this.<Boolean> newMasterCaller()
-        .action((controller, stub) -> this
-            .<IsRpcThrottleEnabledRequest, IsRpcThrottleEnabledResponse, Boolean> call(controller,
-              stub, IsRpcThrottleEnabledRequest.newBuilder().build(),
-              (s, c, req, done) -> s.isRpcThrottleEnabled(c, req, done),
-              resp -> resp.getRpcThrottleEnabled()))
-        .call();
+      .action((controller, stub) -> this.<IsRpcThrottleEnabledRequest, IsRpcThrottleEnabledResponse,
+        Boolean> call(controller, stub, IsRpcThrottleEnabledRequest.newBuilder().build(),
+          (s, c, req, done) -> s.isRpcThrottleEnabled(c, req, done),
+          resp -> resp.getRpcThrottleEnabled()))
+      .call();
     return future;
   }
 
   @Override
   public CompletableFuture<Boolean> exceedThrottleQuotaSwitch(boolean enable) {
     CompletableFuture<Boolean> future = this.<Boolean> newMasterCaller()
-        .action((controller, stub) -> this
-            .<SwitchExceedThrottleQuotaRequest, SwitchExceedThrottleQuotaResponse, Boolean> call(
-              controller, stub,
-              SwitchExceedThrottleQuotaRequest.newBuilder().setExceedThrottleQuotaEnabled(enable)
-                  .build(),
-              (s, c, req, done) -> s.switchExceedThrottleQuota(c, req, done),
-              resp -> resp.getPreviousExceedThrottleQuotaEnabled()))
-        .call();
+      .action((controller, stub) -> this.<SwitchExceedThrottleQuotaRequest,
+        SwitchExceedThrottleQuotaResponse, Boolean> call(controller, stub,
+          SwitchExceedThrottleQuotaRequest.newBuilder().setExceedThrottleQuotaEnabled(enable)
+            .build(),
+          (s, c, req, done) -> s.switchExceedThrottleQuota(c, req, done),
+          resp -> resp.getPreviousExceedThrottleQuotaEnabled()))
+      .call();
     return future;
   }
 
   @Override
   public CompletableFuture<Map<TableName, Long>> getSpaceQuotaTableSizes() {
-    return this.<Map<TableName, Long>> newMasterCaller().action((controller, stub) -> this
-      .<GetSpaceQuotaRegionSizesRequest, GetSpaceQuotaRegionSizesResponse,
-      Map<TableName, Long>> call(controller, stub,
-        RequestConverter.buildGetSpaceQuotaRegionSizesRequest(),
-        (s, c, req, done) -> s.getSpaceQuotaRegionSizes(c, req, done),
-        resp -> resp.getSizesList().stream().collect(Collectors
-          .toMap(sizes -> ProtobufUtil.toTableName(sizes.getTableName()), RegionSizes::getSize))))
+    return this.<Map<TableName, Long>> newMasterCaller()
+      .action((controller, stub) -> this.<GetSpaceQuotaRegionSizesRequest,
+        GetSpaceQuotaRegionSizesResponse, Map<TableName, Long>> call(controller, stub,
+          RequestConverter.buildGetSpaceQuotaRegionSizesRequest(),
+          (s, c, req, done) -> s.getSpaceQuotaRegionSizes(c, req, done),
+          resp -> resp.getSizesList().stream().collect(Collectors
+            .toMap(sizes -> ProtobufUtil.toTableName(sizes.getTableName()), RegionSizes::getSize))))
       .call();
   }
 
   @Override
-  public CompletableFuture<Map<TableName, SpaceQuotaSnapshot>> getRegionServerSpaceQuotaSnapshots(
-      ServerName serverName) {
+  public CompletableFuture<Map<TableName, SpaceQuotaSnapshot>>
+    getRegionServerSpaceQuotaSnapshots(ServerName serverName) {
     return this.<Map<TableName, SpaceQuotaSnapshot>> newAdminCaller()
-      .action((controller, stub) -> this
-        .<GetSpaceQuotaSnapshotsRequest, GetSpaceQuotaSnapshotsResponse,
-        Map<TableName, SpaceQuotaSnapshot>> adminCall(controller, stub,
-          RequestConverter.buildGetSpaceQuotaSnapshotsRequest(),
+      .action((controller, stub) -> this.<GetSpaceQuotaSnapshotsRequest,
+        GetSpaceQuotaSnapshotsResponse, Map<TableName, SpaceQuotaSnapshot>> adminCall(controller,
+          stub, RequestConverter.buildGetSpaceQuotaSnapshotsRequest(),
           (s, c, req, done) -> s.getSpaceQuotaSnapshots(controller, req, done),
           resp -> resp.getSnapshotsList().stream()
             .collect(Collectors.toMap(snapshot -> ProtobufUtil.toTableName(snapshot.getTableName()),
@@ -3942,12 +4293,11 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       .serverName(serverName).call();
   }
 
-  private CompletableFuture<SpaceQuotaSnapshot> getCurrentSpaceQuotaSnapshot(
-      Converter<SpaceQuotaSnapshot, GetQuotaStatesResponse> converter) {
+  private CompletableFuture<SpaceQuotaSnapshot>
+    getCurrentSpaceQuotaSnapshot(Converter<SpaceQuotaSnapshot, GetQuotaStatesResponse> converter) {
     return this.<SpaceQuotaSnapshot> newMasterCaller()
-      .action((controller, stub) -> this
-        .<GetQuotaStatesRequest, GetQuotaStatesResponse, SpaceQuotaSnapshot> call(controller, stub,
-          RequestConverter.buildGetQuotaStatesRequest(),
+      .action((controller, stub) -> this.<GetQuotaStatesRequest, GetQuotaStatesResponse,
+        SpaceQuotaSnapshot> call(controller, stub, RequestConverter.buildGetQuotaStatesRequest(),
           (s, c, req, done) -> s.getQuotaStates(c, req, done), converter))
       .call();
   }
@@ -3969,102 +4319,103 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
 
   @Override
   public CompletableFuture<Void> grant(UserPermission userPermission,
-      boolean mergeExistingPermissions) {
+    boolean mergeExistingPermissions) {
     return this.<Void> newMasterCaller()
-        .action((controller, stub) -> this.<GrantRequest, GrantResponse, Void> call(controller,
-          stub, ShadedAccessControlUtil.buildGrantRequest(userPermission, mergeExistingPermissions),
-          (s, c, req, done) -> s.grant(c, req, done), resp -> null))
-        .call();
+      .action((controller, stub) -> this.<GrantRequest, GrantResponse, Void> call(controller, stub,
+        ShadedAccessControlUtil.buildGrantRequest(userPermission, mergeExistingPermissions),
+        (s, c, req, done) -> s.grant(c, req, done), resp -> null))
+      .call();
   }
 
   @Override
   public CompletableFuture<Void> revoke(UserPermission userPermission) {
     return this.<Void> newMasterCaller()
-        .action((controller, stub) -> this.<RevokeRequest, RevokeResponse, Void> call(controller,
-          stub, ShadedAccessControlUtil.buildRevokeRequest(userPermission),
-          (s, c, req, done) -> s.revoke(c, req, done), resp -> null))
-        .call();
+      .action((controller, stub) -> this.<RevokeRequest, RevokeResponse, Void> call(controller,
+        stub, ShadedAccessControlUtil.buildRevokeRequest(userPermission),
+        (s, c, req, done) -> s.revoke(c, req, done), resp -> null))
+      .call();
   }
 
   @Override
   public CompletableFuture<List<UserPermission>>
-      getUserPermissions(GetUserPermissionsRequest getUserPermissionsRequest) {
-    return this.<List<UserPermission>> newMasterCaller().action((controller,
-        stub) -> this.<AccessControlProtos.GetUserPermissionsRequest, GetUserPermissionsResponse,
-            List<UserPermission>> call(controller, stub,
-              ShadedAccessControlUtil.buildGetUserPermissionsRequest(getUserPermissionsRequest),
-              (s, c, req, done) -> s.getUserPermissions(c, req, done),
-              resp -> resp.getUserPermissionList().stream()
-                .map(uPerm -> ShadedAccessControlUtil.toUserPermission(uPerm))
-                .collect(Collectors.toList())))
-        .call();
+    getUserPermissions(GetUserPermissionsRequest getUserPermissionsRequest) {
+    return this.<List<UserPermission>> newMasterCaller()
+      .action((controller, stub) -> this.<AccessControlProtos.GetUserPermissionsRequest,
+        GetUserPermissionsResponse, List<UserPermission>> call(controller, stub,
+          ShadedAccessControlUtil.buildGetUserPermissionsRequest(getUserPermissionsRequest),
+          (s, c, req, done) -> s.getUserPermissions(c, req, done),
+          resp -> resp.getUserPermissionList().stream()
+            .map(uPerm -> ShadedAccessControlUtil.toUserPermission(uPerm))
+            .collect(Collectors.toList())))
+      .call();
   }
 
   @Override
   public CompletableFuture<List<Boolean>> hasUserPermissions(String userName,
-      List<Permission> permissions) {
+    List<Permission> permissions) {
     return this.<List<Boolean>> newMasterCaller()
-        .action((controller, stub) -> this
-            .<HasUserPermissionsRequest, HasUserPermissionsResponse, List<Boolean>> call(controller,
-              stub, ShadedAccessControlUtil.buildHasUserPermissionsRequest(userName, permissions),
-              (s, c, req, done) -> s.hasUserPermissions(c, req, done),
-              resp -> resp.getHasUserPermissionList()))
-        .call();
+      .action((controller, stub) -> this.<HasUserPermissionsRequest, HasUserPermissionsResponse,
+        List<Boolean>> call(controller, stub,
+          ShadedAccessControlUtil.buildHasUserPermissionsRequest(userName, permissions),
+          (s, c, req, done) -> s.hasUserPermissions(c, req, done),
+          resp -> resp.getHasUserPermissionList()))
+      .call();
   }
 
   @Override
-  public CompletableFuture<Boolean> snapshotCleanupSwitch(final boolean on,
-      final boolean sync) {
-    return this.<Boolean>newMasterCaller().action((controller, stub) -> this
-        .call(controller, stub, RequestConverter.buildSetSnapshotCleanupRequest(on, sync),
-            MasterService.Interface::switchSnapshotCleanup,
-            SetSnapshotCleanupResponse::getPrevSnapshotCleanup)).call();
+  public CompletableFuture<Boolean> snapshotCleanupSwitch(final boolean on, final boolean sync) {
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.call(controller, stub,
+        RequestConverter.buildSetSnapshotCleanupRequest(on, sync),
+        MasterService.Interface::switchSnapshotCleanup,
+        SetSnapshotCleanupResponse::getPrevSnapshotCleanup))
+      .call();
   }
 
   @Override
   public CompletableFuture<Boolean> isSnapshotCleanupEnabled() {
-    return this.<Boolean>newMasterCaller().action((controller, stub) -> this
-        .call(controller, stub, RequestConverter.buildIsSnapshotCleanupEnabledRequest(),
-            MasterService.Interface::isSnapshotCleanupEnabled,
-            IsSnapshotCleanupEnabledResponse::getEnabled)).call();
+    return this.<Boolean> newMasterCaller()
+      .action((controller, stub) -> this.call(controller, stub,
+        RequestConverter.buildIsSnapshotCleanupEnabledRequest(),
+        MasterService.Interface::isSnapshotCleanupEnabled,
+        IsSnapshotCleanupEnabledResponse::getEnabled))
+      .call();
   }
 
   @Override
   public CompletableFuture<Void> moveServersToRSGroup(Set<Address> servers, String groupName) {
     return this.<Void> newMasterCaller()
-        .action((controller, stub) -> this.
-            <MoveServersRequest, MoveServersResponse, Void> call(controller, stub,
-                RequestConverter.buildMoveServersRequest(servers, groupName),
-              (s, c, req, done) -> s.moveServers(c, req, done), resp -> null))
-        .call();
+      .action((controller, stub) -> this.<MoveServersRequest, MoveServersResponse, Void> call(
+        controller, stub, RequestConverter.buildMoveServersRequest(servers, groupName),
+        (s, c, req, done) -> s.moveServers(c, req, done), resp -> null))
+      .call();
   }
 
   @Override
   public CompletableFuture<Void> addRSGroup(String groupName) {
     return this.<Void> newMasterCaller()
-        .action(((controller, stub) -> this.
-            <AddRSGroupRequest, AddRSGroupResponse, Void> call(controller, stub,
-                AddRSGroupRequest.newBuilder().setRSGroupName(groupName).build(),
-              (s, c, req, done) -> s.addRSGroup(c, req, done), resp -> null)))
-        .call();
+      .action((controller, stub) -> this.<AddRSGroupRequest, AddRSGroupResponse, Void> call(
+        controller, stub, AddRSGroupRequest.newBuilder().setRSGroupName(groupName).build(),
+        (s, c, req, done) -> s.addRSGroup(c, req, done), resp -> null))
+      .call();
   }
 
   @Override
   public CompletableFuture<Void> removeRSGroup(String groupName) {
     return this.<Void> newMasterCaller()
-        .action((controller, stub) -> this.
-            <RemoveRSGroupRequest, RemoveRSGroupResponse, Void> call(controller, stub,
-                RemoveRSGroupRequest.newBuilder().setRSGroupName(groupName).build(),
-              (s, c, req, done) -> s.removeRSGroup(c, req, done), resp -> null))
-        .call();
+      .action((controller, stub) -> this.<RemoveRSGroupRequest, RemoveRSGroupResponse, Void> call(
+        controller, stub, RemoveRSGroupRequest.newBuilder().setRSGroupName(groupName).build(),
+        (s, c, req, done) -> s.removeRSGroup(c, req, done), resp -> null))
+      .call();
   }
 
   @Override
   public CompletableFuture<BalanceResponse> balanceRSGroup(String groupName,
     BalanceRequest request) {
-    return this.<BalanceResponse>newMasterCaller().action(
-        (controller, stub) -> this.<BalanceRSGroupRequest, BalanceRSGroupResponse, BalanceResponse>call(
-          controller, stub, ProtobufUtil.createBalanceRSGroupRequest(groupName, request),
+    return this.<BalanceResponse> newMasterCaller()
+      .action((controller, stub) -> this.<BalanceRSGroupRequest, BalanceRSGroupResponse,
+        BalanceResponse> call(controller, stub,
+          ProtobufUtil.createBalanceRSGroupRequest(groupName, request),
           MasterService.Interface::balanceRSGroup, ProtobufUtil::toBalanceResponse))
       .call();
   }
@@ -4072,78 +4423,67 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   @Override
   public CompletableFuture<List<RSGroupInfo>> listRSGroups() {
     return this.<List<RSGroupInfo>> newMasterCaller()
-        .action((controller, stub) -> this
-            .<ListRSGroupInfosRequest, ListRSGroupInfosResponse, List<RSGroupInfo>> call(
-                controller, stub, ListRSGroupInfosRequest.getDefaultInstance(),
-              (s, c, req, done) -> s.listRSGroupInfos(c, req, done),
-              resp -> resp.getRSGroupInfoList().stream()
-                  .map(r -> ProtobufUtil.toGroupInfo(r))
-                  .collect(Collectors.toList())))
-        .call();
+      .action((controller, stub) -> this.<ListRSGroupInfosRequest, ListRSGroupInfosResponse,
+        List<RSGroupInfo>> call(controller, stub, ListRSGroupInfosRequest.getDefaultInstance(),
+          (s, c, req, done) -> s.listRSGroupInfos(c, req, done), resp -> resp.getRSGroupInfoList()
+            .stream().map(r -> ProtobufUtil.toGroupInfo(r)).collect(Collectors.toList())))
+      .call();
   }
 
   private CompletableFuture<List<LogEntry>> getSlowLogResponses(
-      final Map<String, Object> filterParams, final Set<ServerName> serverNames, final int limit,
-      final String logType) {
+    final Map<String, Object> filterParams, final Set<ServerName> serverNames, final int limit,
+    final String logType) {
     if (CollectionUtils.isEmpty(serverNames)) {
       return CompletableFuture.completedFuture(Collections.emptyList());
     }
-    return CompletableFuture.supplyAsync(() -> serverNames.stream()
-      .map((ServerName serverName) ->
-        getSlowLogResponseFromServer(serverName, filterParams, limit, logType))
-      .map(CompletableFuture::join)
-      .flatMap(List::stream)
-      .collect(Collectors.toList()));
+    return CompletableFuture.supplyAsync(() -> serverNames
+      .stream().map((ServerName serverName) -> getSlowLogResponseFromServer(serverName,
+        filterParams, limit, logType))
+      .map(CompletableFuture::join).flatMap(List::stream).collect(Collectors.toList()));
   }
 
   private CompletableFuture<List<LogEntry>> getSlowLogResponseFromServer(ServerName serverName,
-      Map<String, Object> filterParams, int limit, String logType) {
-    return this.<List<LogEntry>>newAdminCaller().action((controller, stub) -> this
-      .adminCall(controller, stub,
+    Map<String, Object> filterParams, int limit, String logType) {
+    return this.<List<LogEntry>> newAdminCaller()
+      .action((controller, stub) -> this.adminCall(controller, stub,
         RequestConverter.buildSlowLogResponseRequest(filterParams, limit, logType),
         AdminService.Interface::getLogEntries, ProtobufUtil::toSlowLogPayloads))
       .serverName(serverName).call();
   }
 
   @Override
-  public CompletableFuture<List<Boolean>> clearSlowLogResponses(
-      @Nullable Set<ServerName> serverNames) {
+  public CompletableFuture<List<Boolean>>
+    clearSlowLogResponses(@Nullable Set<ServerName> serverNames) {
     if (CollectionUtils.isEmpty(serverNames)) {
       return CompletableFuture.completedFuture(Collections.emptyList());
     }
-    List<CompletableFuture<Boolean>> clearSlowLogResponseList = serverNames.stream()
-      .map(this::clearSlowLogsResponses)
-      .collect(Collectors.toList());
+    List<CompletableFuture<Boolean>> clearSlowLogResponseList =
+      serverNames.stream().map(this::clearSlowLogsResponses).collect(Collectors.toList());
     return convertToFutureOfList(clearSlowLogResponseList);
   }
 
   private CompletableFuture<Boolean> clearSlowLogsResponses(final ServerName serverName) {
-    return this.<Boolean>newAdminCaller()
-      .action(((controller, stub) -> this
-        .adminCall(
-          controller, stub, RequestConverter.buildClearSlowLogResponseRequest(),
-          AdminService.Interface::clearSlowLogsResponses,
-          ProtobufUtil::toClearSlowLogPayload))
-      ).serverName(serverName).call();
+    return this.<Boolean> newAdminCaller()
+      .action((controller, stub) -> this.adminCall(controller, stub,
+        RequestConverter.buildClearSlowLogResponseRequest(),
+        AdminService.Interface::clearSlowLogsResponses, ProtobufUtil::toClearSlowLogPayload))
+      .serverName(serverName).call();
   }
 
-  private static <T> CompletableFuture<List<T>> convertToFutureOfList(
-    List<CompletableFuture<T>> futures) {
+  private static <T> CompletableFuture<List<T>>
+    convertToFutureOfList(List<CompletableFuture<T>> futures) {
     CompletableFuture<Void> allDoneFuture =
       CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
-    return allDoneFuture.thenApply(v ->
-      futures.stream()
-        .map(CompletableFuture::join)
-        .collect(Collectors.toList())
-    );
+    return allDoneFuture
+      .thenApply(v -> futures.stream().map(CompletableFuture::join).collect(Collectors.toList()));
   }
 
   @Override
   public CompletableFuture<List<TableName>> listTablesInRSGroup(String groupName) {
     return this.<List<TableName>> newMasterCaller()
-      .action((controller, stub) -> this
-        .<ListTablesInRSGroupRequest, ListTablesInRSGroupResponse, List<TableName>> call(controller,
-          stub, ListTablesInRSGroupRequest.newBuilder().setGroupName(groupName).build(),
+      .action((controller, stub) -> this.<ListTablesInRSGroupRequest, ListTablesInRSGroupResponse,
+        List<TableName>> call(controller, stub,
+          ListTablesInRSGroupRequest.newBuilder().setGroupName(groupName).build(),
           (s, c, req, done) -> s.listTablesInRSGroup(c, req, done), resp -> resp.getTableNameList()
             .stream().map(ProtobufUtil::toTableName).collect(Collectors.toList())))
       .call();
@@ -4153,41 +4493,38 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
   public CompletableFuture<Pair<List<String>, List<TableName>>>
     getConfiguredNamespacesAndTablesInRSGroup(String groupName) {
     return this.<Pair<List<String>, List<TableName>>> newMasterCaller()
-      .action((controller, stub) -> this
-        .<GetConfiguredNamespacesAndTablesInRSGroupRequest,
-          GetConfiguredNamespacesAndTablesInRSGroupResponse,
-          Pair<List<String>, List<TableName>>> call(controller, stub,
+      .action((controller, stub) -> this.<GetConfiguredNamespacesAndTablesInRSGroupRequest,
+        GetConfiguredNamespacesAndTablesInRSGroupResponse,
+        Pair<List<String>, List<TableName>>> call(controller, stub,
           GetConfiguredNamespacesAndTablesInRSGroupRequest.newBuilder().setGroupName(groupName)
             .build(),
-            (s, c, req, done) -> s.getConfiguredNamespacesAndTablesInRSGroup(c, req, done),
-            resp -> Pair.newPair(resp.getNamespaceList(), resp.getTableNameList().stream()
-              .map(ProtobufUtil::toTableName).collect(Collectors.toList()))))
+          (s, c, req, done) -> s.getConfiguredNamespacesAndTablesInRSGroup(c, req, done),
+          resp -> Pair.newPair(resp.getNamespaceList(), resp.getTableNameList().stream()
+            .map(ProtobufUtil::toTableName).collect(Collectors.toList()))))
       .call();
   }
 
   @Override
   public CompletableFuture<RSGroupInfo> getRSGroup(Address hostPort) {
     return this.<RSGroupInfo> newMasterCaller()
-      .action(((controller, stub) -> this
-        .<GetRSGroupInfoOfServerRequest, GetRSGroupInfoOfServerResponse, RSGroupInfo> call(
-          controller, stub,
+      .action((controller, stub) -> this.<GetRSGroupInfoOfServerRequest,
+        GetRSGroupInfoOfServerResponse, RSGroupInfo> call(controller, stub,
           GetRSGroupInfoOfServerRequest.newBuilder()
             .setServer(HBaseProtos.ServerName.newBuilder().setHostName(hostPort.getHostname())
               .setPort(hostPort.getPort()).build())
             .build(),
           (s, c, req, done) -> s.getRSGroupInfoOfServer(c, req, done),
-          resp -> resp.hasRSGroupInfo() ? ProtobufUtil.toGroupInfo(resp.getRSGroupInfo()) : null)))
+          resp -> resp.hasRSGroupInfo() ? ProtobufUtil.toGroupInfo(resp.getRSGroupInfo()) : null))
       .call();
   }
 
   @Override
   public CompletableFuture<Void> removeServersFromRSGroup(Set<Address> servers) {
     return this.<Void> newMasterCaller()
-      .action((controller, stub) -> this.
-            <RemoveServersRequest, RemoveServersResponse, Void> call(controller, stub,
-                RequestConverter.buildRemoveServersRequest(servers),
-              (s, c, req, done) -> s.removeServers(c, req, done), resp -> null))
-        .call();
+      .action((controller, stub) -> this.<RemoveServersRequest, RemoveServersResponse, Void> call(
+        controller, stub, RequestConverter.buildRemoveServersRequest(servers),
+        (s, c, req, done) -> s.removeServers(c, req, done), resp -> null))
+      .call();
   }
 
   @Override
@@ -4205,7 +4542,7 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
         }
       });
     }
-    addListener(listTableDescriptors(new ArrayList<>(tables)), ((tableDescriptions, err) -> {
+    addListener(listTableDescriptors(new ArrayList<>(tables)), (tableDescriptions, err) -> {
       if (err != null) {
         future.completeExceptionally(err);
         return;
@@ -4217,10 +4554,11 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       List<TableDescriptor> newTableDescriptors = new ArrayList<>();
       for (TableDescriptor td : tableDescriptions) {
         newTableDescriptors
-            .add(TableDescriptorBuilder.newBuilder(td).setRegionServerGroup(groupName).build());
+          .add(TableDescriptorBuilder.newBuilder(td).setRegionServerGroup(groupName).build());
       }
-      addListener(CompletableFuture.allOf(
-        newTableDescriptors.stream().map(this::modifyTable).toArray(CompletableFuture[]::new)),
+      addListener(
+        CompletableFuture.allOf(
+          newTableDescriptors.stream().map(this::modifyTable).toArray(CompletableFuture[]::new)),
         (v, e) -> {
           if (e != null) {
             future.completeExceptionally(e);
@@ -4228,94 +4566,82 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
             future.complete(v);
           }
         });
-    }));
+    });
     return future;
   }
 
   @Override
   public CompletableFuture<RSGroupInfo> getRSGroup(TableName table) {
-    return this.<RSGroupInfo> newMasterCaller().action(((controller, stub) -> this
-      .<GetRSGroupInfoOfTableRequest, GetRSGroupInfoOfTableResponse, RSGroupInfo> call(controller,
-        stub,
-        GetRSGroupInfoOfTableRequest.newBuilder().setTableName(ProtobufUtil.toProtoTableName(table))
-          .build(),
-        (s, c, req, done) -> s.getRSGroupInfoOfTable(c, req, done),
-        resp -> resp.hasRSGroupInfo() ? ProtobufUtil.toGroupInfo(resp.getRSGroupInfo()) : null)))
+    return this.<RSGroupInfo> newMasterCaller()
+      .action((controller, stub) -> this.<GetRSGroupInfoOfTableRequest,
+        GetRSGroupInfoOfTableResponse, RSGroupInfo> call(controller, stub,
+          GetRSGroupInfoOfTableRequest.newBuilder()
+            .setTableName(ProtobufUtil.toProtoTableName(table)).build(),
+          (s, c, req, done) -> s.getRSGroupInfoOfTable(c, req, done),
+          resp -> resp.hasRSGroupInfo() ? ProtobufUtil.toGroupInfo(resp.getRSGroupInfo()) : null))
       .call();
   }
 
   @Override
   public CompletableFuture<RSGroupInfo> getRSGroup(String groupName) {
     return this.<RSGroupInfo> newMasterCaller()
-      .action(((controller, stub) -> this
-        .<GetRSGroupInfoRequest, GetRSGroupInfoResponse, RSGroupInfo> call(controller, stub,
+      .action((controller, stub) -> this.<GetRSGroupInfoRequest, GetRSGroupInfoResponse,
+        RSGroupInfo> call(controller, stub,
           GetRSGroupInfoRequest.newBuilder().setRSGroupName(groupName).build(),
           (s, c, req, done) -> s.getRSGroupInfo(c, req, done),
-          resp -> resp.hasRSGroupInfo() ? ProtobufUtil.toGroupInfo(resp.getRSGroupInfo()) : null)))
+          resp -> resp.hasRSGroupInfo() ? ProtobufUtil.toGroupInfo(resp.getRSGroupInfo()) : null))
       .call();
   }
 
   @Override
   public CompletableFuture<Void> renameRSGroup(String oldName, String newName) {
     return this.<Void> newMasterCaller()
-      .action(
-        (
-          (controller, stub) -> this.<RenameRSGroupRequest, RenameRSGroupResponse, Void> call(
-            controller,
-            stub,
-            RenameRSGroupRequest.newBuilder().setOldRsgroupName(oldName).setNewRsgroupName(newName)
-                                .build(),
-            (s, c, req, done) -> s.renameRSGroup(c, req, done),
-            resp -> null
-          )
-        )
-      ).call();
+      .action((controller, stub) -> this.<RenameRSGroupRequest, RenameRSGroupResponse, Void> call(
+        controller, stub, RenameRSGroupRequest.newBuilder().setOldRsgroupName(oldName)
+          .setNewRsgroupName(newName).build(),
+        (s, c, req, done) -> s.renameRSGroup(c, req, done), resp -> null))
+      .call();
   }
 
   @Override
-  public CompletableFuture<Void>
-    updateRSGroupConfig(String groupName, Map<String, String> configuration) {
-    UpdateRSGroupConfigRequest.Builder request = UpdateRSGroupConfigRequest.newBuilder()
-        .setGroupName(groupName);
+  public CompletableFuture<Void> updateRSGroupConfig(String groupName,
+    Map<String, String> configuration) {
+    UpdateRSGroupConfigRequest.Builder request =
+      UpdateRSGroupConfigRequest.newBuilder().setGroupName(groupName);
     if (configuration != null) {
-      configuration.entrySet().forEach(e ->
-          request.addConfiguration(NameStringPair.newBuilder().setName(e.getKey())
-              .setValue(e.getValue()).build()));
+      configuration.entrySet().forEach(e -> request.addConfiguration(
+        NameStringPair.newBuilder().setName(e.getKey()).setValue(e.getValue()).build()));
     }
     return this.<Void> newMasterCaller()
-        .action(((controller, stub) ->
-            this.<UpdateRSGroupConfigRequest, UpdateRSGroupConfigResponse, Void> call(
-                controller, stub, request.build(),
-              (s, c, req, done) -> s.updateRSGroupConfig(c, req, done), resp -> null))
-        ).call();
+      .action((controller, stub) -> this.<UpdateRSGroupConfigRequest, UpdateRSGroupConfigResponse,
+        Void> call(controller, stub, request.build(),
+          (s, c, req, done) -> s.updateRSGroupConfig(c, req, done), resp -> null))
+      .call();
   }
 
   private CompletableFuture<List<LogEntry>> getBalancerDecisions(final int limit) {
-    return this.<List<LogEntry>>newMasterCaller()
-      .action((controller, stub) ->
-        this.call(controller, stub,
-          ProtobufUtil.toBalancerDecisionRequest(limit),
-          MasterService.Interface::getLogEntries, ProtobufUtil::toBalancerDecisionResponse))
+    return this.<List<LogEntry>> newMasterCaller()
+      .action((controller, stub) -> this.call(controller, stub,
+        ProtobufUtil.toBalancerDecisionRequest(limit), MasterService.Interface::getLogEntries,
+        ProtobufUtil::toBalancerDecisionResponse))
       .call();
   }
 
   private CompletableFuture<List<LogEntry>> getBalancerRejections(final int limit) {
-    return this.<List<LogEntry>>newMasterCaller()
-      .action((controller, stub) ->
-        this.call(controller, stub,
-          ProtobufUtil.toBalancerRejectionRequest(limit),
-          MasterService.Interface::getLogEntries, ProtobufUtil::toBalancerRejectionResponse))
+    return this.<List<LogEntry>> newMasterCaller()
+      .action((controller, stub) -> this.call(controller, stub,
+        ProtobufUtil.toBalancerRejectionRequest(limit), MasterService.Interface::getLogEntries,
+        ProtobufUtil::toBalancerRejectionResponse))
       .call();
   }
 
   @Override
   public CompletableFuture<List<LogEntry>> getLogEntries(Set<ServerName> serverNames,
-      String logType, ServerType serverType, int limit,
-      Map<String, Object> filterParams) {
+    String logType, ServerType serverType, int limit, Map<String, Object> filterParams) {
     if (logType == null || serverType == null) {
       throw new IllegalArgumentException("logType and/or serverType cannot be empty");
     }
-    switch (logType){
+    switch (logType) {
       case "SLOW_LOG":
       case "LARGE_LOG":
         if (ServerType.MASTER.equals(serverType)) {
@@ -4337,5 +4663,38 @@ class RawAsyncHBaseAdmin implements AsyncAdmin {
       default:
         return CompletableFuture.completedFuture(Collections.emptyList());
     }
+  }
+
+  @Override
+  public CompletableFuture<Void> flushMasterStore() {
+    FlushMasterStoreRequest.Builder request = FlushMasterStoreRequest.newBuilder();
+    return this.<Void> newMasterCaller()
+      .action((controller, stub) -> this.<FlushMasterStoreRequest, FlushMasterStoreResponse,
+        Void> call(controller, stub, request.build(),
+          (s, c, req, done) -> s.flushMasterStore(c, req, done), resp -> null))
+      .call();
+  }
+
+  @Override
+  public CompletableFuture<List<String>> getCachedFilesList(ServerName serverName) {
+    GetCachedFilesListRequest.Builder request = GetCachedFilesListRequest.newBuilder();
+    return this.<List<String>> newAdminCaller()
+      .action((controller, stub) -> this.<GetCachedFilesListRequest, GetCachedFilesListResponse,
+        List<String>> adminCall(controller, stub, request.build(),
+          (s, c, req, done) -> s.getCachedFilesList(c, req, done),
+          resp -> resp.getCachedFilesList()))
+      .serverName(serverName).call();
+  }
+
+  @Override
+  public CompletableFuture<Void> restoreBackupSystemTable(String snapshotName) {
+    MasterProtos.RestoreBackupSystemTableRequest request =
+      MasterProtos.RestoreBackupSystemTableRequest.newBuilder().setSnapshotName(snapshotName)
+        .build();
+    return this.<MasterProtos.RestoreBackupSystemTableRequest,
+      MasterProtos.RestoreBackupSystemTableResponse> procedureCall(request,
+        MasterService.Interface::restoreBackupSystemTable,
+        MasterProtos.RestoreBackupSystemTableResponse::getProcId,
+        new RestoreBackupSystemTableProcedureBiConsumer());
   }
 }

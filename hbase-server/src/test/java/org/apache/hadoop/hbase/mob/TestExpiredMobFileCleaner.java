@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,9 +17,9 @@
  */
 package org.apache.hadoop.hbase.mob;
 
+import static org.apache.hadoop.hbase.mob.MobConstants.MOB_CLEANER_BATCH_SIZE_UPPER_BOUND;
 import static org.junit.Assert.assertEquals;
 
-import java.util.Random;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
@@ -34,6 +34,7 @@ import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.util.ToolRunner;
 import org.junit.After;
@@ -43,20 +44,24 @@ import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category(MediumTests.class)
 public class TestExpiredMobFileCleaner {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestExpiredMobFileCleaner.class);
+    HBaseClassTestRule.forClass(TestExpiredMobFileCleaner.class);
 
   private final static HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private final static TableName tableName = TableName.valueOf("TestExpiredMobFileCleaner");
   private final static String family = "family";
   private final static byte[] row1 = Bytes.toBytes("row1");
   private final static byte[] row2 = Bytes.toBytes("row2");
+  private final static byte[] row3 = Bytes.toBytes("row3");
   private final static byte[] qf = Bytes.toBytes("qf");
+  private static final Logger LOG = LoggerFactory.getLogger(TestExpiredMobFileCleaner.class);
 
   private static BufferedMutator table;
   private static Admin admin;
@@ -64,6 +69,7 @@ public class TestExpiredMobFileCleaner {
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     TEST_UTIL.getConfiguration().setInt("hfile.format.version", 3);
+    TEST_UTIL.getConfiguration().setInt(MOB_CLEANER_BATCH_SIZE_UPPER_BOUND, 2);
   }
 
   @AfterClass
@@ -86,29 +92,21 @@ public class TestExpiredMobFileCleaner {
   }
 
   private void init() throws Exception {
-    TableDescriptorBuilder tableDescriptorBuilder =
-      TableDescriptorBuilder.newBuilder(tableName);
+    TableDescriptorBuilder tableDescriptorBuilder = TableDescriptorBuilder.newBuilder(tableName);
     ColumnFamilyDescriptor columnFamilyDescriptor =
-      ColumnFamilyDescriptorBuilder
-        .newBuilder(Bytes.toBytes(family))
-        .setMobEnabled(true)
-        .setMobThreshold(3L)
-        .setMaxVersions(4)
-        .build();
+      ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes(family)).setMobEnabled(true)
+        .setMobThreshold(3L).setMaxVersions(4).build();
     tableDescriptorBuilder.setColumnFamily(columnFamilyDescriptor);
 
     admin = TEST_UTIL.getAdmin();
     admin.createTable(tableDescriptorBuilder.build());
     table = ConnectionFactory.createConnection(TEST_UTIL.getConfiguration())
-            .getBufferedMutator(tableName);
+      .getBufferedMutator(tableName);
   }
 
   private void modifyColumnExpiryDays(int expireDays) throws Exception {
-    ColumnFamilyDescriptorBuilder columnFamilyDescriptorBuilder =
-      ColumnFamilyDescriptorBuilder
-        .newBuilder(Bytes.toBytes(family))
-        .setMobEnabled(true)
-        .setMobThreshold(3L);
+    ColumnFamilyDescriptorBuilder columnFamilyDescriptorBuilder = ColumnFamilyDescriptorBuilder
+      .newBuilder(Bytes.toBytes(family)).setMobEnabled(true).setMobThreshold(3L);
     // change ttl as expire days to make some row expired
     int timeToLive = expireDays * secondsOfDay();
     columnFamilyDescriptorBuilder.setTimeToLive(timeToLive);
@@ -117,7 +115,7 @@ public class TestExpiredMobFileCleaner {
   }
 
   private void putKVAndFlush(BufferedMutator table, byte[] row, byte[] value, long ts)
-      throws Exception {
+    throws Exception {
 
     Put put = new Put(row, ts);
     put.addColumn(Bytes.toBytes(family), qf, value);
@@ -128,9 +126,9 @@ public class TestExpiredMobFileCleaner {
   }
 
   /**
-   * Creates a 3 day old hfile and an 1 day old hfile then sets expiry to 2 days.
-   * Verifies that the 3 day old hfile is removed but the 1 day one is still present
-   * after the expiry based cleaner is run.
+   * Creates a 3 day old hfile and an 1 day old hfile then sets expiry to 2 days. Verifies that the
+   * 3 day old hfile is removed but the 1 day one is still present after the expiry based cleaner is
+   * run.
    */
   @Test
   public void testCleaner() throws Exception {
@@ -141,23 +139,35 @@ public class TestExpiredMobFileCleaner {
     byte[] dummyData = makeDummyData(600);
     long ts = EnvironmentEdgeManager.currentTime() - 3 * secondsOfDay() * 1000; // 3 days before
     putKVAndFlush(table, row1, dummyData, ts);
+    LOG.info("test log to be deleted, tablename is " + tableName);
+    CommonFSUtils.logFileSystemState(TEST_UTIL.getTestFileSystem(),
+      TEST_UTIL.getDefaultRootDirPath(), LOG);
     FileStatus[] firstFiles = TEST_UTIL.getTestFileSystem().listStatus(mobDirPath);
-    //the first mob file
+    // the first mob file
     assertEquals("Before cleanup without delay 1", 1, firstFiles.length);
     String firstFile = firstFiles[0].getPath().getName();
 
-    ts = EnvironmentEdgeManager.currentTime() - 1 * secondsOfDay() * 1000; // 1 day before
+    // 1.5 day before
+    ts = (long) (EnvironmentEdgeManager.currentTime() - 1.5 * secondsOfDay() * 1000);
     putKVAndFlush(table, row2, dummyData, ts);
     FileStatus[] secondFiles = TEST_UTIL.getTestFileSystem().listStatus(mobDirPath);
-    //now there are 2 mob files
+    // now there are 2 mob files
     assertEquals("Before cleanup without delay 2", 2, secondFiles.length);
     String f1 = secondFiles[0].getPath().getName();
     String f2 = secondFiles[1].getPath().getName();
     String secondFile = f1.equals(firstFile) ? f2 : f1;
 
+    ts = EnvironmentEdgeManager.currentTime() - 4 * secondsOfDay() * 1000; // 4 days before
+    putKVAndFlush(table, row3, dummyData, ts);
+    ts = EnvironmentEdgeManager.currentTime() - 4 * secondsOfDay() * 1000; // 4 days before
+    putKVAndFlush(table, row3, dummyData, ts);
+    FileStatus[] thirdFiles = TEST_UTIL.getTestFileSystem().listStatus(mobDirPath);
+    // now there are 4 mob files
+    assertEquals("Before cleanup without delay 3", 4, thirdFiles.length);
+
     modifyColumnExpiryDays(2); // ttl = 2, make the first row expired
 
-    //run the cleaner
+    // run the cleaner
     String[] args = new String[2];
     args[0] = tableName.getNameAsString();
     args[1] = family;
@@ -165,7 +175,7 @@ public class TestExpiredMobFileCleaner {
 
     FileStatus[] filesAfterClean = TEST_UTIL.getTestFileSystem().listStatus(mobDirPath);
     String lastFile = filesAfterClean[0].getPath().getName();
-    //the first mob fie is removed
+    // there are 4 mob files in total, but only 3 need to be cleaned
     assertEquals("After cleanup without delay 1", 1, filesAfterClean.length);
     assertEquals("After cleanup without delay 2", secondFile, lastFile);
   }
@@ -175,8 +185,8 @@ public class TestExpiredMobFileCleaner {
   }
 
   private byte[] makeDummyData(int size) {
-    byte [] dummyData = new byte[size];
-    new Random().nextBytes(dummyData);
+    byte[] dummyData = new byte[size];
+    Bytes.random(dummyData);
     return dummyData;
   }
 }

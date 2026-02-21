@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,6 +21,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -44,7 +45,7 @@ public class TestBufferedMutatorParams {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestBufferedMutatorParams.class);
+    HBaseClassTestRule.forClass(TestBufferedMutatorParams.class);
 
   @Rule
   public TestName name = new TestName();
@@ -98,28 +99,26 @@ public class TestBufferedMutatorParams {
     }
 
     @Override
-    public <T> List<Future<T>> invokeAll(
-        Collection<? extends Callable<T>> tasks) throws InterruptedException {
+    public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks)
+      throws InterruptedException {
       return null;
     }
 
     @Override
-    public <T> List<Future<T>> invokeAll(
-        Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit)
-        throws InterruptedException {
+    public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks, long timeout,
+      TimeUnit unit) throws InterruptedException {
       return null;
     }
 
     @Override
     public <T> T invokeAny(Collection<? extends Callable<T>> tasks)
-        throws InterruptedException, ExecutionException {
+      throws InterruptedException, ExecutionException {
       return null;
     }
 
     @Override
-    public <T> T invokeAny(Collection<? extends Callable<T>> tasks,
-        long timeout, TimeUnit unit)
-        throws InterruptedException, ExecutionException, TimeoutException {
+    public <T> T invokeAny(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit)
+      throws InterruptedException, ExecutionException, TimeoutException {
       return null;
     }
   }
@@ -129,8 +128,8 @@ public class TestBufferedMutatorParams {
    */
   private static class MockExceptionListener implements BufferedMutator.ExceptionListener {
     @Override
-    public void onException(RetriesExhaustedWithDetailsException exception,
-        BufferedMutator mutator) throws RetriesExhaustedWithDetailsException {
+    public void onException(RetriesExhaustedWithDetailsException exception, BufferedMutator mutator)
+      throws RetriesExhaustedWithDetailsException {
     }
   }
 
@@ -141,13 +140,10 @@ public class TestBufferedMutatorParams {
     BufferedMutatorParams bmp = new BufferedMutatorParams(TableName.valueOf(tableName));
 
     BufferedMutator.ExceptionListener listener = new MockExceptionListener();
-    bmp
-            .writeBufferSize(17)
-            .setWriteBufferPeriodicFlushTimeoutMs(123)
-            .setWriteBufferPeriodicFlushTimerTickMs(456)
-            .maxKeyValueSize(13)
-            .pool(pool)
-            .listener(listener);
+    bmp.writeBufferSize(17).setWriteBufferPeriodicFlushTimeoutMs(123)
+      .setWriteBufferPeriodicFlushTimerTickMs(456).maxKeyValueSize(13).setMaxMutations(3737)
+      .setRequestAttribute("foo", "bar".getBytes(StandardCharsets.UTF_8)).pool(pool)
+      .listener(listener);
     bmp.implementationClassName("someClassName");
     BufferedMutatorParams clone = bmp.clone();
 
@@ -157,6 +153,7 @@ public class TestBufferedMutatorParams {
     assertEquals(123, clone.getWriteBufferPeriodicFlushTimeoutMs());
     assertEquals(456, clone.getWriteBufferPeriodicFlushTimerTickMs());
     assertEquals(13, clone.getMaxKeyValueSize());
+    assertEquals(3737, clone.getMaxMutations());
     assertEquals("someClassName", clone.getImplementationClassName());
 
     cloneTest(bmp, clone);
@@ -172,20 +169,20 @@ public class TestBufferedMutatorParams {
 
   /**
    * Confirm all fields are equal.
-   * @param some some instance
+   * @param some  some instance
    * @param clone a clone of that instance, but not the same instance.
    */
-  private void cloneTest(BufferedMutatorParams some,
-      BufferedMutatorParams clone) {
+  private void cloneTest(BufferedMutatorParams some, BufferedMutatorParams clone) {
     assertFalse(some == clone);
-    assertEquals(some.getTableName().toString(),
-        clone.getTableName().toString());
+    assertEquals(some.getTableName().toString(), clone.getTableName().toString());
     assertEquals(some.getWriteBufferSize(), clone.getWriteBufferSize());
     assertEquals(some.getWriteBufferPeriodicFlushTimeoutMs(),
-        clone.getWriteBufferPeriodicFlushTimeoutMs());
+      clone.getWriteBufferPeriodicFlushTimeoutMs());
     assertEquals(some.getWriteBufferPeriodicFlushTimerTickMs(),
-        clone.getWriteBufferPeriodicFlushTimerTickMs());
+      clone.getWriteBufferPeriodicFlushTimerTickMs());
     assertEquals(some.getMaxKeyValueSize(), clone.getMaxKeyValueSize());
+    assertTrue(some.getMaxMutations() == clone.getMaxMutations());
+    assertEquals(some.requestAttributes, clone.requestAttributes);
     assertTrue(some.getListener() == clone.getListener());
     assertTrue(some.getPool() == clone.getPool());
     assertEquals(some.getImplementationClassName(), clone.getImplementationClassName());

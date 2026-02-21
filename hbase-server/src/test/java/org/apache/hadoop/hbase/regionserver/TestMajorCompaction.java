@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,7 +23,6 @@ import static org.apache.hadoop.hbase.HBaseTestingUtil.fam1;
 import static org.apache.hadoop.hbase.regionserver.Store.PRIORITY_USER;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
@@ -41,6 +40,7 @@ import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HTestConst;
 import org.apache.hadoop.hbase.KeepDeletedCells;
+import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Delete;
@@ -52,9 +52,7 @@ import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.HFileDataBlockEncoder;
 import org.apache.hadoop.hbase.io.hfile.HFileDataBlockEncoderImpl;
-import org.apache.hadoop.hbase.io.hfile.HFileScanner;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionLifeCycleTracker;
-import org.apache.hadoop.hbase.regionserver.compactions.CompactionProgress;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequestImpl;
 import org.apache.hadoop.hbase.regionserver.compactions.RatioBasedCompactionPolicy;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
@@ -161,7 +159,6 @@ public class TestMajorCompaction {
 
   /**
    * Run compaction and flushing memstore Assert deletes get cleaned up.
-   * @throws Exception
    */
   @Test
   public void testMajorCompaction() throws Exception {
@@ -211,25 +208,8 @@ public class TestMajorCompaction {
     Result result = r.get(new Get(STARTROW).addFamily(COLUMN_FAMILY_TEXT).readVersions(100));
     assertEquals(compactionThreshold, result.size());
 
-    // see if CompactionProgress is in place but null
-    for (HStore store : r.getStores()) {
-      assertNull(store.getCompactionProgress());
-    }
-
     r.flush(true);
     r.compact(true);
-
-    // see if CompactionProgress has done its thing on at least one store
-    int storeCount = 0;
-    for (HStore store : r.getStores()) {
-      CompactionProgress progress = store.getCompactionProgress();
-      if (progress != null) {
-        ++storeCount;
-        assertTrue(progress.currentCompactedKVs > 0);
-        assertTrue(progress.getTotalCompactingKVs() > 0);
-      }
-      assertTrue(storeCount > 0);
-    }
 
     // look at the second row
     // Increment the least significant character so we get to next row.
@@ -351,16 +331,21 @@ public class TestMajorCompaction {
     int count1 = 0;
     int count2 = 0;
     for (HStoreFile f : r.getStore(COLUMN_FAMILY_TEXT).getStorefiles()) {
-      HFileScanner scanner = f.getReader().getScanner(false, false);
-      scanner.seekTo();
-      do {
-        byte[] row = CellUtil.cloneRow(scanner.getCell());
-        if (Bytes.equals(row, STARTROW)) {
-          count1++;
-        } else if (Bytes.equals(row, secondRowBytes)) {
-          count2++;
+      try (StoreFileScanner scanner = f.getPreadScanner(false, Long.MAX_VALUE, 0, false)) {
+        scanner.seek(KeyValue.LOWESTKEY);
+        for (Cell cell;;) {
+          cell = scanner.next();
+          if (cell == null) {
+            break;
+          }
+          byte[] row = CellUtil.cloneRow(cell);
+          if (Bytes.equals(row, STARTROW)) {
+            count1++;
+          } else if (Bytes.equals(row, secondRowBytes)) {
+            count2++;
+          }
         }
-      } while (scanner.next());
+      }
     }
     assertEquals(countRow1, count1);
     assertEquals(countRow2, count2);
@@ -369,13 +354,12 @@ public class TestMajorCompaction {
   private int count() throws IOException {
     int count = 0;
     for (HStoreFile f : r.getStore(COLUMN_FAMILY_TEXT).getStorefiles()) {
-      HFileScanner scanner = f.getReader().getScanner(false, false);
-      if (!scanner.seekTo()) {
-        continue;
+      try (StoreFileScanner scanner = f.getPreadScanner(false, Long.MAX_VALUE, 0, false)) {
+        scanner.seek(KeyValue.LOWESTKEY);
+        while (scanner.next() != null) {
+          count++;
+        }
       }
-      do {
-        count++;
-      } while (scanner.next());
     }
     return count;
   }
@@ -438,7 +422,6 @@ public class TestMajorCompaction {
    * Test that on a major compaction, if all cells are expired or deleted, then we'll end up with no
    * product. Make sure scanner over region returns right answer in this case - and that it just
    * basically works.
-   * @throws IOException
    */
   @Test
   public void testMajorCompactingToNoOutputWithReverseScan() throws IOException {

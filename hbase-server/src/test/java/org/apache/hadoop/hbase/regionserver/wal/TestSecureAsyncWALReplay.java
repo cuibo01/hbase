@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,11 +20,9 @@ package org.apache.hadoop.hbase.regionserver.wal;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.io.crypto.KeyProviderForTesting;
+import org.apache.hadoop.hbase.io.crypto.MockAesKeyProvider;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
-import org.apache.hadoop.hbase.wal.AsyncFSWALProvider.AsyncWriter;
-import org.apache.hadoop.hbase.wal.WAL.Reader;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.experimental.categories.Category;
@@ -34,17 +32,13 @@ public class TestSecureAsyncWALReplay extends TestAsyncWALReplay {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestSecureAsyncWALReplay.class);
+    HBaseClassTestRule.forClass(TestSecureAsyncWALReplay.class);
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     Configuration conf = AbstractTestWALReplay.TEST_UTIL.getConfiguration();
-    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
+    conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
     conf.set(HConstants.CRYPTO_MASTERKEY_NAME_CONF_KEY, "hbase");
-    conf.setClass("hbase.regionserver.hlog.reader.impl", SecureProtobufLogReader.class,
-      Reader.class);
-    conf.setClass("hbase.regionserver.hlog.async.writer.impl", SecureAsyncProtobufLogWriter.class,
-      AsyncWriter.class);
     conf.setBoolean(HConstants.ENABLE_WAL_ENCRYPTION, true);
     TestAsyncWALReplay.setUpBeforeClass();
   }

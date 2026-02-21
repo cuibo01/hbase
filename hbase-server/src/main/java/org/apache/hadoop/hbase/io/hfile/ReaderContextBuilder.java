@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,12 +19,15 @@ package org.apache.hadoop.hbase.io.hfile;
 
 import static org.apache.hbase.thirdparty.com.google.common.base.Preconditions.checkArgument;
 import static org.apache.hbase.thirdparty.com.google.common.base.Preconditions.checkNotNull;
+
 import java.io.IOException;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
 import org.apache.hadoop.hbase.io.hfile.ReaderContext.ReaderType;
+import org.apache.hadoop.hbase.keymeta.ManagedKeyDataCache;
+import org.apache.hadoop.hbase.keymeta.SystemKeyCache;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
@@ -39,8 +41,25 @@ public class ReaderContextBuilder {
   private HFileSystem hfs;
   private boolean primaryReplicaReader = true;
   private ReaderType type = ReaderType.PREAD;
+  private SystemKeyCache systemKeyCache;
+  private ManagedKeyDataCache managedKeyDataCache;
 
-  public ReaderContextBuilder() {}
+  public ReaderContextBuilder() {
+  }
+
+  public static ReaderContextBuilder newBuilder(ReaderContext readerContext) {
+    return new ReaderContextBuilder(readerContext);
+  }
+
+  private ReaderContextBuilder(ReaderContext readerContext) {
+    this.filePath = readerContext.getFilePath();
+    this.fsdis = readerContext.getInputStreamWrapper();
+    this.fileSize = readerContext.getFileSize();
+    this.hfs = readerContext.getFileSystem();
+    this.type = readerContext.getReaderType();
+    this.systemKeyCache = readerContext.getSystemKeyCache();
+    this.managedKeyDataCache = readerContext.getManagedKeyDataCache();
+  }
 
   public ReaderContextBuilder withFilePath(Path filePath) {
     this.filePath = filePath;
@@ -82,17 +101,26 @@ public class ReaderContextBuilder {
   }
 
   public ReaderContextBuilder withFileSystemAndPath(FileSystem fs, Path filePath)
-      throws IOException {
-    this.withFileSystem(fs)
-        .withFilePath(filePath)
-        .withFileSize(fs.getFileStatus(filePath).getLen())
-        .withInputStreamWrapper(new FSDataInputStreamWrapper(fs, filePath));
+    throws IOException {
+    this.withFileSystem(fs).withFilePath(filePath).withFileSize(fs.getFileStatus(filePath).getLen())
+      .withInputStreamWrapper(new FSDataInputStreamWrapper(fs, filePath));
+    return this;
+  }
+
+  public ReaderContextBuilder withManagedKeyDataCache(ManagedKeyDataCache managedKeyDataCache) {
+    this.managedKeyDataCache = managedKeyDataCache;
+    return this;
+  }
+
+  public ReaderContextBuilder withSystemKeyCache(SystemKeyCache systemKeyCache) {
+    this.systemKeyCache = systemKeyCache;
     return this;
   }
 
   public ReaderContext build() {
     validateFields();
-    return new ReaderContext(filePath, fsdis, fileSize, hfs, primaryReplicaReader, type);
+    return new ReaderContext(filePath, fsdis, fileSize, hfs, primaryReplicaReader, type,
+      systemKeyCache, managedKeyDataCache);
   }
 
   private void validateFields() throws IllegalArgumentException {

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.util;
 
 import org.apache.yetus.audience.InterfaceAudience;
@@ -28,6 +27,7 @@ public class Triple<A, B, C> {
   private A first;
   private B second;
   private C third;
+
   // default constructor
   public Triple() {
 
@@ -61,11 +61,11 @@ public class Triple<A, B, C> {
 
     Triple<?, ?, ?> otherTriple = (Triple<?, ?, ?>) obj;
 
-    if (first != otherTriple.first && (first != null && !(first.equals(otherTriple.first))))
+    if (first != otherTriple.first && (first != null && !first.equals(otherTriple.first)))
       return false;
-    if (second != otherTriple.second && (second != null && !(second.equals(otherTriple.second))))
+    if (second != otherTriple.second && (second != null && !second.equals(otherTriple.second)))
       return false;
-    if (third != otherTriple.third && (third != null && !(third.equals(otherTriple.third))))
+    if (third != otherTriple.third && (third != null && !third.equals(otherTriple.third)))
       return false;
 
     return true;

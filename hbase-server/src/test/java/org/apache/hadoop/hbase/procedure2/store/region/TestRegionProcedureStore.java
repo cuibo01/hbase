@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,11 +23,12 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.security.cert.X509Certificate;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-
-import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.ipc.RpcCall;
@@ -159,6 +160,7 @@ public class TestRegionProcedureStore extends RegionProcedureStoreTestBase {
     RpcServer.setCurrentCall(null);
   }
 
+  @SuppressWarnings("checkstyle:methodlength")
   private RpcCall newRpcCallWithDeadline() {
     return new RpcCall() {
       @Override
@@ -182,7 +184,7 @@ public class TestRegionProcedureStore extends RegionProcedureStoreTestBase {
       }
 
       @Override
-      public CellScanner getCellScanner() {
+      public ExtendedCellScanner getCellScanner() {
         return null;
       }
 
@@ -222,12 +224,27 @@ public class TestRegionProcedureStore extends RegionProcedureStoreTestBase {
       }
 
       @Override
+      public Map<String, byte[]> getConnectionAttributes() {
+        return null;
+      }
+
+      @Override
+      public Map<String, byte[]> getRequestAttributes() {
+        return null;
+      }
+
+      @Override
+      public byte[] getRequestAttribute(String key) {
+        return null;
+      }
+
+      @Override
       public int getRemotePort() {
         return 0;
       }
 
       @Override
-      public void setResponse(Message param, CellScanner cells, Throwable errorThrowable,
+      public void setResponse(Message param, ExtendedCellScanner cells, Throwable errorThrowable,
         String error) {
       }
 
@@ -260,6 +277,11 @@ public class TestRegionProcedureStore extends RegionProcedureStoreTestBase {
       }
 
       @Override
+      public Optional<X509Certificate[]> getClientCertificateChain() {
+        return Optional.empty();
+      }
+
+      @Override
       public InetAddress getRemoteAddress() {
         return null;
       }
@@ -288,12 +310,12 @@ public class TestRegionProcedureStore extends RegionProcedureStoreTestBase {
       }
 
       @Override
-      public long getResponseBlockSize() {
+      public long getBlockBytesScanned() {
         return 0;
       }
 
       @Override
-      public void incrementResponseBlockSize(long blockSize) {
+      public void incrementBlockBytesScanned(long blockSize) {
       }
 
       @Override

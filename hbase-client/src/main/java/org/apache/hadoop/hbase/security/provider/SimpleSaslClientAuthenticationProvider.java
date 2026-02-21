@@ -20,11 +20,8 @@ package org.apache.hadoop.hbase.security.provider;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.util.Map;
-
 import javax.security.sasl.SaslClient;
-
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.security.SecurityInfo;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
@@ -34,13 +31,13 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos.UserInformation;
 
 @InterfaceAudience.Private
-public class SimpleSaslClientAuthenticationProvider extends
-    SimpleSaslAuthenticationProvider implements SaslClientAuthenticationProvider {
+public class SimpleSaslClientAuthenticationProvider extends SimpleSaslAuthenticationProvider
+  implements SaslClientAuthenticationProvider {
 
   @Override
   public SaslClient createClient(Configuration conf, InetAddress serverAddress,
-      SecurityInfo securityInfo, Token<? extends TokenIdentifier> token, boolean fallbackAllowed,
-      Map<String, String> saslProps) throws IOException {
+    String serverPrincipal, Token<? extends TokenIdentifier> token, boolean fallbackAllowed,
+    Map<String, String> saslProps) throws IOException {
     return null;
   }
 

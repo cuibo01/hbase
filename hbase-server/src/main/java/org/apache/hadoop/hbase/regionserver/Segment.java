@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,9 +24,9 @@ import java.util.Objects;
 import java.util.SortedSet;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.io.TimeRange;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -36,25 +35,23 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 
 /**
- * This is an abstraction of a segment maintained in a memstore, e.g., the active
- * cell set or its snapshot.
- *
- * This abstraction facilitates the management of the compaction pipeline and the shifts of these
- * segments from active set to snapshot set in the default implementation.
+ * This is an abstraction of a segment maintained in a memstore, e.g., the active cell set or its
+ * snapshot. This abstraction facilitates the management of the compaction pipeline and the shifts
+ * of these segments from active set to snapshot set in the default implementation.
  */
 @InterfaceAudience.Private
 public abstract class Segment implements MemStoreSizing {
 
-  public final static long FIXED_OVERHEAD = ClassSize.align(ClassSize.OBJECT
-      + 6 * ClassSize.REFERENCE // cellSet, comparator, updatesLock, memStoreLAB, memStoreSizing,
-                                // and timeRangeTracker
+  public final static long FIXED_OVERHEAD =
+    ClassSize.align(ClassSize.OBJECT + 6 * ClassSize.REFERENCE // cellSet, comparator, updatesLock,
+                                                               // memStoreLAB, memStoreSizing,
+                                                               // and timeRangeTracker
       + Bytes.SIZEOF_LONG // minSequenceId
       + Bytes.SIZEOF_BOOLEAN); // tagsPresent
   public final static long DEEP_OVERHEAD = FIXED_OVERHEAD + ClassSize.ATOMIC_REFERENCE
-      + ClassSize.CELL_SET + 2 * ClassSize.ATOMIC_LONG
-      + ClassSize.REENTRANT_LOCK;
+    + ClassSize.CELL_SET + 2 * ClassSize.ATOMIC_LONG + ClassSize.REENTRANT_LOCK;
 
-  private AtomicReference<CellSet> cellSet= new AtomicReference<>();
+  private AtomicReference<CellSet<ExtendedCell>> cellSet = new AtomicReference<>();
   private final CellComparator comparator;
   private ReentrantReadWriteLock updatesLock;
   protected long minSequenceId;
@@ -76,7 +73,7 @@ public abstract class Segment implements MemStoreSizing {
   }
 
   protected Segment(CellComparator comparator, List<ImmutableSegment> segments,
-      TimeRangeTracker trt) {
+    TimeRangeTracker trt) {
     long dataSize = 0;
     long heapSize = 0;
     long OffHeapSize = 0;
@@ -97,7 +94,8 @@ public abstract class Segment implements MemStoreSizing {
   }
 
   // This constructor is used to create empty Segments.
-  protected Segment(CellSet cellSet, CellComparator comparator, MemStoreLAB memStoreLAB, TimeRangeTracker trt) {
+  protected Segment(CellSet<ExtendedCell> cellSet, CellComparator comparator,
+    MemStoreLAB memStoreLAB, TimeRangeTracker trt) {
     this.cellSet.set(cellSet);
     this.comparator = comparator;
     this.updatesLock = new ReentrantReadWriteLock();
@@ -133,13 +131,10 @@ public abstract class Segment implements MemStoreSizing {
     return Collections.singletonList(new SegmentScanner(this, readPoint));
   }
 
-  /**
-   * @return whether the segment has any cells
-   */
+  /** Returns whether the segment has any cells */
   public boolean isEmpty() {
     return getCellSet().isEmpty();
   }
-
 
   /**
    * Closing a segment before it is being discarded
@@ -154,21 +149,18 @@ public abstract class Segment implements MemStoreSizing {
 
   /**
    * If the segment has a memory allocator the cell is being cloned to this space, and returned;
-   * otherwise the given cell is returned
-   *
-   * When a cell's size is too big (bigger than maxAlloc), it is not allocated on MSLAB.
-   * Since the process of flattening to CellChunkMap assumes that all cells
-   * are allocated on MSLAB, during this process, the input parameter
-   * forceCloneOfBigCell is set to 'true' and the cell is copied into MSLAB.
-   *
+   * otherwise the given cell is returned When a cell's size is too big (bigger than maxAlloc), it
+   * is not allocated on MSLAB. Since the process of flattening to CellChunkMap assumes that all
+   * cells are allocated on MSLAB, during this process, the input parameter forceCloneOfBigCell is
+   * set to 'true' and the cell is copied into MSLAB.
    * @return either the given cell or its clone
    */
-  public Cell maybeCloneWithAllocator(Cell cell, boolean forceCloneOfBigCell) {
+  public ExtendedCell maybeCloneWithAllocator(ExtendedCell cell, boolean forceCloneOfBigCell) {
     if (this.memStoreLAB == null) {
       return cell;
     }
 
-    Cell cellFromMslab;
+    ExtendedCell cellFromMslab;
     if (forceCloneOfBigCell) {
       cellFromMslab = this.memStoreLAB.forceCopyOfBigCellInto(cell);
     } else {
@@ -185,9 +177,8 @@ public abstract class Segment implements MemStoreSizing {
   }
 
   public boolean shouldSeek(TimeRange tr, long oldestUnexpiredTS) {
-    return !isEmpty()
-        && (tr.isAllTime() || timeRangeTracker.includesTimeRange(tr))
-        && timeRangeTracker.getMax() >= oldestUnexpiredTS;
+    return !isEmpty() && (tr.isAllTime() || timeRangeTracker.includesTimeRange(tr))
+      && timeRangeTracker.getMax() >= oldestUnexpiredTS;
   }
 
   public boolean isTagsPresent() {
@@ -207,12 +198,12 @@ public abstract class Segment implements MemStoreSizing {
   }
 
   /**
-   * Setting the CellSet of the segment - used only for flat immutable segment for setting
-   * immutable CellSet after its creation in immutable segment constructor
+   * Setting the CellSet of the segment - used only for flat immutable segment for setting immutable
+   * CellSet after its creation in immutable segment constructor
    * @return this object
    */
 
-  protected Segment setCellSet(CellSet cellSetOld, CellSet cellSetNew) {
+  protected Segment setCellSet(CellSet<ExtendedCell> cellSetOld, CellSet<ExtendedCell> cellSetNew) {
     this.cellSet.compareAndSet(cellSetOld, cellSetNew);
     return this;
   }
@@ -256,7 +247,7 @@ public abstract class Segment implements MemStoreSizing {
   }
 
   public void waitForUpdates() {
-    if(!updatesLock.isWriteLocked()) {
+    if (!updatesLock.isWriteLocked()) {
       updatesLock.writeLock().lock();
     }
   }
@@ -274,16 +265,16 @@ public abstract class Segment implements MemStoreSizing {
     return this.timeRangeTracker;
   }
 
-  //*** Methods for SegmentsScanner
-  public Cell last() {
+  // *** Methods for SegmentsScanner
+  public ExtendedCell last() {
     return getCellSet().last();
   }
 
-  public Iterator<Cell> iterator() {
+  public Iterator<ExtendedCell> iterator() {
     return getCellSet().iterator();
   }
 
-  public SortedSet<Cell> headSet(Cell firstKeyOnRow) {
+  public SortedSet<ExtendedCell> headSet(ExtendedCell firstKeyOnRow) {
     return getCellSet().headSet(firstKeyOnRow);
   }
 
@@ -295,10 +286,8 @@ public abstract class Segment implements MemStoreSizing {
     return getComparator().compareRows(left, right);
   }
 
-  /**
-   * @return a set of all cells in the segment
-   */
-  protected CellSet getCellSet() {
+  /** Returns a set of all cells in the segment */
+  protected CellSet<ExtendedCell> getCellSet() {
     return cellSet.get();
   }
 
@@ -310,14 +299,14 @@ public abstract class Segment implements MemStoreSizing {
     return comparator;
   }
 
-  protected void internalAdd(Cell cell, boolean mslabUsed, MemStoreSizing memstoreSizing,
-      boolean sizeAddedPreOperation) {
+  protected void internalAdd(ExtendedCell cell, boolean mslabUsed, MemStoreSizing memstoreSizing,
+    boolean sizeAddedPreOperation) {
     boolean succ = getCellSet().add(cell);
     updateMetaInfo(cell, succ, mslabUsed, memstoreSizing, sizeAddedPreOperation);
   }
 
-  protected void updateMetaInfo(Cell cellToAdd, boolean succ, boolean mslabUsed,
-      MemStoreSizing memstoreSizing, boolean sizeAddedPreOperation) {
+  protected void updateMetaInfo(ExtendedCell cellToAdd, boolean succ, boolean mslabUsed,
+    MemStoreSizing memstoreSizing, boolean sizeAddedPreOperation) {
     long delta = 0;
     long cellSize = getCellLength(cellToAdd);
     int cellsCount = succ ? 1 : 0;
@@ -347,8 +336,9 @@ public abstract class Segment implements MemStoreSizing {
     }
   }
 
-  protected void updateMetaInfo(Cell cellToAdd, boolean succ, MemStoreSizing memstoreSizing) {
-    updateMetaInfo(cellToAdd, succ, (getMemStoreLAB()!=null), memstoreSizing, false);
+  protected void updateMetaInfo(ExtendedCell cellToAdd, boolean succ,
+    MemStoreSizing memstoreSizing) {
+    updateMetaInfo(cellToAdd, succ, (getMemStoreLAB() != null), memstoreSizing, false);
   }
 
   /**
@@ -360,11 +350,11 @@ public abstract class Segment implements MemStoreSizing {
     if (allocated) {
       boolean onHeap = true;
       MemStoreLAB memStoreLAB = getMemStoreLAB();
-      if(memStoreLAB != null) {
+      if (memStoreLAB != null) {
         onHeap = memStoreLAB.isOnHeap();
       }
       res += indexEntryOnHeapSize(onHeap);
-      if(onHeap) {
+      if (onHeap) {
         res += cell.heapSize();
       }
       res = ClassSize.align(res);
@@ -377,11 +367,11 @@ public abstract class Segment implements MemStoreSizing {
     if (allocated) {
       boolean offHeap = false;
       MemStoreLAB memStoreLAB = getMemStoreLAB();
-      if(memStoreLAB != null) {
+      if (memStoreLAB != null) {
         offHeap = memStoreLAB.isOffHeap();
       }
       res += indexEntryOffHeapSize(offHeap);
-      if(offHeap) {
+      if (offHeap) {
         res += cell.heapSize();
       }
       res = ClassSize.align(res);
@@ -408,7 +398,7 @@ public abstract class Segment implements MemStoreSizing {
    * @param firstCell a cell in the segment
    * @return a subset of the segment cell set, which starts with the given cell
    */
-  protected SortedSet<Cell> tailSet(Cell firstCell) {
+  protected SortedSet<ExtendedCell> tailSet(ExtendedCell firstCell) {
     return getCellSet().tailSet(firstCell);
   }
 
@@ -421,7 +411,7 @@ public abstract class Segment implements MemStoreSizing {
    * Dumps all cells of the segment into the given log
    */
   void dump(Logger log) {
-    for (Cell cell: getCellSet()) {
+    for (Cell cell : getCellSet()) {
       log.debug(Objects.toString(cell));
     }
   }
@@ -429,7 +419,7 @@ public abstract class Segment implements MemStoreSizing {
   @Override
   public String toString() {
     String res = "type=" + this.getClass().getSimpleName() + ", ";
-    res += "empty=" + (isEmpty()? "yes": "no") + ", ";
+    res += "empty=" + (isEmpty() ? "yes" : "no") + ", ";
     res += "cellCount=" + getCellsCount() + ", ";
     res += "cellSize=" + getDataSize() + ", ";
     res += "totalHeapSize=" + getHeapSize() + ", ";

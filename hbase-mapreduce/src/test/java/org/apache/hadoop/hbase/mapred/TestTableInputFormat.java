@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,7 +20,7 @@ package org.apache.hadoop.hbase.mapred;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Matchers.anyObject;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -75,12 +75,12 @@ import org.slf4j.LoggerFactory;
 /**
  * This tests the TableInputFormat and its recovery semantics
  */
-@Category({MapReduceTests.class, LargeTests.class})
+@Category({ MapReduceTests.class, LargeTests.class })
 public class TestTableInputFormat {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestTableInputFormat.class);
+    HBaseClassTestRule.forClass(TestTableInputFormat.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestTableInputFormat.class);
 
@@ -109,10 +109,8 @@ public class TestTableInputFormat {
 
   /**
    * Setup a table with two rows and values.
-   *
    * @param tableName the name of the table to create
    * @return A Table instance for the created table.
-   * @throws IOException
    */
   public static Table createTable(byte[] tableName) throws IOException {
     return createTable(tableName, new byte[][] { FAMILY });
@@ -120,10 +118,7 @@ public class TestTableInputFormat {
 
   /**
    * Setup a table with two rows and values per column family.
-   *
-   * @param tableName
    * @return A Table instance for the created table.
-   * @throws IOException
    */
   public static Table createTable(byte[] tableName, byte[][] families) throws IOException {
     Table table = UTIL.createTable(TableName.valueOf(tableName), families);
@@ -142,15 +137,14 @@ public class TestTableInputFormat {
 
   /**
    * Verify that the result and key have expected values.
-   *
-   * @param r single row result
-   * @param key the row key
-   * @param expectedKey the expected key
+   * @param r             single row result
+   * @param key           the row key
+   * @param expectedKey   the expected key
    * @param expectedValue the expected value
    * @return true if the result contains the expected key and value, false otherwise.
    */
-  static boolean checkResult(Result r, ImmutableBytesWritable key,
-      byte[] expectedKey, byte[] expectedValue) {
+  static boolean checkResult(Result r, ImmutableBytesWritable key, byte[] expectedKey,
+    byte[] expectedValue) {
     assertEquals(0, key.compareTo(expectedKey));
     Map<byte[], byte[]> vals = r.getFamilyMap(FAMILY);
     byte[] value = vals.values().iterator().next();
@@ -159,15 +153,11 @@ public class TestTableInputFormat {
   }
 
   /**
-   * Create table data and run tests on specified htable using the
-   * o.a.h.hbase.mapred API.
-   *
-   * @param table
-   * @throws IOException
+   * Create table data and run tests on specified htable using the o.a.h.hbase.mapred API.
    */
   static void runTestMapred(Table table) throws IOException {
     org.apache.hadoop.hbase.mapred.TableRecordReader trr =
-        new org.apache.hadoop.hbase.mapred.TableRecordReader();
+      new org.apache.hadoop.hbase.mapred.TableRecordReader();
     trr.setStartRow(Bytes.toBytes("aaa"));
     trr.setEndRow(Bytes.toBytes("zzz"));
     trr.setHTable(table);
@@ -192,11 +182,8 @@ public class TestTableInputFormat {
 
   /**
    * Create a table that IOE's on first scanner next call
-   *
-   * @throws IOException
    */
-  static Table createIOEScannerTable(byte[] name, final int failCnt)
-      throws IOException {
+  static Table createIOEScannerTable(byte[] name, final int failCnt) throws IOException {
     // build up a mock scanner stuff to fail the first time
     Answer<ResultScanner> a = new Answer<ResultScanner>() {
       int cnt = 0;
@@ -220,18 +207,14 @@ public class TestTableInputFormat {
     };
 
     Table htable = spy(createTable(name));
-    doAnswer(a).when(htable).getScanner((Scan) anyObject());
+    doAnswer(a).when(htable).getScanner(any(Scan.class));
     return htable;
   }
 
   /**
-   * Create a table that throws a DoNoRetryIOException on first scanner next
-   * call
-   *
-   * @throws IOException
+   * Create a table that throws a DoNoRetryIOException on first scanner next call
    */
-  static Table createDNRIOEScannerTable(byte[] name, final int failCnt)
-      throws IOException {
+  static Table createDNRIOEScannerTable(byte[] name, final int failCnt) throws IOException {
     // build up a mock scanner stuff to fail the first time
     Answer<ResultScanner> a = new Answer<ResultScanner>() {
       int cnt = 0;
@@ -246,9 +229,8 @@ public class TestTableInputFormat {
           ResultScanner scanner = mock(ResultScanner.class);
 
           invocation.callRealMethod(); // simulate NotServingRegionException
-          doThrow(
-              new NotServingRegionException("Injected simulated TimeoutException"))
-              .when(scanner).next();
+          doThrow(new NotServingRegionException("Injected simulated TimeoutException"))
+            .when(scanner).next();
           return scanner;
         }
 
@@ -258,14 +240,12 @@ public class TestTableInputFormat {
     };
 
     Table htable = spy(createTable(name));
-    doAnswer(a).when(htable).getScanner((Scan) anyObject());
+    doAnswer(a).when(htable).getScanner(any(Scan.class));
     return htable;
   }
 
   /**
    * Run test assuming no errors using mapred api.
-   *
-   * @throws IOException
    */
   @Test
   public void testTableRecordReader() throws IOException {
@@ -275,8 +255,6 @@ public class TestTableInputFormat {
 
   /**
    * Run test assuming Scanner IOException failure using mapred api,
-   *
-   * @throws IOException
    */
   @Test
   public void testTableRecordReaderScannerFail() throws IOException {
@@ -286,8 +264,6 @@ public class TestTableInputFormat {
 
   /**
    * Run test assuming Scanner IOException failure using mapred api,
-   *
-   * @throws IOException
    */
   @Test(expected = IOException.class)
   public void testTableRecordReaderScannerFailTwice() throws IOException {
@@ -297,7 +273,6 @@ public class TestTableInputFormat {
 
   /**
    * Run test assuming NotServingRegionException using mapred api.
-   *
    * @throws org.apache.hadoop.hbase.DoNotRetryIOException
    */
   @Test
@@ -308,7 +283,6 @@ public class TestTableInputFormat {
 
   /**
    * Run test assuming NotServingRegionException using mapred api.
-   *
    * @throws org.apache.hadoop.hbase.DoNotRetryIOException
    */
   @Test(expected = org.apache.hadoop.hbase.NotServingRegionException.class)
@@ -330,8 +304,8 @@ public class TestTableInputFormat {
 
   @Test
   public void testDeprecatedExtensionOfTableInputFormatBase() throws IOException {
-    LOG.info("testing use of an InputFormat taht extends InputFormatBase, "
-        + "as it was given in 0.98.");
+    LOG.info(
+      "testing use of an InputFormat taht extends InputFormatBase, " + "as it was given in 0.98.");
     final Table table = createTable(Bytes.toBytes("exampleDeprecatedTable"),
       new byte[][] { Bytes.toBytes("columnA"), Bytes.toBytes("columnB") });
     testInputFormat(ExampleDeprecatedTIF.class);
@@ -339,8 +313,8 @@ public class TestTableInputFormat {
 
   @Test
   public void testJobConfigurableExtensionOfTableInputFormatBase() throws IOException {
-    LOG.info("testing use of an InputFormat taht extends InputFormatBase, "
-        + "using JobConfigurable.");
+    LOG.info(
+      "testing use of an InputFormat taht extends InputFormatBase, " + "using JobConfigurable.");
     final Table table = createTable(Bytes.toBytes("exampleJobConfigurableTable"),
       new byte[][] { Bytes.toBytes("columnA"), Bytes.toBytes("columnB") });
     testInputFormat(ExampleJobConfigurableTIF.class);
@@ -357,17 +331,17 @@ public class TestTableInputFormat {
     final RunningJob run = JobClient.runJob(job);
     assertTrue("job failed!", run.isSuccessful());
     assertEquals("Saw the wrong number of instances of the filtered-for row.", 2, run.getCounters()
-        .findCounter(TestTableInputFormat.class.getName() + ":row", "aaa").getCounter());
+      .findCounter(TestTableInputFormat.class.getName() + ":row", "aaa").getCounter());
     assertEquals("Saw any instances of the filtered out row.", 0, run.getCounters()
-        .findCounter(TestTableInputFormat.class.getName() + ":row", "bbb").getCounter());
+      .findCounter(TestTableInputFormat.class.getName() + ":row", "bbb").getCounter());
     assertEquals("Saw the wrong number of instances of columnA.", 1, run.getCounters()
-        .findCounter(TestTableInputFormat.class.getName() + ":family", "columnA").getCounter());
+      .findCounter(TestTableInputFormat.class.getName() + ":family", "columnA").getCounter());
     assertEquals("Saw the wrong number of instances of columnB.", 1, run.getCounters()
-        .findCounter(TestTableInputFormat.class.getName() + ":family", "columnB").getCounter());
+      .findCounter(TestTableInputFormat.class.getName() + ":family", "columnB").getCounter());
     assertEquals("Saw the wrong count of values for the filtered-for row.", 2, run.getCounters()
-        .findCounter(TestTableInputFormat.class.getName() + ":value", "value aaa").getCounter());
+      .findCounter(TestTableInputFormat.class.getName() + ":value", "value aaa").getCounter());
     assertEquals("Saw the wrong count of values for the filtered-out row.", 0, run.getCounters()
-        .findCounter(TestTableInputFormat.class.getName() + ":value", "value bbb").getCounter());
+      .findCounter(TestTableInputFormat.class.getName() + ":value", "value bbb").getCounter());
   }
 
   public static class ExampleVerifier implements TableMap<NullWritable, NullWritable> {
@@ -378,18 +352,20 @@ public class TestTableInputFormat {
 
     @Override
     public void map(ImmutableBytesWritable key, Result value,
-        OutputCollector<NullWritable,NullWritable> output,
-        Reporter reporter) throws IOException {
+      OutputCollector<NullWritable, NullWritable> output, Reporter reporter) throws IOException {
       for (Cell cell : value.listCells()) {
-        reporter.getCounter(TestTableInputFormat.class.getName() + ":row",
+        reporter
+          .getCounter(TestTableInputFormat.class.getName() + ":row",
             Bytes.toString(cell.getRowArray(), cell.getRowOffset(), cell.getRowLength()))
-            .increment(1l);
-        reporter.getCounter(TestTableInputFormat.class.getName() + ":family",
+          .increment(1l);
+        reporter
+          .getCounter(TestTableInputFormat.class.getName() + ":family",
             Bytes.toString(cell.getFamilyArray(), cell.getFamilyOffset(), cell.getFamilyLength()))
-            .increment(1l);
-        reporter.getCounter(TestTableInputFormat.class.getName() + ":value",
+          .increment(1l);
+        reporter
+          .getCounter(TestTableInputFormat.class.getName() + ":value",
             Bytes.toString(cell.getValueArray(), cell.getValueOffset(), cell.getValueLength()))
-            .increment(1l);
+          .increment(1l);
       }
     }
 
@@ -408,8 +384,7 @@ public class TestTableInputFormat {
         Table exampleTable = connection.getTable(TableName.valueOf("exampleDeprecatedTable"));
         // mandatory
         initializeTable(connection, exampleTable.getName());
-        byte[][] inputColumns = new byte [][] { Bytes.toBytes("columnA"),
-          Bytes.toBytes("columnB") };
+        byte[][] inputColumns = new byte[][] { Bytes.toBytes("columnA"), Bytes.toBytes("columnB") };
         // mandatory
         setInputColumns(inputColumns);
         Filter exampleFilter =
@@ -440,7 +415,6 @@ public class TestTableInputFormat {
     }
   }
 
-
   public static class ExampleTIF extends TableInputFormatBase {
 
     @Override
@@ -453,8 +427,7 @@ public class TestTableInputFormat {
       TableName tableName = TableName.valueOf(table);
       // mandatory
       initializeTable(connection, tableName);
-      byte[][] inputColumns = new byte [][] { Bytes.toBytes("columnA"),
-        Bytes.toBytes("columnB") };
+      byte[][] inputColumns = new byte[][] { Bytes.toBytes("columnA"), Bytes.toBytes("columnB") };
       // mandatory
       setInputColumns(inputColumns);
       Filter exampleFilter =
@@ -466,4 +439,3 @@ public class TestTableInputFormat {
   }
 
 }
-

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,10 +17,14 @@
  */
 package org.apache.hadoop.hbase.master;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Scope;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -29,6 +33,7 @@ import org.apache.hadoop.hbase.ServerMetrics;
 import org.apache.hadoop.hbase.ServerMetricsBuilder;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.client.VersionInfoUtil;
+import org.apache.hadoop.hbase.trace.TraceUtil;
 import org.apache.hadoop.hbase.zookeeper.ZKListener;
 import org.apache.hadoop.hbase.zookeeper.ZKUtil;
 import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
@@ -112,37 +117,44 @@ public class RegionServerTracker extends ZKListener {
    * In this method, we will also construct the region server sets in {@link ServerManager}. If a
    * region server is dead between the crash of the previous master instance and the start of the
    * current master instance, we will schedule a SCP for it. This is done in
-   * {@link ServerManager#findDeadServersAndProcess(Set, Set)}, we call it here under the lock
+   * {@link ServerManager#findDeadServersAndProcess(Map, Set)}, we call it here under the lock
    * protection to prevent concurrency issues with server expiration operation.
-   * @param deadServersFromPE the region servers which already have SCP associated.
-   * @param liveServersFromWALDir the live region servers from wal directory.
-   * @param splittingServersFromWALDir Servers whose WALs are being actively 'split'.
+   * @param deadServersWithDeathTimeFromPE the region servers which already have SCP associated,
+   *                                       have deathTime as the value.
+   * @param liveServersBeforeRestart       the live region servers we recorded before master
+   *                                       restarts.
+   * @param splittingServersFromWALDir     Servers whose WALs are being actively 'split'.
    */
-  public void upgrade(Set<ServerName> deadServersFromPE, Set<ServerName> liveServersFromWALDir,
-    Set<ServerName> splittingServersFromWALDir) throws KeeperException, IOException {
+  public void upgrade(Map<ServerName, Long> deadServersWithDeathTimeFromPE,
+    Set<ServerName> liveServersBeforeRestart, Set<ServerName> splittingServersFromWALDir)
+    throws KeeperException, IOException {
     LOG.info(
-      "Upgrading RegionServerTracker to active master mode; {} have existing" +
-        "ServerCrashProcedures, {} possibly 'live' servers, and {} 'splitting'.",
-      deadServersFromPE.size(), liveServersFromWALDir.size(), splittingServersFromWALDir.size());
-    // deadServersFromPE is made from a list of outstanding ServerCrashProcedures.
+      "Upgrading RegionServerTracker to active master mode; {} have existing"
+        + "ServerCrashProcedures, {} possibly 'live' servers, and {} 'splitting'.",
+      deadServersWithDeathTimeFromPE.size(), liveServersBeforeRestart.size(),
+      splittingServersFromWALDir.size());
+    // deadServersWithDeathTimeFromPE is made from a list of outstanding ServerCrashProcedures.
     // splittingServersFromWALDir are being actively split -- the directory in the FS ends in
     // '-SPLITTING'. Each splitting server should have a corresponding SCP. Log if not.
-    splittingServersFromWALDir.stream().filter(s -> !deadServersFromPE.contains(s)).
-      forEach(s -> LOG.error("{} has no matching ServerCrashProcedure", s));
-    // create ServerNode for all possible live servers from wal directory
-    liveServersFromWALDir
-        .forEach(sn -> server.getAssignmentManager().getRegionStates().getOrCreateServer(sn));
+    splittingServersFromWALDir.stream().filter(s -> !deadServersWithDeathTimeFromPE.containsKey(s))
+      .forEach(s -> LOG.error("{} has no matching ServerCrashProcedure", s));
+    // create ServerNode for all possible live servers from wal directory and master local region
+    liveServersBeforeRestart
+      .forEach(sn -> server.getAssignmentManager().getRegionStates().createServer(sn));
     ServerManager serverManager = server.getServerManager();
     synchronized (this) {
       Set<ServerName> liveServers = regionServers;
       for (ServerName serverName : liveServers) {
         RegionServerInfo info = getServerInfo(serverName);
-        ServerMetrics serverMetrics = info != null ? ServerMetricsBuilder.of(serverName,
-          VersionInfoUtil.getVersionNumber(info.getVersionInfo()),
-          info.getVersionInfo().getVersion()) : ServerMetricsBuilder.of(serverName);
+        ServerMetrics serverMetrics = info != null
+          ? ServerMetricsBuilder.of(serverName,
+            VersionInfoUtil.getVersionNumber(info.getVersionInfo()),
+            info.getVersionInfo().getVersion())
+          : ServerMetricsBuilder.of(serverName);
         serverManager.checkAndRecordNewServer(serverName, serverMetrics);
       }
-      serverManager.findDeadServersAndProcess(deadServersFromPE, liveServersFromWALDir);
+      serverManager.findDeadServersAndProcess(deadServersWithDeathTimeFromPE,
+        liveServersBeforeRestart);
       active = true;
     }
   }
@@ -182,27 +194,35 @@ public class RegionServerTracker extends ZKListener {
 
   private synchronized void refresh() {
     List<String> names;
-    try {
-      names = ZKUtil.listChildrenAndWatchForNewChildren(watcher, watcher.getZNodePaths().rsZNode);
-    } catch (KeeperException e) {
-      // here we need to abort as we failed to set watcher on the rs node which means that we can
-      // not track the node deleted event any more.
-      server.abort("Unexpected zk exception getting RS nodes", e);
-      return;
+    final Span span = TraceUtil.createSpan("RegionServerTracker.refresh");
+    try (final Scope ignored = span.makeCurrent()) {
+      try {
+        names = ZKUtil.listChildrenAndWatchForNewChildren(watcher, watcher.getZNodePaths().rsZNode);
+      } catch (KeeperException e) {
+        // here we need to abort as we failed to set watcher on the rs node which means that we can
+        // not track the node deleted event any more.
+        server.abort("Unexpected zk exception getting RS nodes", e);
+        return;
+      }
+      Set<ServerName> newServers = CollectionUtils.isEmpty(names)
+        ? Collections.emptySet()
+        : names.stream().map(ServerName::parseServerName)
+          .collect(Collectors.collectingAndThen(Collectors.toSet(), Collections::unmodifiableSet));
+      if (active) {
+        processAsActiveMaster(newServers);
+      }
+      this.regionServers = newServers;
+      span.setStatus(StatusCode.OK);
+    } finally {
+      span.end();
     }
-    Set<ServerName> newServers = CollectionUtils.isEmpty(names) ? Collections.emptySet() :
-      names.stream().map(ServerName::parseServerName)
-        .collect(Collectors.collectingAndThen(Collectors.toSet(), Collections::unmodifiableSet));
-    if (active) {
-      processAsActiveMaster(newServers);
-    }
-    this.regionServers = newServers;
   }
 
   @Override
   public void nodeChildrenChanged(String path) {
-    if (path.equals(watcher.getZNodePaths().rsZNode) && !server.isAborted() &&
-      !server.isStopped()) {
+    if (
+      path.equals(watcher.getZNodePaths().rsZNode) && !server.isAborted() && !server.isStopped()
+    ) {
       executor.execute(this::refresh);
     }
   }

@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.coprocessor;
 
 import static org.junit.Assert.assertNotNull;
@@ -47,7 +45,7 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({CoprocessorTests.class, MediumTests.class})
+@Category({ CoprocessorTests.class, MediumTests.class })
 public class TestIncrementAndAppendWithNullResult {
 
   @ClassRule
@@ -64,7 +62,7 @@ public class TestIncrementAndAppendWithNullResult {
   @BeforeClass
   public static void setupBeforeClass() throws Exception {
     util.getConfiguration().set(CoprocessorHost.REGION_COPROCESSOR_CONF_KEY,
-        MyObserver.class.getName());
+      MyObserver.class.getName());
     // reduce the retry count so as to speed up the test
     util.getConfiguration().setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 2);
     util.startMiniCluster();
@@ -76,42 +74,39 @@ public class TestIncrementAndAppendWithNullResult {
     util.shutdownMiniCluster();
   }
 
-
   public static class MyObserver implements RegionCoprocessor, RegionObserver {
-    private static final Result TMP_RESULT = Result.create(Arrays.asList(
-        CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY)
-          .setRow(Bytes.toBytes("row"))
-          .setFamily(Bytes.toBytes("family"))
-          .setQualifier(Bytes.toBytes("qualifier"))
-          .setType(Cell.Type.Put)
-          .setValue(Bytes.toBytes("value"))
-          .build()));
+    private static final Result TMP_RESULT = Result.create(Arrays
+      .asList(CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY).setRow(Bytes.toBytes("row"))
+        .setFamily(Bytes.toBytes("family")).setQualifier(Bytes.toBytes("qualifier"))
+        .setType(Cell.Type.Put).setValue(Bytes.toBytes("value")).build()));
+
     @Override
     public Optional<RegionObserver> getRegionObserver() {
       return Optional.of(this);
     }
 
     @Override
-    public Result preIncrementAfterRowLock(ObserverContext<RegionCoprocessorEnvironment> c,
-        Increment increment) throws IOException {
+    public Result preIncrementAfterRowLock(
+      ObserverContext<? extends RegionCoprocessorEnvironment> c, Increment increment)
+      throws IOException {
       return TMP_RESULT;
     }
 
     @Override
-    public Result postIncrement(ObserverContext<RegionCoprocessorEnvironment> c,
+    public Result postIncrement(ObserverContext<? extends RegionCoprocessorEnvironment> c,
       Increment increment, Result result) throws IOException {
       return null;
     }
 
     @Override
-    public Result postAppend(ObserverContext<RegionCoprocessorEnvironment> c, Append append,
-        Result result) {
+    public Result postAppend(ObserverContext<? extends RegionCoprocessorEnvironment> c,
+      Append append, Result result) {
       return null;
     }
 
     @Override
-    public Result preAppendAfterRowLock(ObserverContext<RegionCoprocessorEnvironment> c,
-        Append append) {
+    public Result preAppendAfterRowLock(ObserverContext<? extends RegionCoprocessorEnvironment> c,
+      Append append) {
       return TMP_RESULT;
     }
   }
@@ -119,8 +114,8 @@ public class TestIncrementAndAppendWithNullResult {
   @Test
   public void testIncrement() throws Exception {
     testAppend(new Increment(ROW_A).addColumn(TEST_FAMILY, qualifierCol1, 10L));
-    testAppend(new Increment(ROW_A).addColumn(TEST_FAMILY, qualifierCol1, 10L)
-              .setReturnResults(false));
+    testAppend(
+      new Increment(ROW_A).addColumn(TEST_FAMILY, qualifierCol1, 10L).setReturnResults(false));
   }
 
   private void testAppend(Increment inc) throws Exception {
@@ -133,10 +128,9 @@ public class TestIncrementAndAppendWithNullResult {
 
   @Test
   public void testAppend() throws Exception {
-    testAppend(new Append(ROW_A).addColumn(TEST_FAMILY, qualifierCol1,
-        Bytes.toBytes("value")));
-    testAppend(new Append(ROW_A).addColumn(TEST_FAMILY, qualifierCol1,
-        Bytes.toBytes("value")).setReturnResults(false));
+    testAppend(new Append(ROW_A).addColumn(TEST_FAMILY, qualifierCol1, Bytes.toBytes("value")));
+    testAppend(new Append(ROW_A).addColumn(TEST_FAMILY, qualifierCol1, Bytes.toBytes("value"))
+      .setReturnResults(false));
 
   }
 
@@ -149,7 +143,7 @@ public class TestIncrementAndAppendWithNullResult {
   }
 
   private static void checkResult(Result r) {
-    checkResult(new Object[]{r});
+    checkResult(new Object[] { r });
   }
 
   private static void checkResult(Object[] results) {

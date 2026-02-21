@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,8 +23,8 @@ import static org.junit.Assert.assertTrue;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
@@ -34,32 +34,31 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({MiscTests.class, SmallTests.class})
+@Category({ MiscTests.class, SmallTests.class })
 public class TestReplicationProtobuf {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestReplicationProtobuf.class);
+    HBaseClassTestRule.forClass(TestReplicationProtobuf.class);
 
   /**
    * Little test to check we can basically convert list of a list of KVs into a CellScanner
-   * @throws IOException
    */
   @Test
   public void testGetCellScanner() throws IOException {
-    List<Cell> a = new ArrayList<>();
+    List<ExtendedCell> a = new ArrayList<>();
     KeyValue akv = new KeyValue(Bytes.toBytes("a"), -1L);
     a.add(akv);
     // Add a few just to make it less regular.
     a.add(new KeyValue(Bytes.toBytes("aa"), -1L));
     a.add(new KeyValue(Bytes.toBytes("aaa"), -1L));
-    List<Cell> b = new ArrayList<>();
+    List<ExtendedCell> b = new ArrayList<>();
     KeyValue bkv = new KeyValue(Bytes.toBytes("b"), -1L);
     a.add(bkv);
-    List<Cell> c = new ArrayList<>();
+    List<ExtendedCell> c = new ArrayList<>();
     KeyValue ckv = new KeyValue(Bytes.toBytes("c"), -1L);
     c.add(ckv);
-    List<List<? extends Cell>> all = new ArrayList<>();
+    List<List<? extends ExtendedCell>> all = new ArrayList<>();
     all.add(a);
     all.add(b);
     all.add(c);
@@ -77,7 +76,6 @@ public class TestReplicationProtobuf {
   private void testAdvancetHasSameRow(CellScanner scanner, final KeyValue kv) throws IOException {
     scanner.advance();
     assertTrue(Bytes.equals(scanner.current().getRowArray(), scanner.current().getRowOffset(),
-        scanner.current().getRowLength(),
-      kv.getRowArray(), kv.getRowOffset(), kv.getRowLength()));
+      scanner.current().getRowLength(), kv.getRowArray(), kv.getRowOffset(), kv.getRowLength()));
   }
 }

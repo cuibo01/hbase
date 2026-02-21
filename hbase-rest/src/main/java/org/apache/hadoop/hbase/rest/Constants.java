@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.rest;
 
 import org.apache.yetus.audience.InterfaceAudience;
@@ -29,7 +28,7 @@ public interface Constants {
 
   String VERSION_STRING = "0.0.3";
 
-  int DEFAULT_MAX_AGE = 60 * 60 * 4;  // 4 hours
+  int DEFAULT_MAX_AGE = 60 * 60 * 4; // 4 hours
 
   int DEFAULT_LISTEN_PORT = 8080;
 
@@ -70,6 +69,12 @@ public interface Constants {
   String REST_DNS_NAMESERVER = "hbase.rest.dns.nameserver";
   String REST_DNS_INTERFACE = "hbase.rest.dns.interface";
 
+  String REST_SCANNERCACHE_SIZE = "hbase.rest.scannercache.size";
+  final int DEFAULT_REST_SCANNERCACHE_SIZE = 10000;
+
+  String REST_SCANNERCACHE_EXPIRE_TIME = "hbase.rest.scannercache.expire.time";
+  final long DEFAULT_REST_SCANNERCACHE_EXPIRE_TIME_MS = 60 * 60 * 1000;
+
   String FILTER_CLASSES = "hbase.rest.filter.classes";
   String SCAN_START_ROW = "startrow";
   String SCAN_END_ROW = "endrow";
@@ -80,14 +85,24 @@ public interface Constants {
   String SCAN_BATCH_SIZE = "batchsize";
   String SCAN_LIMIT = "limit";
   String SCAN_FETCH_SIZE = "hbase.rest.scan.fetchsize";
-  String SCAN_FILTER = "filter";
+  String FILTER = "filter";
+  /**
+   * @deprecated Since 2.4.18/2.5.9/2.6.0, will be removed in 4.0.0. Please use {@link #FILTER}
+   *             instead.
+   */
+  @Deprecated
+  String SCAN_FILTER = FILTER;
+  String FILTER_B64 = "filter_b64";
   String SCAN_REVERSED = "reversed";
   String SCAN_CACHE_BLOCKS = "cacheblocks";
-  String CUSTOM_FILTERS = "hbase.rest.custom.filters"; 
+  String CUSTOM_FILTERS = "hbase.rest.custom.filters";
 
   String ROW_KEYS_PARAM_NAME = "row";
-  /** If this query parameter is present when processing row or scanner resources,
-      it disables server side block caching */
+  String KEY_ENCODING_QUERY_PARAM_NAME = "e";
+  /**
+   * If this query parameter is present when processing row or scanner resources, it disables server
+   * side block caching
+   */
   String NOCACHE_PARAM_NAME = "nocache";
 
   /** Configuration parameter to set rest client connection timeout */
@@ -97,4 +112,7 @@ public interface Constants {
   /** Configuration parameter to set rest client socket timeout */
   String REST_CLIENT_SOCKET_TIMEOUT = "hbase.rest.client.socket.timeout";
   int DEFAULT_REST_CLIENT_SOCKET_TIMEOUT = 30 * 1000;
+
+  String SCAN_INCLUDE_START_ROW = "includeStartRow";
+  String SCAN_INCLUDE_STOP_ROW = "includeStopRow";
 }

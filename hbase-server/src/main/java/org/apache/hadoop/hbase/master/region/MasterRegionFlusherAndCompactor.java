@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -142,8 +142,15 @@ class MasterRegionFlusherAndCompactor implements Closeable {
       Path globalStoreArchiveDir = HFileArchiveUtil.getStoreArchivePathForArchivePath(
         globalArchivePath, region.getRegionInfo(), store.getColumnFamilyDescriptor().getName());
       try {
-        MasterRegionUtils.moveFilesUnderDir(fs, storeArchiveDir, globalStoreArchiveDir,
-          archivedHFileSuffix);
+        if (fs.exists(storeArchiveDir)) {
+          MasterRegionUtils.moveFilesUnderDir(fs, storeArchiveDir, globalStoreArchiveDir,
+            archivedHFileSuffix);
+        } else {
+          LOG.warn(
+            "Archived dir {} does not exist, there is no need to move archived hfiles from {} "
+              + "to global dir {} .",
+            storeArchiveDir, storeArchiveDir, globalStoreArchiveDir);
+        }
       } catch (IOException e) {
         LOG.warn("Failed to move archived hfiles from {} to global dir {}", storeArchiveDir,
           globalStoreArchiveDir, e);
@@ -180,7 +187,7 @@ class MasterRegionFlusherAndCompactor implements Closeable {
   }
 
   private void flushLoop() {
-    lastFlushTime = EnvironmentEdgeManager.currentTime();
+    recordLastFlushTime();
     while (!closed) {
       flushLock.lock();
       try {
@@ -202,10 +209,10 @@ class MasterRegionFlusherAndCompactor implements Closeable {
         flushLock.unlock();
       }
       assert flushRequest;
-      changesAfterLastFlush.set(0);
+      resetChangesAfterLastFlush();
       try {
         region.flush(true);
-        lastFlushTime = EnvironmentEdgeManager.currentTime();
+        recordLastFlushTime();
       } catch (IOException e) {
         LOG.error(HBaseMarkers.FATAL, "Failed to flush master local region, aborting...", e);
         abortable.abort("Failed to flush master local region", e);
@@ -261,6 +268,14 @@ class MasterRegionFlusherAndCompactor implements Closeable {
     } finally {
       flushLock.unlock();
     }
+  }
+
+  void resetChangesAfterLastFlush() {
+    changesAfterLastFlush.set(0);
+  }
+
+  void recordLastFlushTime() {
+    lastFlushTime = EnvironmentEdgeManager.currentTime();
   }
 
   @Override

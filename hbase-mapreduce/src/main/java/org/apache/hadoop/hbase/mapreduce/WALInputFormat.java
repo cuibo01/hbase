@@ -32,12 +32,14 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
+import org.apache.hadoop.hbase.util.LeaseNotRecoveredException;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
-import org.apache.hadoop.hbase.wal.WAL.Reader;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hbase.wal.WALKey;
+import org.apache.hadoop.hbase.wal.WALStreamReader;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapreduce.InputFormat;
 import org.apache.hadoop.mapreduce.InputSplit;
@@ -62,8 +64,7 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
   public static final String END_TIME_KEY = "wal.end.time";
 
   /**
-   * {@link InputSplit} for {@link WAL} files. Each split represent
-   * exactly one log file.
+   * {@link InputSplit} for {@link WAL} files. Each split represent exactly one log file.
    */
   static class WALSplit extends InputSplit implements Writable {
     private String logFileName;
@@ -72,12 +73,12 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
     private long endTime;
 
     /** for serialization */
-    public WALSplit() {}
+    public WALSplit() {
+    }
 
     /**
-     * Represent an WALSplit, i.e. a single WAL file.
-     * Start- and EndTime are managed by the split, so that WAL files can be
-     * filtered before WALEdits are passed to the mapper(s).
+     * Represent an WALSplit, i.e. a single WAL file. Start- and EndTime are managed by the split,
+     * so that WAL files can be filtered before WALEdits are passed to the mapper(s).
      */
     public WALSplit(String logFileName, long fileSize, long startTime, long endTime) {
       this.logFileName = logFileName;
@@ -132,11 +133,11 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
   }
 
   /**
-   * {@link RecordReader} for an {@link WAL} file.
-   * Implementation shared with deprecated HLogInputFormat.
+   * {@link RecordReader} for an {@link WAL} file. Implementation shared with deprecated
+   * HLogInputFormat.
    */
   static abstract class WALRecordReader<K extends WALKey> extends RecordReader<K, WALEdit> {
-    private Reader reader = null;
+    private WALStreamReader reader = null;
     // visible until we can remove the deprecated HLogInputFormat
     Entry currentEntry = new Entry();
     private long startTime;
@@ -145,10 +146,51 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
     private Path logFile;
     private long currentPos;
 
+    @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "DCN_NULLPOINTER_EXCEPTION",
+        justification = "HDFS-4380")
+    private WALStreamReader openReader(Path path, long startPosition) throws IOException {
+      long retryInterval = 2000; // 2 sec
+      int maxAttempts = 30;
+      int attempt = 0;
+      Exception ee = null;
+      WALStreamReader reader = null;
+      while (reader == null && attempt++ < maxAttempts) {
+        try {
+          // Detect if this is a new file, if so get a new reader else
+          // reset the current reader so that we see the new data
+          reader =
+            WALFactory.createStreamReader(path.getFileSystem(conf), path, conf, startPosition);
+          return reader;
+        } catch (LeaseNotRecoveredException lnre) {
+          // HBASE-15019 the WAL was not closed due to some hiccup.
+          LOG.warn("Try to recover the WAL lease " + path, lnre);
+          AbstractFSWALProvider.recoverLease(conf, path);
+          reader = null;
+          ee = lnre;
+        } catch (NullPointerException npe) {
+          // Workaround for race condition in HDFS-4380
+          // which throws a NPE if we open a file before any data node has the most recent block
+          // Just sleep and retry. Will require re-reading compressed WALs for compressionContext.
+          LOG.warn("Got NPE opening reader, will retry.");
+          reader = null;
+          ee = npe;
+        }
+        if (reader == null) {
+          // sleep before next attempt
+          try {
+            Thread.sleep(retryInterval);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          }
+        }
+      }
+      throw new IOException("Could not open reader", ee);
+    }
+
     @Override
     public void initialize(InputSplit split, TaskAttemptContext context)
-        throws IOException, InterruptedException {
-      WALSplit hsplit = (WALSplit)split;
+      throws IOException, InterruptedException {
+      WALSplit hsplit = (WALSplit) split;
       logFile = new Path(hsplit.getLogFileName());
       conf = context.getConfiguration();
       LOG.info("Opening {} for {}", logFile, split);
@@ -159,8 +201,7 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
 
     private void openReader(Path path) throws IOException {
       closeReader();
-      reader = AbstractFSWALProvider.openReader(path, conf);
-      seek();
+      reader = openReader(path, currentPos > 0 ? currentPos : -1);
       setCurrentPath(path);
     }
 
@@ -172,12 +213,6 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
       if (reader != null) {
         reader.close();
         reader = null;
-      }
-    }
-
-    private void seek() throws IOException {
-      if (currentPos != 0) {
-        reader.seek(currentPos);
       }
     }
 
@@ -197,7 +232,7 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
             i++;
           } catch (EOFException x) {
             LOG.warn("Corrupted entry detected. Ignoring the rest of the file."
-                + " (This is normal when a RegionServer crashed.)");
+              + " (This is normal when a RegionServer crashed.)");
             return false;
           }
         } while (temp != null && temp.getKey().getWriteTime() < startTime);
@@ -213,8 +248,8 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
         }
         boolean res = temp.getKey().getWriteTime() <= endTime;
         if (!res) {
-          LOG.info("Reached ts: " + temp.getKey().getWriteTime()
-              + " ignoring the rest of the file.");
+          LOG.info(
+            "Reached ts: " + temp.getKey().getWriteTime() + " ignoring the rest of the file.");
         }
         return res;
       } catch (IOException e) {
@@ -251,8 +286,8 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
   }
 
   /**
-   * handler for non-deprecated WALKey version. fold into WALRecordReader once we no longer
-   * need to support HLogInputFormat.
+   * handler for non-deprecated WALKey version. fold into WALRecordReader once we no longer need to
+   * support HLogInputFormat.
    */
   static class WALKeyRecordReader extends WALRecordReader<WALKey> {
     @Override
@@ -262,8 +297,7 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
   }
 
   @Override
-  public List<InputSplit> getSplits(JobContext context) throws IOException,
-      InterruptedException {
+  public List<InputSplit> getSplits(JobContext context) throws IOException, InterruptedException {
     return getSplits(context, START_TIME_KEY, END_TIME_KEY);
   }
 
@@ -271,7 +305,7 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
    * implementation shared with deprecated HLogInputFormat
    */
   List<InputSplit> getSplits(final JobContext context, final String startKey, final String endKey)
-      throws IOException, InterruptedException {
+    throws IOException, InterruptedException {
     Configuration conf = context.getConfiguration();
     boolean ignoreMissing = conf.getBoolean(WALPlayer.IGNORE_MISSING_FILES, false);
     Path[] inputPaths = getInputPaths(conf);
@@ -281,14 +315,14 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
     long endTime = conf.getLong(endKey, Long.MAX_VALUE);
 
     List<FileStatus> allFiles = new ArrayList<FileStatus>();
-    for(Path inputPath: inputPaths){
+    for (Path inputPath : inputPaths) {
       FileSystem fs = inputPath.getFileSystem(conf);
       try {
-        List<FileStatus> files = getFiles(fs, inputPath, startTime, endTime);
+        List<FileStatus> files = getFiles(fs, inputPath, startTime, endTime, conf);
         allFiles.addAll(files);
       } catch (FileNotFoundException e) {
         if (ignoreMissing) {
-          LOG.warn("File "+ inputPath +" is missing. Skipping it.");
+          LOG.warn("File " + inputPath + " is missing. Skipping it.");
           continue;
         }
         throw e;
@@ -303,23 +337,23 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
 
   private Path[] getInputPaths(Configuration conf) {
     String inpDirs = conf.get(FileInputFormat.INPUT_DIR);
-    return StringUtils.stringToPath(
-      inpDirs.split(conf.get(WALPlayer.INPUT_FILES_SEPARATOR_KEY, ",")));
+    return StringUtils
+      .stringToPath(inpDirs.split(conf.get(WALPlayer.INPUT_FILES_SEPARATOR_KEY, ",")));
   }
 
   /**
-   * @param startTime If file looks like it has a timestamp in its name, we'll check if newer
-   *                  or equal to this value else we will filter out the file. If name does not
-   *                  seem to have a timestamp, we will just return it w/o filtering.
-   * @param endTime If file looks like it has a timestamp in its name, we'll check if older or equal
-   *                to this value else we will filter out the file. If name does not seem to
-   *                have a timestamp, we will just return it w/o filtering.
+   * @param startTime If file looks like it has a timestamp in its name, we'll check if newer or
+   *                  equal to this value else we will filter out the file. If name does not seem to
+   *                  have a timestamp, we will just return it w/o filtering.
+   * @param endTime   If file looks like it has a timestamp in its name, we'll check if older or
+   *                  equal to this value else we will filter out the file. If name does not seem to
+   *                  have a timestamp, we will just return it w/o filtering.
    */
-  private List<FileStatus> getFiles(FileSystem fs, Path dir, long startTime, long endTime)
-      throws IOException {
+  private List<FileStatus> getFiles(FileSystem fs, Path dir, long startTime, long endTime,
+    Configuration conf) throws IOException {
     List<FileStatus> result = new ArrayList<>();
     LOG.debug("Scanning " + dir.toString() + " for WAL files");
-    RemoteIterator<LocatedFileStatus> iter = fs.listLocatedStatus(dir);
+    RemoteIterator<LocatedFileStatus> iter = listLocatedFileStatus(fs, dir, conf);
     if (!iter.hasNext()) {
       return Collections.emptyList();
     }
@@ -327,7 +361,7 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
       LocatedFileStatus file = iter.next();
       if (file.isDirectory()) {
         // Recurse into sub directories
-        result.addAll(getFiles(fs, file.getPath(), startTime, endTime));
+        result.addAll(getFiles(fs, file.getPath(), startTime, endTime, conf));
       } else {
         addFile(result, file, startTime, endTime);
       }
@@ -339,7 +373,7 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
   }
 
   static void addFile(List<FileStatus> result, LocatedFileStatus lfs, long startTime,
-      long endTime) {
+    long endTime) {
     long timestamp = AbstractFSWALProvider.getTimestamp(lfs.getPath().getName());
     if (timestamp > 0) {
       // Looks like a valid timestamp.
@@ -347,8 +381,8 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
         LOG.info("Found {}", lfs.getPath());
         result.add(lfs);
       } else {
-        LOG.info("Skipped {}, outside range [{}/{} - {}/{}]", lfs.getPath(),
-          startTime, Instant.ofEpochMilli(startTime), endTime, Instant.ofEpochMilli(endTime));
+        LOG.info("Skipped {}, outside range [{}/{} - {}/{}]", lfs.getPath(), startTime,
+          Instant.ofEpochMilli(startTime), endTime, Instant.ofEpochMilli(endTime));
       }
     } else {
       // If no timestamp, add it regardless.
@@ -359,7 +393,31 @@ public class WALInputFormat extends InputFormat<WALKey, WALEdit> {
 
   @Override
   public RecordReader<WALKey, WALEdit> createRecordReader(InputSplit split,
-      TaskAttemptContext context) throws IOException, InterruptedException {
+    TaskAttemptContext context) throws IOException, InterruptedException {
     return new WALKeyRecordReader();
+  }
+
+  /**
+   * Attempts to return the {@link LocatedFileStatus} for the given directory. If the directory does
+   * not exist, it will check if the directory is an archived log file and try to find it
+   */
+  private static RemoteIterator<LocatedFileStatus> listLocatedFileStatus(FileSystem fs, Path dir,
+    Configuration conf) throws IOException {
+    try {
+      return fs.listLocatedStatus(dir);
+    } catch (FileNotFoundException e) {
+      if (AbstractFSWALProvider.isArchivedLogFile(dir)) {
+        throw e;
+      }
+
+      LOG.warn("Log file {} not found, trying to find it in archive directory.", dir);
+      Path archiveFile = AbstractFSWALProvider.findArchivedLog(dir, conf);
+      if (archiveFile == null) {
+        LOG.error("Did not find archive file for {}", dir);
+        throw e;
+      }
+
+      return fs.listLocatedStatus(archiveFile);
+    }
   }
 }

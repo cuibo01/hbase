@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -98,8 +98,8 @@ public abstract class AbstractTestAsyncTableRegionReplicasRead {
       return Optional.of(this);
     }
 
-    private void recordAndTryFail(ObserverContext<RegionCoprocessorEnvironment> c)
-        throws IOException {
+    private void recordAndTryFail(ObserverContext<? extends RegionCoprocessorEnvironment> c)
+      throws IOException {
       RegionInfo region = c.getEnvironment().getRegionInfo();
       if (!region.getTable().equals(TABLE_NAME)) {
         return;
@@ -112,14 +112,14 @@ public abstract class AbstractTestAsyncTableRegionReplicasRead {
     }
 
     @Override
-    public void preGetOp(ObserverContext<RegionCoprocessorEnvironment> c, Get get,
-        List<Cell> result) throws IOException {
+    public void preGetOp(ObserverContext<? extends RegionCoprocessorEnvironment> c, Get get,
+      List<Cell> result) throws IOException {
       recordAndTryFail(c);
     }
 
     @Override
-    public void preScannerOpen(ObserverContext<RegionCoprocessorEnvironment> c, Scan scan)
-        throws IOException {
+    public void preScannerOpen(ObserverContext<? extends RegionCoprocessorEnvironment> c, Scan scan)
+      throws IOException {
       recordAndTryFail(c);
     }
   }

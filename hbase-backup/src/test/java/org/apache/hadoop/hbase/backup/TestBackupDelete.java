@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hbase.backup;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -39,20 +40,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
+import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
 
 @Category(LargeTests.class)
 public class TestBackupDelete extends TestBackupBase {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestBackupDelete.class);
+    HBaseClassTestRule.forClass(TestBackupDelete.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestBackupDelete.class);
 
   /**
    * Verify that full backup is created on a single table with data correctly. Verify that history
    * works as expected.
-   *
    * @throws Exception if doing the backup or an operation on the tables fails
    */
   @Test
@@ -80,7 +81,6 @@ public class TestBackupDelete extends TestBackupBase {
   /**
    * Verify that full backup is created on a single table with data correctly. Verify that history
    * works as expected.
-   *
    * @throws Exception if doing the backup or an operation on the tables fails
    */
   @Test
@@ -116,7 +116,7 @@ public class TestBackupDelete extends TestBackupBase {
       // time - 2 days
       @Override
       public long currentTime() {
-        return System.currentTimeMillis() - 2 * 24 * 3600 * 1000 ;
+        return System.currentTimeMillis() - 2 * 24 * 3600 * 1000;
       }
     });
     String backupId = fullTableBackup(tableList);
@@ -159,5 +159,28 @@ public class TestBackupDelete extends TestBackupBase {
     output = baos.toString();
     LOG.info(baos.toString());
     assertTrue(output.indexOf("Deleted 1 backups") >= 0);
+  }
+
+  /**
+   * Verify that backup deletion updates the incremental-backup-set.
+   */
+  @Test
+  public void testBackupDeleteUpdatesIncrementalBackupSet() throws Exception {
+    LOG.info("Test backup delete updates the incremental backup set");
+    BackupSystemTable backupSystemTable = new BackupSystemTable(TEST_UTIL.getConnection());
+
+    String backupId1 = fullTableBackup(Lists.newArrayList(table1, table2));
+    assertTrue(checkSucceeded(backupId1));
+    assertEquals(Sets.newHashSet(table1, table2),
+      backupSystemTable.getIncrementalBackupTableSet(BACKUP_ROOT_DIR));
+
+    String backupId2 = fullTableBackup(Lists.newArrayList(table3));
+    assertTrue(checkSucceeded(backupId2));
+    assertEquals(Sets.newHashSet(table1, table2, table3),
+      backupSystemTable.getIncrementalBackupTableSet(BACKUP_ROOT_DIR));
+
+    getBackupAdmin().deleteBackups(new String[] { backupId1 });
+    assertEquals(Sets.newHashSet(table3),
+      backupSystemTable.getIncrementalBackupTableSet(BACKUP_ROOT_DIR));
   }
 }

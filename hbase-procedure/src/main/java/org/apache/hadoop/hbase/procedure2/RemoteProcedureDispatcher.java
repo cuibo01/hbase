@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,9 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.procedure2;
 
+import com.google.errorprone.annotations.RestrictedApi;
 import java.io.IOException;
 import java.lang.Thread.UncaughtExceptionHandler;
 import java.util.HashSet;
@@ -36,42 +36,43 @@ import org.apache.hadoop.hbase.procedure2.util.DelayedUtil.DelayedWithTimeout;
 import org.apache.hadoop.hbase.procedure2.util.StringUtils;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Threads;
-import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.common.collect.ArrayListMultimap;
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 /**
- * A procedure dispatcher that aggregates and sends after elapsed time or after we hit
- * count threshold. Creates its own threadpool to run RPCs with timeout.
+ * A procedure dispatcher that aggregates and sends after elapsed time or after we hit count
+ * threshold. Creates its own threadpool to run RPCs with timeout.
  * <ul>
  * <li>Each server queue has a dispatch buffer</li>
- * <li>Once the dispatch buffer reaches a threshold-size/time we send<li>
+ * <li>Once the dispatch buffer reaches a threshold-size/time we send
+ * <li>
  * </ul>
- * <p>Call {@link #start()} and then {@link #submitTask(Runnable)}. When done,
- * call {@link #stop()}.
+ * <p>
+ * Call {@link #start()} and then {@link #submitTask(Runnable)}. When done, call {@link #stop()}.
  */
 @InterfaceAudience.Private
 public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable<TRemote>> {
   private static final Logger LOG = LoggerFactory.getLogger(RemoteProcedureDispatcher.class);
 
   public static final String THREAD_POOL_SIZE_CONF_KEY =
-      "hbase.procedure.remote.dispatcher.threadpool.size";
+    "hbase.procedure.remote.dispatcher.threadpool.size";
   private static final int DEFAULT_THREAD_POOL_SIZE = 128;
 
   public static final String DISPATCH_DELAY_CONF_KEY =
-      "hbase.procedure.remote.dispatcher.delay.msec";
+    "hbase.procedure.remote.dispatcher.delay.msec";
   private static final int DEFAULT_DISPATCH_DELAY = 150;
 
   public static final String DISPATCH_MAX_QUEUE_SIZE_CONF_KEY =
-      "hbase.procedure.remote.dispatcher.max.queue.size";
+    "hbase.procedure.remote.dispatcher.max.queue.size";
   private static final int DEFAULT_MAX_QUEUE_SIZE = 32;
 
   private final AtomicBoolean running = new AtomicBoolean(false);
   private final ConcurrentHashMap<TRemote, BufferNode> nodeMap =
-      new ConcurrentHashMap<TRemote, BufferNode>();
+    new ConcurrentHashMap<TRemote, BufferNode>();
 
   private final int operationDelay;
   private final int queueMaxSize;
@@ -92,8 +93,8 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
       return false;
     }
 
-    LOG.info("Instantiated, coreThreads={} (allowCoreThreadTimeOut=true), queueMaxSize={}, " +
-        "operationDelay={}", this.corePoolSize, this.queueMaxSize, this.operationDelay);
+    LOG.info("Instantiated, coreThreads={} (allowCoreThreadTimeOut=true), queueMaxSize={}, "
+      + "operationDelay={}", this.corePoolSize, this.queueMaxSize, this.operationDelay);
 
     // Create the timeout executor
     timeoutExecutor = new TimeoutExecutorThread();
@@ -144,14 +145,14 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
   protected abstract UncaughtExceptionHandler getUncaughtExceptionHandler();
 
   // ============================================================================================
-  //  Node Helpers
+  // Node Helpers
   // ============================================================================================
   /**
    * Add a node that will be able to execute remote procedures
    * @param key the node identifier
    */
   public void addNode(final TRemote key) {
-    assert key != null: "Tried to add a node with a null key";
+    assert key != null : "Tried to add a node with a null key";
     nodeMap.computeIfAbsent(key, k -> new BufferNode(k));
   }
 
@@ -160,8 +161,7 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
    * @param key the node identifier
    */
   public void addOperationToNode(final TRemote key, RemoteProcedure rp)
-          throws NullTargetServerDispatchException, NoServerDispatchException,
-          NoNodeDispatchException {
+    throws NullTargetServerDispatchException, NoServerDispatchException, NoNodeDispatchException {
     if (key == null) {
       throw new NullTargetServerDispatchException(rp.toString());
     }
@@ -203,7 +203,7 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
   }
 
   // ============================================================================================
-  //  Task Helpers
+  // Task Helpers
   // ============================================================================================
   protected final void submitTask(Runnable task) {
     threadPool.execute(task);
@@ -214,6 +214,7 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
   }
 
   protected abstract void remoteDispatch(TRemote key, Set<RemoteProcedure> operations);
+
   protected abstract void abortPendingOperations(TRemote key, Set<RemoteProcedure> operations);
 
   /**
@@ -221,13 +222,21 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
    */
   public static abstract class RemoteOperation {
     private final RemoteProcedure remoteProcedure;
+    // active time of the master that sent this request, used for fencing
+    private final long initiatingMasterActiveTime;
 
-    protected RemoteOperation(final RemoteProcedure remoteProcedure) {
+    protected RemoteOperation(final RemoteProcedure remoteProcedure,
+      long initiatingMasterActiveTime) {
       this.remoteProcedure = remoteProcedure;
+      this.initiatingMasterActiveTime = initiatingMasterActiveTime;
     }
 
     public RemoteProcedure getRemoteProcedure() {
       return remoteProcedure;
+    }
+
+    public long getInitiatingMasterActiveTime() {
+      return initiatingMasterActiveTime;
     }
   }
 
@@ -236,11 +245,11 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
    */
   public interface RemoteProcedure<TEnv, TRemote> {
     /**
-     * For building the remote operation.
-     * May be empty if no need to send remote call. Usually, this means the RemoteProcedure has been
-     * finished already. This is possible, as we may have already sent the procedure to RS but then
-     * the rpc connection is broken so the executeProcedures call fails, but the RS does receive the
-     * procedure and execute it and then report back, before we retry again.
+     * For building the remote operation. May be empty if no need to send remote call. Usually, this
+     * means the RemoteProcedure has been finished already. This is possible, as we may have already
+     * sent the procedure to RS but then the rpc connection is broken so the executeProcedures call
+     * fails, but the RS does receive the procedure and execute it and then report back, before we
+     * retry again.
      */
     Optional<RemoteOperation> remoteCallBuild(TEnv env, TRemote remote);
 
@@ -253,7 +262,7 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
      * Called when RS tells the remote procedure is succeeded through the
      * {@code reportProcedureDone} method.
      */
-    void remoteOperationCompleted(TEnv env);
+    void remoteOperationCompleted(TEnv env, byte[] remoteResultData);
 
     /**
      * Called when RS tells the remote procedure is failed through the {@code reportProcedureDone}
@@ -262,9 +271,8 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
     void remoteOperationFailed(TEnv env, RemoteProcedureException error);
 
     /**
-     * Whether store this remote procedure in dispatched queue
-     * only OpenRegionProcedure and CloseRegionProcedure return false since they are
-     * not fully controlled by dispatcher
+     * Whether store this remote procedure in dispatched queue only OpenRegionProcedure and
+     * CloseRegionProcedure return false since they are not fully controlled by dispatcher
      */
     default boolean storeInDispatchedQueue() {
       return true;
@@ -283,7 +291,7 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
   }
 
   protected ArrayListMultimap<Class<?>, RemoteOperation> buildAndGroupRequestByType(final TEnv env,
-      final TRemote remote, final Set<RemoteProcedure> remoteProcedures) {
+    final TRemote remote, final Set<RemoteProcedure> remoteProcedures) {
     final ArrayListMultimap<Class<?>, RemoteOperation> requestByType = ArrayListMultimap.create();
     for (RemoteProcedure proc : remoteProcedures) {
       Optional<RemoteOperation> operation = proc.remoteCallBuild(env, remote);
@@ -293,12 +301,18 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
   }
 
   protected <T extends RemoteOperation> List<T> fetchType(
-      final ArrayListMultimap<Class<?>, RemoteOperation> requestByType, final Class<T> type) {
-    return (List<T>)requestByType.removeAll(type);
+    final ArrayListMultimap<Class<?>, RemoteOperation> requestByType, final Class<T> type) {
+    return (List<T>) requestByType.removeAll(type);
+  }
+
+  @RestrictedApi(explanation = "Should only be called in tests", link = "",
+      allowedOnPath = ".*/src/test/.*")
+  public boolean hasNode(TRemote key) {
+    return nodeMap.containsKey(key);
   }
 
   // ============================================================================================
-  //  Timeout Helpers
+  // Timeout Helpers
   // ============================================================================================
   private final class TimeoutExecutorThread extends Thread {
     private final DelayQueue<DelayedWithTimeout> queue = new DelayQueue<DelayedWithTimeout>();
@@ -310,8 +324,8 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
     @Override
     public void run() {
       while (running.get()) {
-        final DelayedWithTimeout task = DelayedUtil.takeWithoutInterrupt(queue,
-          20, TimeUnit.SECONDS);
+        final DelayedWithTimeout task =
+          DelayedUtil.takeWithoutInterrupt(queue, 20, TimeUnit.SECONDS);
         if (task == null || task == DelayedUtil.DELAYED_POISON) {
           if (task == null && queue.size() > 0) {
             LOG.error("DelayQueue for RemoteProcedureDispatcher is not empty when timed waiting"
@@ -348,8 +362,8 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
           sendStopSignal();
           join(250);
           if (i > 0 && (i % 8) == 0) {
-            LOG.warn("Waiting termination of thread " + getName() + ", " +
-              StringUtils.humanTimeDiff(EnvironmentEdgeManager.currentTime() - startTime));
+            LOG.warn("Waiting termination of thread " + getName() + ", "
+              + StringUtils.humanTimeDiff(EnvironmentEdgeManager.currentTime() - startTime));
           }
         }
       } catch (InterruptedException e) {
@@ -359,14 +373,14 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
   }
 
   // ============================================================================================
-  //  Internals Helpers
+  // Internals Helpers
   // ============================================================================================
 
   /**
    * Node that contains a set of RemoteProcedures
    */
   protected final class BufferNode extends DelayedContainerWithTimestamp<TRemote>
-      implements RemoteNode<TEnv, TRemote> {
+    implements RemoteNode<TEnv, TRemote> {
     private Set<RemoteProcedure> operations;
     private final Set<RemoteProcedure> dispatchedOperations = new HashSet<>();
 
@@ -398,7 +412,7 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
       if (operations != null) {
         remoteDispatch(getKey(), operations);
         operations.stream().filter(operation -> operation.storeInDispatchedQueue())
-            .forEach(operation -> dispatchedOperations.add(operation));
+          .forEach(operation -> dispatchedOperations.add(operation));
         this.operations = null;
       }
     }
@@ -412,7 +426,7 @@ public abstract class RemoteProcedureDispatcher<TEnv, TRemote extends Comparable
       this.dispatchedOperations.clear();
     }
 
-    public synchronized void operationCompleted(final RemoteProcedure remoteProcedure){
+    public synchronized void operationCompleted(final RemoteProcedure remoteProcedure) {
       this.dispatchedOperations.remove(remoteProcedure);
     }
 

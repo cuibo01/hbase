@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -42,8 +42,7 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
-
+import org.mockito.junit.MockitoJUnitRunner;
 
 @Category(SmallTests.class)
 @RunWith(MockitoJUnitRunner.class)
@@ -65,9 +64,8 @@ public class TestTopScreenModel {
     when(admin.getClusterMetrics()).thenReturn(TestUtils.createDummyClusterMetrics());
     topScreenModel = new TopScreenModel(admin, Mode.REGION, null, null, null, null);
 
-    fields = Mode.REGION.getFieldInfos().stream()
-      .map(FieldInfo::getField)
-      .collect(Collectors.toList());
+    fields =
+      Mode.REGION.getFieldInfos().stream().map(FieldInfo::getField).collect(Collectors.toList());
   }
 
   @Test
@@ -172,9 +170,9 @@ public class TestTopScreenModel {
     assertThat(topScreenModel.getCurrentMode(), is(Mode.TABLE));
 
     // Test for initialFilters
-    List<RecordFilter> initialFilters = Arrays.asList(
-      RecordFilter.parse("TABLE==table1", fields, true),
-      RecordFilter.parse("TABLE==table2", fields, true));
+    List<RecordFilter> initialFilters =
+      Arrays.asList(RecordFilter.parse("TABLE==table1", fields, true),
+        RecordFilter.parse("TABLE==table2", fields, true));
 
     topScreenModel.switchMode(Mode.TABLE, false, initialFilters);
 

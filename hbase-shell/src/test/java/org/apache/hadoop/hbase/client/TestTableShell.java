@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,24 +17,16 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import java.io.IOException;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
-import org.jruby.embed.PathType;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.apache.hadoop.hbase.testclassification.LargeTests;
+import org.junit.jupiter.api.Tag;
 
-@Category({ ClientTests.class, MediumTests.class })
+@Tag(ClientTests.TAG)
+@Tag(LargeTests.TAG)
 public class TestTableShell extends AbstractTestShell {
 
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-    HBaseClassTestRule.forClass(TestTableShell.class);
-
   @Override
-  protected String getIncludeList() {
+  public String getIncludeList() {
     return "table_test.rb";
   }
 }

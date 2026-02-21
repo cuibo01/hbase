@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.client;
 
 import java.io.IOException;
@@ -41,7 +39,6 @@ public final class ImmutableScan extends Scan {
 
   /**
    * Create Immutable instance of Scan from given Scan object
-   *
    * @param scan Copy all values from Scan
    */
   public ImmutableScan(Scan scan) {
@@ -95,9 +92,9 @@ public final class ImmutableScan extends Scan {
   }
 
   @Override
-  public Scan setRowPrefixFilter(byte[] rowPrefix) {
+  public Scan setStartStopRowForPrefixScan(byte[] rowPrefix) {
     throw new UnsupportedOperationException(
-      "ImmutableScan does not allow access to setRowPrefixFilter");
+      "ImmutableScan does not allow access to setStartStopRowForPrefixScan");
   }
 
   @Override
@@ -229,6 +226,12 @@ public final class ImmutableScan extends Scan {
   public Scan setScanMetricsEnabled(final boolean enabled) {
     throw new UnsupportedOperationException(
       "ImmutableScan does not allow access to setScanMetricsEnabled");
+  }
+
+  @Override
+  public Scan setEnableScanMetricsByRegion(final boolean enable) {
+    throw new UnsupportedOperationException(
+      "ImmutableScan does not allow access to setEnableScanMetricsByRegion");
   }
 
   @Override
@@ -403,6 +406,11 @@ public final class ImmutableScan extends Scan {
   @Override
   public boolean isScanMetricsEnabled() {
     return this.delegateScan.isScanMetricsEnabled();
+  }
+
+  @Override
+  public boolean isScanMetricsByRegionEnabled() {
+    return this.delegateScan.isScanMetricsByRegionEnabled();
   }
 
   @Override

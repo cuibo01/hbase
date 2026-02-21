@@ -22,7 +22,6 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.List;
 import java.util.Map;
-
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
@@ -49,7 +48,7 @@ public class TestBalancer {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestBalancer.class);
+    HBaseClassTestRule.forClass(TestBalancer.class);
 
   private final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
 
@@ -79,13 +78,13 @@ public class TestBalancer {
     AssignmentManager assignmentManager = master.getAssignmentManager();
     RegionStates regionStates = assignmentManager.getRegionStates();
     ServerName sn1 = ServerName.parseServerName("asf903.gq1.ygridcore.net,52690,1517835491385");
-    regionStates.getOrCreateServer(sn1);
+    regionStates.createServer(sn1);
 
     TableStateManager tableStateManager = master.getTableStateManager();
     ServerManager serverManager = master.getServerManager();
     Map<TableName, Map<ServerName, List<RegionInfo>>> assignments =
-      assignmentManager.getRegionStates()
-        .getAssignmentsForBalancer(tableStateManager, serverManager.getOnlineServersList());
+      assignmentManager.getRegionStates().getAssignmentsForBalancer(tableStateManager,
+        serverManager.getOnlineServersList());
     assertFalse(assignments.containsKey(disableTableName));
     assertTrue(assignments.containsKey(tableName));
     assertFalse(assignments.get(tableName).containsKey(sn1));

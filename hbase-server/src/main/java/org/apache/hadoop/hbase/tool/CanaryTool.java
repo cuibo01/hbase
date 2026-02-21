@@ -15,12 +15,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.tool;
 
 import static org.apache.hadoop.hbase.HConstants.DEFAULT_ZOOKEEPER_ZNODE_PARENT;
 import static org.apache.hadoop.hbase.HConstants.ZOOKEEPER_ZNODE_PARENT;
 import static org.apache.hadoop.hbase.util.Addressing.inetSocketAddress2String;
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.net.BindException;
@@ -34,7 +34,6 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
@@ -104,21 +103,14 @@ import org.slf4j.LoggerFactory;
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 /**
- * HBase Canary Tool for "canary monitoring" of a running HBase cluster.
- *
- * There are three modes:
+ * HBase Canary Tool for "canary monitoring" of a running HBase cluster. There are three modes:
  * <ol>
  * <li>region mode (Default): For each region, try to get one row per column family outputting
- * information on failure (ERROR) or else the latency.
- * </li>
- *
- * <li>regionserver mode: For each regionserver try to get one row from one table selected
- * randomly outputting information on failure (ERROR) or else the latency.
- * </li>
- *
+ * information on failure (ERROR) or else the latency.</li>
+ * <li>regionserver mode: For each regionserver try to get one row from one table selected randomly
+ * outputting information on failure (ERROR) or else the latency.</li>
  * <li>zookeeper mode: for each zookeeper instance, selects a znode outputting information on
- * failure (ERROR) or else the latency.
- * </li>
+ * failure (ERROR) or else the latency.</li>
  * </ol>
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.TOOLS)
@@ -154,6 +146,7 @@ public class CanaryTool implements Tool, Canary {
   public int checkRegions(String[] targets) throws Exception {
     String configuredReadTableTimeoutsStr = conf.get(HBASE_CANARY_REGION_READ_TABLE_TIMEOUT);
     try {
+      LOG.info("Canary tool is running in Region mode");
       if (configuredReadTableTimeoutsStr != null) {
         populateReadTableTimeoutsMap(configuredReadTableTimeoutsStr);
       }
@@ -167,12 +160,14 @@ public class CanaryTool implements Tool, Canary {
   @Override
   public int checkRegionServers(String[] targets) throws Exception {
     regionServerMode = true;
+    LOG.info("Canary tool is running in RegionServer mode");
     return runMonitor(targets);
   }
 
   @Override
   public int checkZooKeeper() throws Exception {
     zookeeperMode = true;
+    LOG.info("Canary tool is running in ZooKeeper mode");
     return runMonitor(null);
   }
 
@@ -181,29 +176,43 @@ public class CanaryTool implements Tool, Canary {
    */
   public interface Sink {
     long getReadFailureCount();
+
     long incReadFailureCount();
-    Map<String,String> getReadFailures();
+
+    Map<String, String> getReadFailures();
+
     void updateReadFailures(String regionName, String serverName);
+
     long getWriteFailureCount();
+
     long incWriteFailureCount();
-    Map<String,String> getWriteFailures();
+
+    Map<String, String> getWriteFailures();
+
     void updateWriteFailures(String regionName, String serverName);
+
     long getReadSuccessCount();
+
     long incReadSuccessCount();
+
     long getWriteSuccessCount();
+
     long incWriteSuccessCount();
+
+    void stop();
+
+    boolean isStopped();
   }
 
   /**
    * Simple implementation of canary sink that allows plotting to a file or standard output.
    */
   public static class StdOutSink implements Sink {
-    private AtomicLong readFailureCount = new AtomicLong(0),
-        writeFailureCount = new AtomicLong(0),
-        readSuccessCount = new AtomicLong(0),
-        writeSuccessCount = new AtomicLong(0);
+    private AtomicLong readFailureCount = new AtomicLong(0), writeFailureCount = new AtomicLong(0),
+        readSuccessCount = new AtomicLong(0), writeSuccessCount = new AtomicLong(0);
     private Map<String, String> readFailures = new ConcurrentHashMap<>();
     private Map<String, String> writeFailures = new ConcurrentHashMap<>();
+    private volatile boolean stopped = false;
 
     @Override
     public long getReadFailureCount() {
@@ -264,6 +273,15 @@ public class CanaryTool implements Tool, Canary {
     public long incWriteSuccessCount() {
       return writeSuccessCount.incrementAndGet();
     }
+
+    public void stop() {
+      stopped = true;
+    }
+
+    @Override
+    public boolean isStopped() {
+      return stopped;
+    }
   }
 
   /**
@@ -295,15 +313,14 @@ public class CanaryTool implements Tool, Canary {
   }
 
   /**
-   * By Region, for 'region'  mode.
+   * By Region, for 'region' mode.
    */
   public static class RegionStdOutSink extends StdOutSink {
     private Map<String, LongAdder> perTableReadLatency = new HashMap<>();
     private LongAdder writeLatency = new LongAdder();
     private final ConcurrentMap<String, List<RegionTaskResult>> regionMap =
       new ConcurrentHashMap<>();
-    private ConcurrentMap<ServerName, LongAdder> perServerFailuresCount =
-      new ConcurrentHashMap<>();
+    private ConcurrentMap<ServerName, LongAdder> perServerFailuresCount = new ConcurrentHashMap<>();
     private ConcurrentMap<String, LongAdder> perTableFailuresCount = new ConcurrentHashMap<>();
 
     public ConcurrentMap<ServerName, LongAdder> getPerServerFailuresCount() {
@@ -320,13 +337,15 @@ public class CanaryTool implements Tool, Canary {
     }
 
     private void incFailuresCountDetails(ServerName serverName, RegionInfo region) {
-      perServerFailuresCount.compute(serverName, (server, count) -> {
-        if (count == null) {
-          count = new LongAdder();
-        }
-        count.increment();
-        return count;
-      });
+      if (serverName != null) {
+        perServerFailuresCount.compute(serverName, (server, count) -> {
+          if (count == null) {
+            count = new LongAdder();
+          }
+          count.increment();
+          return count;
+        });
+      }
       perTableFailuresCount.compute(region.getTable().getNameAsString(), (tableName, count) -> {
         if (count == null) {
           count = new LongAdder();
@@ -337,23 +356,22 @@ public class CanaryTool implements Tool, Canary {
     }
 
     public void publishReadFailure(ServerName serverName, RegionInfo region, Exception e) {
+      LOG.error("Read from {} on serverName={} failed", region.getRegionNameAsString(), serverName,
+        e);
       incReadFailureCount();
       incFailuresCountDetails(serverName, region);
-      LOG.error("Read from {} on serverName={} failed",
-          region.getRegionNameAsString(), serverName, e);
     }
 
     public void publishReadFailure(ServerName serverName, RegionInfo region,
-        ColumnFamilyDescriptor column, Exception e) {
+      ColumnFamilyDescriptor column, Exception e) {
+      LOG.error("Read from {} on serverName={}, columnFamily={} failed",
+        region.getRegionNameAsString(), serverName, column.getNameAsString(), e);
       incReadFailureCount();
       incFailuresCountDetails(serverName, region);
-      LOG.error("Read from {} on serverName={}, columnFamily={} failed",
-          region.getRegionNameAsString(), serverName,
-          column.getNameAsString(), e);
     }
 
     public void publishReadTiming(ServerName serverName, RegionInfo region,
-        ColumnFamilyDescriptor column, long msTime) {
+      ColumnFamilyDescriptor column, long msTime) {
       RegionTaskResult rtr = new RegionTaskResult(region, region.getTable(), serverName, column);
       rtr.setReadSuccess();
       rtr.setReadLatency(msTime);
@@ -362,25 +380,25 @@ public class CanaryTool implements Tool, Canary {
       // Note that read success count will be equal to total column family read successes.
       incReadSuccessCount();
       LOG.info("Read from {} on {} {} in {}ms", region.getRegionNameAsString(), serverName,
-          column.getNameAsString(), msTime);
+        column.getNameAsString(), msTime);
     }
 
     public void publishWriteFailure(ServerName serverName, RegionInfo region, Exception e) {
+      LOG.error("Write to {} on {} failed", region.getRegionNameAsString(), serverName, e);
       incWriteFailureCount();
       incFailuresCountDetails(serverName, region);
-      LOG.error("Write to {} on {} failed", region.getRegionNameAsString(), serverName, e);
     }
 
     public void publishWriteFailure(ServerName serverName, RegionInfo region,
-        ColumnFamilyDescriptor column, Exception e) {
+      ColumnFamilyDescriptor column, Exception e) {
+      LOG.error("Write to {} on {} {} failed", region.getRegionNameAsString(), serverName,
+        column.getNameAsString(), e);
       incWriteFailureCount();
       incFailuresCountDetails(serverName, region);
-      LOG.error("Write to {} on {} {} failed", region.getRegionNameAsString(), serverName,
-          column.getNameAsString(), e);
     }
 
     public void publishWriteTiming(ServerName serverName, RegionInfo region,
-        ColumnFamilyDescriptor column, long msTime) {
+      ColumnFamilyDescriptor column, long msTime) {
       RegionTaskResult rtr = new RegionTaskResult(region, region.getTable(), serverName, column);
       rtr.setWriteSuccess();
       rtr.setWriteLatency(msTime);
@@ -388,8 +406,8 @@ public class CanaryTool implements Tool, Canary {
       rtrs.add(rtr);
       // Note that write success count will be equal to total column family write successes.
       incWriteSuccessCount();
-      LOG.info("Write to {} on {} {} in {}ms",
-        region.getRegionNameAsString(), serverName, column.getNameAsString(), msTime);
+      LOG.info("Write to {} on {} {} in {}ms", region.getRegionNameAsString(), serverName,
+        column.getNameAsString(), msTime);
     }
 
     public Map<String, LongAdder> getReadLatencyMap() {
@@ -430,7 +448,7 @@ public class CanaryTool implements Tool, Canary {
     private ZookeeperStdOutSink sink;
 
     public ZookeeperTask(Connection connection, String host, String znode, int timeout,
-        ZookeeperStdOutSink sink) {
+      ZookeeperStdOutSink sink) {
       this.connection = connection;
       this.host = host;
       this.znode = znode;
@@ -438,7 +456,11 @@ public class CanaryTool implements Tool, Canary {
       this.sink = sink;
     }
 
-    @Override public Void call() throws Exception {
+    @Override
+    public Void call() throws Exception {
+      if (this.sink.isStopped()) {
+        return null;
+      }
       ZooKeeper zooKeeper = null;
       try {
         zooKeeper = new ZooKeeper(host, timeout, EmptyWatcher.instance);
@@ -464,9 +486,11 @@ public class CanaryTool implements Tool, Canary {
    * output latency or failure.
    */
   static class RegionTask implements Callable<Void> {
-    public enum TaskType{
-      READ, WRITE
+    public enum TaskType {
+      READ,
+      WRITE
     }
+
     private Connection connection;
     private RegionInfo region;
     private RegionStdOutSink sink;
@@ -477,8 +501,8 @@ public class CanaryTool implements Tool, Canary {
     private boolean readAllCF;
 
     RegionTask(Connection connection, RegionInfo region, ServerName serverName,
-        RegionStdOutSink sink, TaskType taskType, boolean rawScanEnabled, LongAdder rwLatency,
-        boolean readAllCF) {
+      RegionStdOutSink sink, TaskType taskType, boolean rawScanEnabled, LongAdder rwLatency,
+      boolean readAllCF) {
       this.connection = connection;
       this.region = region;
       this.serverName = serverName;
@@ -491,6 +515,9 @@ public class CanaryTool implements Tool, Canary {
 
     @Override
     public Void call() {
+      if (this.sink.isStopped()) {
+        return null;
+      }
       switch (taskType) {
         case READ:
           return read();
@@ -503,19 +530,44 @@ public class CanaryTool implements Tool, Canary {
 
     private Void readColumnFamily(Table table, ColumnFamilyDescriptor column) {
       byte[] startKey = null;
-      Get get = null;
       Scan scan = null;
       ResultScanner rs = null;
       StopWatch stopWatch = new StopWatch();
       startKey = region.getStartKey();
       // Can't do a get on empty start row so do a Scan of first element if any instead.
       if (startKey.length > 0) {
-        get = new Get(startKey);
+        Get get = new Get(startKey);
         get.setCacheBlocks(false);
         get.setFilter(new FirstKeyOnlyFilter());
         get.addFamily(column.getName());
+        // Converting get object to scan to enable RAW SCAN.
+        // This will work for all the regions of the HBase tables except first region of the table.
+        scan = new Scan(get);
+        scan.setRaw(rawScanEnabled);
       } else {
         scan = new Scan();
+        // In case of first region of the HBase Table, we do not have start-key for the region.
+        // For Region Canary, we only need to scan a single row/cell in the region to make sure that
+        // region is accessible.
+        //
+        // When HBase table has more than 1 empty regions at start of the row-key space, Canary will
+        // create multiple scan object to find first available row in the table by scanning all the
+        // regions in sequence until it can find first available row.
+        //
+        // This could result in multiple millions of scans based on the size of table and number of
+        // empty regions in sequence. In test environment, A table with no data and 1100 empty
+        // regions, Single canary run was creating close to half million to 1 million scans to
+        // successfully do canary run for the table.
+        //
+        // Since First region of the table doesn't have any start key, We should set End Key as
+        // stop row and set inclusive=false to limit scan to single region only.
+        //
+        // TODO : In future, we can streamline Canary behaviour for all the regions by doing scan
+        // with startRow inclusive and stopRow exclusive instead of different behaviour for First
+        // Region of the table and rest of the region of the table. This way implementation is
+        // simplified. As of now this change has been kept minimal to avoid any unnecessary
+        // perf impact.
+        scan.withStopRow(region.getEndKey(), false);
         LOG.debug("rawScan {} for {}", rawScanEnabled, region.getTable());
         scan.setRaw(rawScanEnabled);
         scan.setCaching(1);
@@ -529,12 +581,8 @@ public class CanaryTool implements Tool, Canary {
         column.getNameAsString(), Bytes.toStringBinary(startKey));
       try {
         stopWatch.start();
-        if (startKey.length > 0) {
-          table.get(get);
-        } else {
-          rs = table.getScanner(scan);
-          rs.next();
-        }
+        rs = table.getScanner(scan);
+        rs.next();
         stopWatch.stop();
         this.readWriteLatency.add(stopWatch.getTime());
         sink.publishReadTiming(serverName, region, column, stopWatch.getTime());
@@ -602,18 +650,17 @@ public class CanaryTool implements Tool, Canary {
         tableDesc = table.getDescriptor();
         byte[] rowToCheck = region.getStartKey();
         if (rowToCheck.length == 0) {
-          rowToCheck = new byte[]{0x0};
+          rowToCheck = new byte[] { 0x0 };
         }
         int writeValueSize =
-            connection.getConfiguration().getInt(HConstants.HBASE_CANARY_WRITE_VALUE_SIZE_KEY, 10);
+          connection.getConfiguration().getInt(HConstants.HBASE_CANARY_WRITE_VALUE_SIZE_KEY, 10);
         for (ColumnFamilyDescriptor column : tableDesc.getColumnFamilies()) {
           Put put = new Put(rowToCheck);
           byte[] value = new byte[writeValueSize];
           Bytes.random(value);
           put.addColumn(column.getName(), HConstants.EMPTY_BYTE_ARRAY, value);
-
-          LOG.debug("Writing to {} {} {} {}",
-            tableDesc.getTableName(), region.getRegionNameAsString(), column.getNameAsString(),
+          LOG.debug("Writing to {} {} {} {}", tableDesc.getTableName(),
+            region.getRegionNameAsString(), column.getNameAsString(),
             Bytes.toStringBinary(rowToCheck));
           try {
             long startTime = EnvironmentEdgeManager.currentTime();
@@ -635,27 +682,32 @@ public class CanaryTool implements Tool, Canary {
   }
 
   /**
-   * Run a single RegionServer Task and then exit.
-   * Get one row from a region on the regionserver and output latency or the failure.
+   * Run a single RegionServer Task and then exit. Get one row from a region on the regionserver and
+   * output latency or the failure.
    */
   static class RegionServerTask implements Callable<Void> {
     private Connection connection;
     private String serverName;
     private RegionInfo region;
     private RegionServerStdOutSink sink;
+    private Boolean rawScanEnabled;
     private AtomicLong successes;
 
     RegionServerTask(Connection connection, String serverName, RegionInfo region,
-        RegionServerStdOutSink sink, AtomicLong successes) {
+      RegionServerStdOutSink sink, Boolean rawScanEnabled, AtomicLong successes) {
       this.connection = connection;
       this.serverName = serverName;
       this.region = region;
       this.sink = sink;
+      this.rawScanEnabled = rawScanEnabled;
       this.successes = successes;
     }
 
     @Override
     public Void call() {
+      if (this.sink.isStopped()) {
+        return null;
+      }
       TableName tableName = null;
       Table table = null;
       Get get = null;
@@ -669,29 +721,41 @@ public class CanaryTool implements Tool, Canary {
         table = connection.getTable(tableName);
         startKey = region.getStartKey();
         // Can't do a get on empty start row so do a Scan of first element if any instead.
-        LOG.debug("Reading from {} {} {} {}",
-          serverName, region.getTable(), region.getRegionNameAsString(),
-          Bytes.toStringBinary(startKey));
+        LOG.debug("Reading from {} {} {} {}", serverName, region.getTable(),
+          region.getRegionNameAsString(), Bytes.toStringBinary(startKey));
         if (startKey.length > 0) {
           get = new Get(startKey);
           get.setCacheBlocks(false);
           get.setFilter(new FirstKeyOnlyFilter());
-          stopWatch.start();
-          table.get(get);
-          stopWatch.stop();
+          // Converting get object to scan to enable RAW SCAN.
+          // This will work for all the regions of the HBase tables except first region.
+          scan = new Scan(get);
+
         } else {
           scan = new Scan();
+          // In case of first region of the HBase Table, we do not have start-key for the region.
+          // For Region Canary, we only need scan a single row/cell in the region to make sure that
+          // region is accessible.
+          //
+          // When HBase table has more than 1 empty regions at start of the row-key space, Canary
+          // will create multiple scan object to find first available row in the table by scanning
+          // all the regions in sequence until it can find first available row.
+          //
+          // Since First region of the table doesn't have any start key, We should set End Key as
+          // stop row and set inclusive=false to limit scan to first region only.
+          scan.withStopRow(region.getEndKey(), false);
           scan.setCacheBlocks(false);
           scan.setFilter(new FirstKeyOnlyFilter());
           scan.setCaching(1);
           scan.setMaxResultSize(1L);
           scan.setOneRowLimit();
-          stopWatch.start();
-          ResultScanner s = table.getScanner(scan);
-          s.next();
-          s.close();
-          stopWatch.stop();
         }
+        scan.setRaw(rawScanEnabled);
+        stopWatch.start();
+        ResultScanner s = table.getScanner(scan);
+        s.next();
+        s.close();
+        stopWatch.stop();
         successes.incrementAndGet();
         sink.publishReadTiming(tableName.getNameAsString(), serverName, stopWatch.getTime());
       } catch (TableNotFoundException tnfe) {
@@ -736,8 +800,8 @@ public class CanaryTool implements Tool, Canary {
 
   private static final Logger LOG = LoggerFactory.getLogger(Canary.class);
 
-  public static final TableName DEFAULT_WRITE_TABLE_NAME = TableName.valueOf(
-    NamespaceDescriptor.SYSTEM_NAMESPACE_NAME_STR, "canary");
+  public static final TableName DEFAULT_WRITE_TABLE_NAME =
+    TableName.valueOf(NamespaceDescriptor.SYSTEM_NAMESPACE_NAME_STR, "canary");
 
   private static final String CANARY_TABLE_FAMILY_NAME = "Test";
 
@@ -756,31 +820,30 @@ public class CanaryTool implements Tool, Canary {
   private boolean zookeeperMode = false;
 
   /**
-   * This is a Map of table to timeout. The timeout is for reading all regions in the table; i.e.
-   * we aggregate time to fetch each region and it needs to be less than this value else we
-   * log an ERROR.
+   * This is a Map of table to timeout. The timeout is for reading all regions in the table; i.e. we
+   * aggregate time to fetch each region and it needs to be less than this value else we log an
+   * ERROR.
    */
   private HashMap<String, Long> configuredReadTableTimeouts = new HashMap<>();
 
-  public static final String HBASE_CANARY_REGIONSERVER_ALL_REGIONS
-          = "hbase.canary.regionserver_all_regions";
+  public static final String HBASE_CANARY_REGIONSERVER_ALL_REGIONS =
+    "hbase.canary.regionserver_all_regions";
 
-  public static final String HBASE_CANARY_REGION_WRITE_SNIFFING
-          = "hbase.canary.region.write.sniffing";
-  public static final String HBASE_CANARY_REGION_WRITE_TABLE_TIMEOUT
-          = "hbase.canary.region.write.table.timeout";
-  public static final String HBASE_CANARY_REGION_WRITE_TABLE_NAME
-          = "hbase.canary.region.write.table.name";
-  public static final String HBASE_CANARY_REGION_READ_TABLE_TIMEOUT
-          = "hbase.canary.region.read.table.timeout";
+  public static final String HBASE_CANARY_REGION_WRITE_SNIFFING =
+    "hbase.canary.region.write.sniffing";
+  public static final String HBASE_CANARY_REGION_WRITE_TABLE_TIMEOUT =
+    "hbase.canary.region.write.table.timeout";
+  public static final String HBASE_CANARY_REGION_WRITE_TABLE_NAME =
+    "hbase.canary.region.write.table.name";
+  public static final String HBASE_CANARY_REGION_READ_TABLE_TIMEOUT =
+    "hbase.canary.region.read.table.timeout";
 
-  public static final String HBASE_CANARY_ZOOKEEPER_PERMITTED_FAILURES
-          = "hbase.canary.zookeeper.permitted.failures";
+  public static final String HBASE_CANARY_ZOOKEEPER_PERMITTED_FAILURES =
+    "hbase.canary.zookeeper.permitted.failures";
 
   public static final String HBASE_CANARY_USE_REGEX = "hbase.canary.use.regex";
   public static final String HBASE_CANARY_TIMEOUT = "hbase.canary.timeout";
   public static final String HBASE_CANARY_FAIL_ON_ERROR = "hbase.canary.fail.on.error";
-
 
   private ExecutorService executor; // threads to retrieve data from regionservers
 
@@ -856,15 +919,15 @@ public class CanaryTool implements Tool, Canary {
           }
         } else if (cmd.equals("-zookeeper")) {
           this.zookeeperMode = true;
-        } else if(cmd.equals("-regionserver")) {
+        } else if (cmd.equals("-regionserver")) {
           this.regionServerMode = true;
-        } else if(cmd.equals("-allRegions")) {
+        } else if (cmd.equals("-allRegions")) {
           conf.setBoolean(HBASE_CANARY_REGIONSERVER_ALL_REGIONS, true);
           regionServerAllRegions = true;
-        } else if(cmd.equals("-writeSniffing")) {
+        } else if (cmd.equals("-writeSniffing")) {
           writeSniffing = true;
           conf.setBoolean(HBASE_CANARY_REGION_WRITE_SNIFFING, true);
-        } else if(cmd.equals("-treatFailureAsError") || cmd.equals("-failureAsError")) {
+        } else if (cmd.equals("-treatFailureAsError") || cmd.equals("-failureAsError")) {
           conf.setBoolean(HBASE_CANARY_FAIL_ON_ERROR, true);
         } else if (cmd.equals("-e")) {
           conf.setBoolean(HBASE_CANARY_USE_REGEX, true);
@@ -883,7 +946,7 @@ public class CanaryTool implements Tool, Canary {
             printUsageAndExit();
           }
           conf.setLong(HBASE_CANARY_TIMEOUT, timeout);
-        } else if(cmd.equals("-writeTableTimeout")) {
+        } else if (cmd.equals("-writeTableTimeout")) {
           i++;
 
           if (i == args.length) {
@@ -909,8 +972,7 @@ public class CanaryTool implements Tool, Canary {
         } else if (cmd.equals("-f")) {
           i++;
           if (i == args.length) {
-            System.err
-                .println("-f needs a boolean value argument (true|false).");
+            System.err.println("-f needs a boolean value argument (true|false).");
             printUsageAndExit();
           }
 
@@ -918,8 +980,8 @@ public class CanaryTool implements Tool, Canary {
         } else if (cmd.equals("-readTableTimeouts")) {
           i++;
           if (i == args.length) {
-            System.err.println("-readTableTimeouts needs a comma-separated list of read " +
-                "millisecond timeouts per table (without spaces).");
+            System.err.println("-readTableTimeouts needs a comma-separated list of read "
+              + "millisecond timeouts per table (without spaces).");
             printUsageAndExit();
           }
           readTableTimeoutsStr = args[i];
@@ -954,8 +1016,7 @@ public class CanaryTool implements Tool, Canary {
     }
     if (this.zookeeperMode) {
       if (this.regionServerMode || regionServerAllRegions || writeSniffing) {
-        System.err.println("-zookeeper is exclusive and cannot be combined with "
-            + "other modes.");
+        System.err.println("-zookeeper is exclusive and cannot be combined with " + "other modes.");
         printUsageAndExit();
       }
     }
@@ -981,7 +1042,7 @@ public class CanaryTool implements Tool, Canary {
       System.arraycopy(args, index, monitorTargets, 0, length);
     }
     if (interval > 0) {
-      //Only show the web page in daemon mode
+      // Only show the web page in daemon mode
       putUpWebUI();
     }
     if (zookeeperMode) {
@@ -1036,8 +1097,8 @@ public class CanaryTool implements Tool, Canary {
             currentTimeLength = EnvironmentEdgeManager.currentTime() - startTime;
             if (currentTimeLength > timeout) {
               LOG.error("The monitor is running too long (" + currentTimeLength
-                  + ") after timeout limit:" + timeout
-                  + " will be killed itself !!");
+                + ") after timeout limit:" + timeout + " will be killed itself !!");
+              monitorThread.interrupt();
               if (monitor.initialized) {
                 return TIMEOUT_ERROR_EXIT_CODE;
               } else {
@@ -1067,13 +1128,22 @@ public class CanaryTool implements Tool, Canary {
   }
 
   @Override
-  public Map<String, String> getReadFailures()  {
+  public Map<String, String> getReadFailures() {
     return sink.getReadFailures();
   }
 
   @Override
-  public Map<String, String> getWriteFailures()  {
+  public Map<String, String> getWriteFailures() {
     return sink.getWriteFailures();
+  }
+
+  /**
+   * Return a CanaryTool.Sink object containing the detailed results of the canary run. The Sink may
+   * not have been created if a Monitor thread is not yet running.
+   * @return the active Sink if one exists, null otherwise.
+   */
+  public Sink getActiveSink() {
+    return sink;
   }
 
   private void printUsageAndExit() {
@@ -1081,38 +1151,38 @@ public class CanaryTool implements Tool, Canary {
       "Usage: canary [OPTIONS] [<TABLE1> [<TABLE2]...] | [<REGIONSERVER1> [<REGIONSERVER2]..]");
     System.err.println("Where [OPTIONS] are:");
     System.err.println(" -h,-help        show this help and exit.");
-    System.err.println(" -regionserver   set 'regionserver mode'; gets row from random region on " +
-        "server");
-    System.err.println(" -allRegions     get from ALL regions when 'regionserver mode', not just " +
-        "random one.");
-    System.err.println(" -zookeeper      set 'zookeeper mode'; grab zookeeper.znode.parent on " +
-        "each ensemble member");
+    System.err.println(
+      " -regionserver   set 'regionserver mode'; gets row from random region on " + "server");
+    System.err.println(
+      " -allRegions     get from ALL regions when 'regionserver mode', not just " + "random one.");
+    System.err.println(" -zookeeper      set 'zookeeper mode'; grab zookeeper.znode.parent on "
+      + "each ensemble member");
     System.err.println(" -daemon         continuous check at defined intervals.");
     System.err.println(" -interval <N>   interval between checks in seconds");
-    System.err.println(" -e              consider table/regionserver argument as regular " +
-        "expression");
+    System.err
+      .println(" -e              consider table/regionserver argument as regular " + "expression");
     System.err.println(" -f <B>          exit on first error; default=true");
     System.err.println(" -failureAsError treat read/write failure as error");
     System.err.println(" -t <N>          timeout for canary-test run; default=600000ms");
     System.err.println(" -writeSniffing  enable write sniffing");
     System.err.println(" -writeTable     the table used for write sniffing; default=hbase:canary");
     System.err.println(" -writeTableTimeout <N>  timeout for writeTable; default=600000ms");
-    System.err.println(" -readTableTimeouts <tableName>=<read timeout>," +
-        "<tableName>=<read timeout>,...");
-    System.err.println("                comma-separated list of table read timeouts " +
-        "(no spaces);");
+    System.err.println(
+      " -readTableTimeouts <tableName>=<read timeout>," + "<tableName>=<read timeout>,...");
+    System.err
+      .println("                comma-separated list of table read timeouts " + "(no spaces);");
     System.err.println("                logs 'ERROR' if takes longer. default=600000ms");
     System.err.println(" -permittedZookeeperFailures <N>  Ignore first N failures attempting to ");
     System.err.println("                connect to individual zookeeper nodes in ensemble");
     System.err.println("");
     System.err.println(" -D<configProperty>=<value> to assign or override configuration params");
-    System.err.println(" -Dhbase.canary.read.raw.enabled=<true/false> Set to enable/disable " +
-        "raw scan; default=false");
-    System.err.println(" -Dhbase.canary.info.port=PORT_NUMBER  Set for a Canary UI; " +
-      "default=-1 (None)");
+    System.err.println(" -Dhbase.canary.read.raw.enabled=<true/false> Set to enable/disable "
+      + "raw scan; default=false");
+    System.err.println(
+      " -Dhbase.canary.info.port=PORT_NUMBER  Set for a Canary UI; " + "default=-1 (None)");
     System.err.println("");
-    System.err.println("Canary runs in one of three modes: region (default), regionserver, or " +
-        "zookeeper.");
+    System.err.println(
+      "Canary runs in one of three modes: region (default), regionserver, or " + "zookeeper.");
     System.err.println("To sniff/probe all regions, pass no arguments.");
     System.err.println("To sniff/probe all regions of a table, pass tablename.");
     System.err.println("To sniff/probe regionservers, pass -regionserver, etc.");
@@ -1122,14 +1192,16 @@ public class CanaryTool implements Tool, Canary {
 
   Sink getSink(Configuration configuration, Class clazz) {
     // In test context, this.sink might be set. Use it if non-null. For testing.
-    return this.sink != null? this.sink:
-        (Sink)ReflectionUtils.newInstance(configuration.getClass("hbase.canary.sink.class",
-            clazz, Sink.class));
+    if (this.sink == null) {
+      this.sink = (Sink) ReflectionUtils
+        .newInstance(configuration.getClass("hbase.canary.sink.class", clazz, Sink.class));
+    }
+    return this.sink;
   }
 
   /**
-   * Canary region mode-specific data structure which stores information about each region
-   * to be scanned
+   * Canary region mode-specific data structure which stores information about each region to be
+   * scanned
    */
   public static class RegionTaskResult {
     private RegionInfo region;
@@ -1142,7 +1214,7 @@ public class CanaryTool implements Tool, Canary {
     private boolean writeSuccess = false;
 
     public RegionTaskResult(RegionInfo region, TableName tableName, ServerName serverName,
-        ColumnFamilyDescriptor column) {
+      ColumnFamilyDescriptor column) {
       this.region = region;
       this.tableName = tableName;
       this.serverName = serverName;
@@ -1229,45 +1301,36 @@ public class CanaryTool implements Tool, Canary {
   }
 
   /**
-   * A Factory method for {@link Monitor}.
-   * Makes a RegionServerMonitor, or a ZooKeeperMonitor, or a RegionMonitor.
+   * A Factory method for {@link Monitor}. Makes a RegionServerMonitor, or a ZooKeeperMonitor, or a
+   * RegionMonitor.
    * @return a Monitor instance
    */
   private Monitor newMonitor(final Connection connection, String[] monitorTargets) {
     Monitor monitor;
     boolean useRegExp = conf.getBoolean(HBASE_CANARY_USE_REGEX, false);
-    boolean regionServerAllRegions
-            = conf.getBoolean(HBASE_CANARY_REGIONSERVER_ALL_REGIONS, false);
-    boolean failOnError
-            = conf.getBoolean(HBASE_CANARY_FAIL_ON_ERROR, true);
-    int permittedFailures
-            = conf.getInt(HBASE_CANARY_ZOOKEEPER_PERMITTED_FAILURES, 0);
-    boolean writeSniffing
-            = conf.getBoolean(HBASE_CANARY_REGION_WRITE_SNIFFING, false);
-    String writeTableName = conf.get(HBASE_CANARY_REGION_WRITE_TABLE_NAME,
-            DEFAULT_WRITE_TABLE_NAME.getNameAsString());
-    long configuredWriteTableTimeout
-            = conf.getLong(HBASE_CANARY_REGION_WRITE_TABLE_TIMEOUT, DEFAULT_TIMEOUT);
+    boolean regionServerAllRegions = conf.getBoolean(HBASE_CANARY_REGIONSERVER_ALL_REGIONS, false);
+    boolean failOnError = conf.getBoolean(HBASE_CANARY_FAIL_ON_ERROR, true);
+    int permittedFailures = conf.getInt(HBASE_CANARY_ZOOKEEPER_PERMITTED_FAILURES, 0);
+    boolean writeSniffing = conf.getBoolean(HBASE_CANARY_REGION_WRITE_SNIFFING, false);
+    String writeTableName =
+      conf.get(HBASE_CANARY_REGION_WRITE_TABLE_NAME, DEFAULT_WRITE_TABLE_NAME.getNameAsString());
+    long configuredWriteTableTimeout =
+      conf.getLong(HBASE_CANARY_REGION_WRITE_TABLE_TIMEOUT, DEFAULT_TIMEOUT);
 
     if (this.regionServerMode) {
-      monitor =
-          new RegionServerMonitor(connection, monitorTargets, useRegExp,
-              getSink(connection.getConfiguration(), RegionServerStdOutSink.class),
-              this.executor, regionServerAllRegions,
-              failOnError, permittedFailures);
+      monitor = new RegionServerMonitor(connection, monitorTargets, useRegExp,
+        getSink(connection.getConfiguration(), RegionServerStdOutSink.class), this.executor,
+        regionServerAllRegions, failOnError, permittedFailures);
 
     } else if (this.zookeeperMode) {
-      monitor =
-          new ZookeeperMonitor(connection, monitorTargets, useRegExp,
-              getSink(connection.getConfiguration(), ZookeeperStdOutSink.class),
-              this.executor, failOnError, permittedFailures);
+      monitor = new ZookeeperMonitor(connection, monitorTargets, useRegExp,
+        getSink(connection.getConfiguration(), ZookeeperStdOutSink.class), this.executor,
+        failOnError, permittedFailures);
     } else {
-      monitor =
-          new RegionMonitor(connection, monitorTargets, useRegExp,
-              getSink(connection.getConfiguration(), RegionStdOutSink.class),
-              this.executor, writeSniffing,
-              TableName.valueOf(writeTableName), failOnError, configuredReadTableTimeouts,
-              configuredWriteTableTimeout, permittedFailures);
+      monitor = new RegionMonitor(connection, monitorTargets, useRegExp,
+        getSink(connection.getConfiguration(), RegionStdOutSink.class), this.executor,
+        writeSniffing, TableName.valueOf(writeTableName), failOnError, configuredReadTableTimeouts,
+        configuredWriteTableTimeout, permittedFailures);
     }
     return monitor;
   }
@@ -1277,19 +1340,20 @@ public class CanaryTool implements Tool, Canary {
     for (String tT : tableTimeouts) {
       String[] nameTimeout = tT.split("=");
       if (nameTimeout.length < 2) {
-        throw new IllegalArgumentException("Each -readTableTimeouts argument must be of the form " +
-            "<tableName>=<read timeout> (without spaces).");
+        throw new IllegalArgumentException("Each -readTableTimeouts argument must be of the form "
+          + "<tableName>=<read timeout> (without spaces).");
       }
       long timeoutVal;
       try {
         timeoutVal = Long.parseLong(nameTimeout[1]);
       } catch (NumberFormatException e) {
-        throw new IllegalArgumentException("-readTableTimeouts read timeout for each table" +
-            " must be a numeric value argument.");
+        throw new IllegalArgumentException(
+          "-readTableTimeouts read timeout for each table" + " must be a numeric value argument.");
       }
       configuredReadTableTimeouts.put(nameTimeout[0], timeoutVal);
     }
   }
+
   /**
    * A Monitor super-class can be extended by users
    */
@@ -1297,8 +1361,8 @@ public class CanaryTool implements Tool, Canary {
     protected Connection connection;
     protected Admin admin;
     /**
-     * 'Target' dependent on 'mode'. Could be Tables or RegionServers or ZNodes.
-     * Passed on the command-line as arguments.
+     * 'Target' dependent on 'mode'. Could be Tables or RegionServers or ZNodes. Passed on the
+     * command-line as arguments.
      */
     protected String[] targets;
     protected boolean useRegExp;
@@ -1323,8 +1387,10 @@ public class CanaryTool implements Tool, Canary {
       if (errorCode != 0) {
         return true;
       }
-      if (treatFailureAsError && (sink.getReadFailureCount() > allowedFailures
-          || sink.getWriteFailureCount() > allowedFailures)) {
+      if (
+        treatFailureAsError && (sink.getReadFailureCount() > allowedFailures
+          || sink.getWriteFailureCount() > allowedFailures)
+      ) {
         LOG.error("Too many failures detected, treating failure as error, failing the Canary.");
         errorCode = FAILURE_EXIT_CODE;
         return true;
@@ -1334,13 +1400,14 @@ public class CanaryTool implements Tool, Canary {
 
     @Override
     public void close() throws IOException {
+      this.sink.stop();
       if (this.admin != null) {
         this.admin.close();
       }
     }
 
     protected Monitor(Connection connection, String[] monitorTargets, boolean useRegExp, Sink sink,
-        ExecutorService executor, boolean treatFailureAsError, long allowedFailures) {
+      ExecutorService executor, boolean treatFailureAsError, long allowedFailures) {
       if (null == connection) {
         throw new IllegalArgumentException("connection shall not be null");
       }
@@ -1393,32 +1460,30 @@ public class CanaryTool implements Tool, Canary {
     private boolean readAllCF;
 
     /**
-     * This is a timeout per table. If read of each region in the table aggregated takes longer
-     * than what is configured here, we log an ERROR rather than just an INFO.
+     * This is a timeout per table. If read of each region in the table aggregated takes longer than
+     * what is configured here, we log an ERROR rather than just an INFO.
      */
     private HashMap<String, Long> configuredReadTableTimeouts;
 
     private long configuredWriteTableTimeout;
 
     public RegionMonitor(Connection connection, String[] monitorTargets, boolean useRegExp,
-        Sink sink, ExecutorService executor, boolean writeSniffing, TableName writeTableName,
-        boolean treatFailureAsError, HashMap<String, Long> configuredReadTableTimeouts,
-        long configuredWriteTableTimeout,
-        long allowedFailures) {
+      Sink sink, ExecutorService executor, boolean writeSniffing, TableName writeTableName,
+      boolean treatFailureAsError, HashMap<String, Long> configuredReadTableTimeouts,
+      long configuredWriteTableTimeout, long allowedFailures) {
       super(connection, monitorTargets, useRegExp, sink, executor, treatFailureAsError,
-          allowedFailures);
+        allowedFailures);
       Configuration conf = connection.getConfiguration();
       this.writeSniffing = writeSniffing;
       this.writeTableName = writeTableName;
       this.writeDataTTL =
-          conf.getInt(HConstants.HBASE_CANARY_WRITE_DATA_TTL_KEY, DEFAULT_WRITE_DATA_TTL);
+        conf.getInt(HConstants.HBASE_CANARY_WRITE_DATA_TTL_KEY, DEFAULT_WRITE_DATA_TTL);
       this.regionsLowerLimit =
-          conf.getFloat(HConstants.HBASE_CANARY_WRITE_PERSERVER_REGIONS_LOWERLIMIT_KEY, 1.0f);
+        conf.getFloat(HConstants.HBASE_CANARY_WRITE_PERSERVER_REGIONS_LOWERLIMIT_KEY, 1.0f);
       this.regionsUpperLimit =
-          conf.getFloat(HConstants.HBASE_CANARY_WRITE_PERSERVER_REGIONS_UPPERLIMIT_KEY, 1.5f);
-      this.checkPeriod =
-          conf.getInt(HConstants.HBASE_CANARY_WRITE_TABLE_CHECK_PERIOD_KEY,
-            DEFAULT_WRITE_TABLE_CHECK_PERIOD);
+        conf.getFloat(HConstants.HBASE_CANARY_WRITE_PERSERVER_REGIONS_UPPERLIMIT_KEY, 1.5f);
+      this.checkPeriod = conf.getInt(HConstants.HBASE_CANARY_WRITE_TABLE_CHECK_PERIOD_KEY,
+        DEFAULT_WRITE_TABLE_CHECK_PERIOD);
       this.rawScanEnabled = conf.getBoolean(HConstants.HBASE_CANARY_READ_RAW_SCAN_KEY, false);
       this.configuredReadTableTimeouts = new HashMap<>(configuredReadTableTimeouts);
       this.configuredWriteTableTimeout = configuredWriteTableTimeout;
@@ -1443,10 +1508,12 @@ public class CanaryTool implements Tool, Canary {
             String[] tables = generateMonitorTables(this.targets);
             // Check to see that each table name passed in the -readTableTimeouts argument is also
             // passed as a monitor target.
-            if (!new HashSet<>(Arrays.asList(tables)).
-                containsAll(this.configuredReadTableTimeouts.keySet())) {
-              LOG.error("-readTableTimeouts can only specify read timeouts for monitor targets " +
-                  "passed via command line.");
+            if (
+              !new HashSet<>(Arrays.asList(tables))
+                .containsAll(this.configuredReadTableTimeouts.keySet())
+            ) {
+              LOG.error("-readTableTimeouts can only specify read timeouts for monitor targets "
+                + "passed via command line.");
               this.errorCode = USAGE_EXIT_CODE;
               return;
             }
@@ -1473,8 +1540,8 @@ public class CanaryTool implements Tool, Canary {
             regionSink.initializeWriteLatency();
             LongAdder writeTableLatency = regionSink.getWriteLatency();
             taskFutures
-                .addAll(CanaryTool.sniff(admin, regionSink, admin.getDescriptor(writeTableName),
-                  executor, TaskType.WRITE, this.rawScanEnabled, writeTableLatency, readAllCF));
+              .addAll(CanaryTool.sniff(admin, regionSink, admin.getDescriptor(writeTableName),
+                executor, TaskType.WRITE, this.rawScanEnabled, writeTableLatency, readAllCF));
           }
 
           for (Future<Void> future : taskFutures) {
@@ -1491,11 +1558,11 @@ public class CanaryTool implements Tool, Canary {
               Long actual = actualReadTableLatency.get(tableName).longValue();
               Long configured = entry.getValue();
               if (actual > configured) {
-                LOG.error("Read operation for {} took {}ms exceeded the configured read timeout." +
-                    "(Configured read timeout {}ms.", tableName, actual, configured);
+                LOG.error("Read operation for {} took {}ms exceeded the configured read timeout."
+                  + "(Configured read timeout {}ms.", tableName, actual, configured);
               } else {
                 LOG.info("Read operation for {} took {}ms (Configured read timeout {}ms.",
-                    tableName, actual, configured);
+                  tableName, actual, configured);
               }
             } else {
               LOG.error("Read operation for {} failed!", tableName);
@@ -1505,12 +1572,12 @@ public class CanaryTool implements Tool, Canary {
             String writeTableStringName = this.writeTableName.getNameAsString();
             long actualWriteLatency = regionSink.getWriteLatency().longValue();
             LOG.info("Write operation for {} took {}ms. Configured write timeout {}ms.",
-                writeTableStringName, actualWriteLatency, this.configuredWriteTableTimeout);
+              writeTableStringName, actualWriteLatency, this.configuredWriteTableTimeout);
             // Check that the writeTable write operation latency does not exceed the configured
             // timeout.
             if (actualWriteLatency > this.configuredWriteTableTimeout) {
               LOG.error("Write operation for {} exceeded the configured write timeout.",
-                  writeTableStringName);
+                writeTableStringName);
             }
           }
         } catch (Exception e) {
@@ -1523,9 +1590,7 @@ public class CanaryTool implements Tool, Canary {
       this.done = true;
     }
 
-    /**
-     * @return List of tables to use in test.
-     */
+    /** Returns List of tables to use in test. */
     private String[] generateMonitorTables(String[] monitorTargets) throws IOException {
       String[] returnTables = null;
 
@@ -1571,14 +1636,16 @@ public class CanaryTool implements Tool, Canary {
      * Canary entry point to monitor all the tables.
      */
     private List<Future<Void>> sniff(TaskType taskType, RegionStdOutSink regionSink)
-        throws Exception {
+      throws Exception {
       LOG.debug("Reading list of tables");
       List<Future<Void>> taskFutures = new LinkedList<>();
-      for (TableDescriptor td: admin.listTableDescriptors()) {
-        if (admin.tableExists(td.getTableName()) && admin.isTableEnabled(td.getTableName()) &&
-            (!td.getTableName().equals(writeTableName))) {
+      for (TableDescriptor td : admin.listTableDescriptors()) {
+        if (
+          admin.tableExists(td.getTableName()) && admin.isTableEnabled(td.getTableName())
+            && (!td.getTableName().equals(writeTableName))
+        ) {
           LongAdder readLatency =
-              regionSink.initializeAndGetReadLatencyForTable(td.getTableName().getNameAsString());
+            regionSink.initializeAndGetReadLatencyForTable(td.getTableName().getNameAsString());
           taskFutures.addAll(CanaryTool.sniff(admin, sink, td, executor, taskType,
             this.rawScanEnabled, readLatency, readAllCF));
         }
@@ -1600,17 +1667,19 @@ public class CanaryTool implements Tool, Canary {
       }
 
       ClusterMetrics status =
-          admin.getClusterMetrics(EnumSet.of(Option.SERVERS_NAME, Option.MASTER));
+        admin.getClusterMetrics(EnumSet.of(Option.SERVERS_NAME, Option.MASTER));
       int numberOfServers = status.getServersName().size();
       if (status.getServersName().contains(status.getMasterName())) {
         numberOfServers -= 1;
       }
 
       List<Pair<RegionInfo, ServerName>> pairs =
-          MetaTableAccessor.getTableRegionsAndLocations(connection, writeTableName);
+        MetaTableAccessor.getTableRegionsAndLocations(connection, writeTableName);
       int numberOfRegions = pairs.size();
-      if (numberOfRegions < numberOfServers * regionsLowerLimit
-          || numberOfRegions > numberOfServers * regionsUpperLimit) {
+      if (
+        numberOfRegions < numberOfServers * regionsLowerLimit
+          || numberOfRegions > numberOfServers * regionsUpperLimit
+      ) {
         admin.disableTable(writeTableName);
         admin.deleteTable(writeTableName);
         createWriteTable(numberOfServers);
@@ -1626,16 +1695,16 @@ public class CanaryTool implements Tool, Canary {
     }
 
     private void createWriteTable(int numberOfServers) throws IOException {
-      int numberOfRegions = (int)(numberOfServers * regionsLowerLimit);
-      LOG.info("Number of live regionservers {}, pre-splitting the canary table into {} regions " +
-        "(current lower limit of regions per server is {} and you can change it with config {}).",
-          numberOfServers, numberOfRegions, regionsLowerLimit,
-          HConstants.HBASE_CANARY_WRITE_PERSERVER_REGIONS_LOWERLIMIT_KEY);
-      ColumnFamilyDescriptor family = ColumnFamilyDescriptorBuilder
-        .newBuilder(Bytes.toBytes(CANARY_TABLE_FAMILY_NAME)).setMaxVersions(1)
-        .setTimeToLive(writeDataTTL).build();
-      TableDescriptor desc = TableDescriptorBuilder.newBuilder(writeTableName)
-        .setColumnFamily(family).build();
+      int numberOfRegions = (int) (numberOfServers * regionsLowerLimit);
+      LOG.info("Number of live regionservers {}, pre-splitting the canary table into {} regions "
+        + "(current lower limit of regions per server is {} and you can change it with config {}).",
+        numberOfServers, numberOfRegions, regionsLowerLimit,
+        HConstants.HBASE_CANARY_WRITE_PERSERVER_REGIONS_LOWERLIMIT_KEY);
+      ColumnFamilyDescriptor family =
+        ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes(CANARY_TABLE_FAMILY_NAME))
+          .setMaxVersions(1).setTimeToLive(writeDataTTL).build();
+      TableDescriptor desc =
+        TableDescriptorBuilder.newBuilder(writeTableName).setColumnFamily(family).build();
       byte[][] splits = new RegionSplitter.HexStringSplit().split(numberOfRegions);
       admin.createTable(desc, splits);
     }
@@ -1646,8 +1715,8 @@ public class CanaryTool implements Tool, Canary {
    * @throws Exception exception
    */
   private static List<Future<Void>> sniff(final Admin admin, final Sink sink, String tableName,
-      ExecutorService executor, TaskType taskType, boolean rawScanEnabled, LongAdder readLatency,
-      boolean readAllCF) throws Exception {
+    ExecutorService executor, TaskType taskType, boolean rawScanEnabled, LongAdder readLatency,
+    boolean readAllCF) throws Exception {
     LOG.debug("Checking table is enabled and getting table descriptor for table {}", tableName);
     if (admin.isTableEnabled(TableName.valueOf(tableName))) {
       return CanaryTool.sniff(admin, sink, admin.getDescriptor(TableName.valueOf(tableName)),
@@ -1662,50 +1731,44 @@ public class CanaryTool implements Tool, Canary {
    * Loops over regions of this table, and outputs information about the state.
    */
   private static List<Future<Void>> sniff(final Admin admin, final Sink sink,
-      TableDescriptor tableDesc, ExecutorService executor, TaskType taskType,
-      boolean rawScanEnabled, LongAdder rwLatency, boolean readAllCF) throws Exception {
+    TableDescriptor tableDesc, ExecutorService executor, TaskType taskType, boolean rawScanEnabled,
+    LongAdder rwLatency, boolean readAllCF) throws Exception {
     LOG.debug("Reading list of regions for table {}", tableDesc.getTableName());
-    try (Table table = admin.getConnection().getTable(tableDesc.getTableName())) {
-      List<RegionTask> tasks = new ArrayList<>();
-      try (RegionLocator regionLocator =
-               admin.getConnection().getRegionLocator(tableDesc.getTableName())) {
-        for (HRegionLocation location: regionLocator.getAllRegionLocations()) {
-          if (location == null) {
-            LOG.warn("Null location");
-            continue;
-          }
-          ServerName rs = location.getServerName();
-          RegionInfo region = location.getRegion();
-          tasks.add(new RegionTask(admin.getConnection(), region, rs, (RegionStdOutSink)sink,
-              taskType, rawScanEnabled, rwLatency, readAllCF));
-          Map<String, List<RegionTaskResult>> regionMap = ((RegionStdOutSink) sink).getRegionMap();
-          regionMap.put(region.getRegionNameAsString(), new ArrayList<RegionTaskResult>());
+    List<RegionTask> tasks = new ArrayList<>();
+    try (RegionLocator regionLocator =
+      admin.getConnection().getRegionLocator(tableDesc.getTableName())) {
+      for (HRegionLocation location : regionLocator.getAllRegionLocations()) {
+        if (location == null) {
+          LOG.warn("Null location for table {}", tableDesc.getTableName());
+          continue;
         }
-        return executor.invokeAll(tasks);
+        ServerName rs = location.getServerName();
+        RegionInfo region = location.getRegion();
+        tasks.add(new RegionTask(admin.getConnection(), region, rs, (RegionStdOutSink) sink,
+          taskType, rawScanEnabled, rwLatency, readAllCF));
+        Map<String, List<RegionTaskResult>> regionMap = ((RegionStdOutSink) sink).getRegionMap();
+        regionMap.put(region.getRegionNameAsString(), new ArrayList<RegionTaskResult>());
       }
-    } catch (TableNotFoundException e) {
-      return Collections.EMPTY_LIST;
+      return executor.invokeAll(tasks);
     }
   }
 
-  //  monitor for zookeeper mode
+  // monitor for zookeeper mode
   private static class ZookeeperMonitor extends Monitor {
     private List<String> hosts;
     private final String znode;
     private final int timeout;
 
     protected ZookeeperMonitor(Connection connection, String[] monitorTargets, boolean useRegExp,
-        Sink sink, ExecutorService executor, boolean treatFailureAsError, long allowedFailures)  {
-      super(connection, monitorTargets, useRegExp,
-          sink, executor, treatFailureAsError, allowedFailures);
+      Sink sink, ExecutorService executor, boolean treatFailureAsError, long allowedFailures) {
+      super(connection, monitorTargets, useRegExp, sink, executor, treatFailureAsError,
+        allowedFailures);
       Configuration configuration = connection.getConfiguration();
-      znode =
-          configuration.get(ZOOKEEPER_ZNODE_PARENT,
-              DEFAULT_ZOOKEEPER_ZNODE_PARENT);
-      timeout = configuration
-          .getInt(HConstants.ZK_SESSION_TIMEOUT, HConstants.DEFAULT_ZK_SESSION_TIMEOUT);
+      znode = configuration.get(ZOOKEEPER_ZNODE_PARENT, DEFAULT_ZOOKEEPER_ZNODE_PARENT);
+      timeout =
+        configuration.getInt(HConstants.ZK_SESSION_TIMEOUT, HConstants.DEFAULT_ZK_SESSION_TIMEOUT);
       ConnectStringParser parser =
-          new ConnectStringParser(ZKConfig.getZKQuorumServersString(configuration));
+        new ConnectStringParser(ZKConfig.getZKQuorumServersString(configuration));
       hosts = Lists.newArrayList();
       for (InetSocketAddress server : parser.getServerAddresses()) {
         hosts.add(inetSocketAddress2String(server));
@@ -1713,12 +1776,13 @@ public class CanaryTool implements Tool, Canary {
       if (allowedFailures > (hosts.size() - 1) / 2) {
         LOG.warn(
           "Confirm allowable number of failed ZooKeeper nodes, as quorum will "
-              + "already be lost. Setting of {} failures is unexpected for {} ensemble size.",
+            + "already be lost. Setting of {} failures is unexpected for {} ensemble size.",
           allowedFailures, hosts.size());
       }
     }
 
-    @Override public void run() {
+    @Override
+    public void run() {
       List<ZookeeperTask> tasks = Lists.newArrayList();
       ZookeeperStdOutSink zkSink = null;
       try {
@@ -1756,18 +1820,20 @@ public class CanaryTool implements Tool, Canary {
     }
   }
 
-
   /**
    * A monitor for regionserver mode
    */
   private static class RegionServerMonitor extends Monitor {
+    private boolean rawScanEnabled;
     private boolean allRegions;
 
     public RegionServerMonitor(Connection connection, String[] monitorTargets, boolean useRegExp,
-        Sink sink, ExecutorService executor, boolean allRegions,
-        boolean treatFailureAsError, long allowedFailures) {
+      Sink sink, ExecutorService executor, boolean allRegions, boolean treatFailureAsError,
+      long allowedFailures) {
       super(connection, monitorTargets, useRegExp, sink, executor, treatFailureAsError,
-          allowedFailures);
+        allowedFailures);
+      Configuration conf = connection.getConfiguration();
+      this.rawScanEnabled = conf.getBoolean(HConstants.HBASE_CANARY_READ_RAW_SCAN_KEY, false);
       this.allRegions = allRegions;
     }
 
@@ -1820,18 +1886,17 @@ public class CanaryTool implements Tool, Canary {
       }
 
       if (foundTableNames.size() > 0) {
-        System.err.println("Cannot pass a tablename when using the -regionserver " +
-            "option, tablenames:" + foundTableNames.toString());
+        System.err.println("Cannot pass a tablename when using the -regionserver "
+          + "option, tablenames:" + foundTableNames.toString());
         this.errorCode = USAGE_EXIT_CODE;
       }
       return foundTableNames.isEmpty();
     }
 
     private void monitorRegionServers(Map<String, List<RegionInfo>> rsAndRMap,
-        RegionServerStdOutSink regionServerSink) {
+      RegionServerStdOutSink regionServerSink) {
       List<RegionServerTask> tasks = new ArrayList<>();
       Map<String, AtomicLong> successMap = new HashMap<>();
-      Random rand = new Random();
       for (Map.Entry<String, List<RegionInfo>> entry : rsAndRMap.entrySet()) {
         String serverName = entry.getKey();
         AtomicLong successes = new AtomicLong(0);
@@ -1840,20 +1905,15 @@ public class CanaryTool implements Tool, Canary {
           LOG.error("Regionserver not serving any regions - {}", serverName);
         } else if (this.allRegions) {
           for (RegionInfo region : entry.getValue()) {
-            tasks.add(new RegionServerTask(this.connection,
-                serverName,
-                region,
-                regionServerSink,
-                successes));
+            tasks.add(new RegionServerTask(this.connection, serverName, region, regionServerSink,
+              this.rawScanEnabled, successes));
           }
         } else {
           // random select a region if flag not set
-          RegionInfo region = entry.getValue().get(rand.nextInt(entry.getValue().size()));
-          tasks.add(new RegionServerTask(this.connection,
-              serverName,
-              region,
-              regionServerSink,
-              successes));
+          RegionInfo region =
+            entry.getValue().get(ThreadLocalRandom.current().nextInt(entry.getValue().size()));
+          tasks.add(new RegionServerTask(this.connection, serverName, region, regionServerSink,
+            this.rawScanEnabled, successes));
         }
       }
       try {
@@ -1869,7 +1929,7 @@ public class CanaryTool implements Tool, Canary {
           for (Map.Entry<String, List<RegionInfo>> entry : rsAndRMap.entrySet()) {
             String serverName = entry.getKey();
             LOG.info("Successfully read {} regions out of {} on regionserver {}",
-                successMap.get(serverName), entry.getValue().size(), serverName);
+              successMap.get(serverName), entry.getValue().size(), serverName);
           }
         }
       } catch (InterruptedException e) {
@@ -1890,12 +1950,12 @@ public class CanaryTool implements Tool, Canary {
         LOG.debug("Reading list of tables and locations");
         List<TableDescriptor> tableDescs = this.admin.listTableDescriptors();
         List<RegionInfo> regions = null;
-        for (TableDescriptor tableDesc: tableDescs) {
+        for (TableDescriptor tableDesc : tableDescs) {
           try (RegionLocator regionLocator =
-                   this.admin.getConnection().getRegionLocator(tableDesc.getTableName())) {
+            this.admin.getConnection().getRegionLocator(tableDesc.getTableName())) {
             for (HRegionLocation location : regionLocator.getAllRegionLocations()) {
               if (location == null) {
-                LOG.warn("Null location");
+                LOG.warn("Null location for table {}", tableDesc.getTableName());
                 continue;
               }
               ServerName rs = location.getServerName();
@@ -1913,7 +1973,7 @@ public class CanaryTool implements Tool, Canary {
         }
 
         // get any live regionservers not serving any regions
-        for (ServerName rs: this.admin.getRegionServers()) {
+        for (ServerName rs : this.admin.getRegionServers()) {
           String rsName = rs.getHostname();
           if (!rsAndRMap.containsKey(rsName)) {
             rsAndRMap.put(rsName, Collections.<RegionInfo> emptyList());
@@ -1926,8 +1986,8 @@ public class CanaryTool implements Tool, Canary {
       return rsAndRMap;
     }
 
-    private Map<String, List<RegionInfo>> doFilterRegionServerByName(
-        Map<String, List<RegionInfo>> fullRsAndRMap) {
+    private Map<String, List<RegionInfo>>
+      doFilterRegionServerByName(Map<String, List<RegionInfo>> fullRsAndRMap) {
 
       Map<String, List<RegionInfo>> filteredRsAndRMap = null;
 

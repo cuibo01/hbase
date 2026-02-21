@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,28 +17,33 @@
  */
 package org.apache.hadoop.hbase.master.balancer;
 
-import org.apache.hadoop.hbase.HBaseClassTestRule;
+import java.time.Duration;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 
-@Category({ MasterTests.class, LargeTests.class })
+@Tag(MasterTests.TAG)
+@Tag(LargeTests.TAG)
 public class TestStochasticLoadBalancerRegionReplicaLargeCluster
-  extends StochasticBalancerTestBase2 {
-
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-    HBaseClassTestRule.forClass(TestStochasticLoadBalancerRegionReplicaLargeCluster.class);
+  extends StochasticBalancerTestBase {
 
   @Test
   public void testRegionReplicasOnLargeCluster() {
+    // With default values for moveCost and tableSkewCost, the balancer makes much slower progress.
+    // Since we're only looking for balance in region counts and no colocated replicas, we can
+    // ignore these two cost functions to allow us to make any move that helps other functions.
+    conf.setFloat("hbase.master.balancer.stochastic.moveCost", 0f);
+    conf.setFloat("hbase.master.balancer.stochastic.tableSkewCost", 0f);
+    conf.setBoolean("hbase.master.balancer.stochastic.runMaxSteps", true);
+    setMaxRunTime(Duration.ofSeconds(15));
+    loadBalancer.onConfigurationChange(conf);
     int numNodes = 1000;
     int numRegions = 20 * numNodes; // 20 * replication regions per RS
     int numRegionsPerServer = 19; // all servers except one
     int numTables = 100;
     int replication = 3;
-    testWithCluster(numNodes, numRegions, numRegionsPerServer, replication, numTables, true, true);
+    testWithClusterWithIteration(numNodes, numRegions, numRegionsPerServer, replication, numTables,
+      true, true);
   }
 }

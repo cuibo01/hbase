@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,8 @@ package org.apache.hadoop.hbase.mapreduce;
 
 import static org.junit.Assert.assertEquals;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
@@ -34,12 +36,12 @@ import org.junit.experimental.categories.Category;
 /**
  * Test of simple partitioner.
  */
-@Category({MapReduceTests.class, SmallTests.class})
+@Category({ MapReduceTests.class, SmallTests.class })
 public class TestSimpleTotalOrderPartitioner {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestSimpleTotalOrderPartitioner.class);
+    HBaseClassTestRule.forClass(TestSimpleTotalOrderPartitioner.class);
 
   protected final static HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   Configuration conf = TEST_UTIL.getConfiguration();
@@ -48,10 +50,12 @@ public class TestSimpleTotalOrderPartitioner {
   public void testSplit() throws Exception {
     String start = "a";
     String end = "{";
-    SimpleTotalOrderPartitioner<byte []> p = new SimpleTotalOrderPartitioner<>();
+    SimpleTotalOrderPartitioner<byte[]> p = new SimpleTotalOrderPartitioner<>();
 
-    this.conf.set(SimpleTotalOrderPartitioner.START, start);
-    this.conf.set(SimpleTotalOrderPartitioner.END, end);
+    this.conf.set(SimpleTotalOrderPartitioner.START_BASE64,
+      Base64.getEncoder().encodeToString(start.getBytes(StandardCharsets.UTF_8)));
+    this.conf.set(SimpleTotalOrderPartitioner.END_BASE64,
+      Base64.getEncoder().encodeToString(end.getBytes(StandardCharsets.UTF_8)));
     p.setConf(this.conf);
     ImmutableBytesWritable c = new ImmutableBytesWritable(Bytes.toBytes("c"));
     // If one reduce, partition should be 0.
@@ -69,14 +73,12 @@ public class TestSimpleTotalOrderPartitioner {
     partition = p.getPartition(q, HConstants.EMPTY_BYTE_ARRAY, 3);
     assertEquals(2, partition);
     // What about end and start keys.
-    ImmutableBytesWritable startBytes =
-      new ImmutableBytesWritable(Bytes.toBytes(start));
+    ImmutableBytesWritable startBytes = new ImmutableBytesWritable(Bytes.toBytes(start));
     partition = p.getPartition(startBytes, HConstants.EMPTY_BYTE_ARRAY, 2);
     assertEquals(0, partition);
     partition = p.getPartition(startBytes, HConstants.EMPTY_BYTE_ARRAY, 3);
     assertEquals(0, partition);
-    ImmutableBytesWritable endBytes =
-      new ImmutableBytesWritable(Bytes.toBytes("z"));
+    ImmutableBytesWritable endBytes = new ImmutableBytesWritable(Bytes.toBytes("z"));
     partition = p.getPartition(endBytes, HConstants.EMPTY_BYTE_ARRAY, 2);
     assertEquals(1, partition);
     partition = p.getPartition(endBytes, HConstants.EMPTY_BYTE_ARRAY, 3);
@@ -84,4 +86,3 @@ public class TestSimpleTotalOrderPartitioner {
   }
 
 }
-

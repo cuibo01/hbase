@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,10 +20,9 @@ package org.apache.hadoop.hbase.util;
 import static org.apache.hadoop.hbase.regionserver.HStoreFile.LAST_BLOOM_KEY;
 
 import java.io.IOException;
-
-import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.io.hfile.HFile.Writer;
 import org.apache.yetus.audience.InterfaceAudience;
 
@@ -46,7 +45,7 @@ public class RowBloomContext extends BloomContext {
   }
 
   @Override
-  protected boolean isNewKey(Cell cell) {
+  protected boolean isNewKey(ExtendedCell cell) {
     if (this.getLastCell() != null) {
       return !CellUtil.matchingRows(cell, this.getLastCell());
     }

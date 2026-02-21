@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -131,9 +131,10 @@ public class RegionStateStore {
 
   /**
    * Queries META table for the passed region encoded name, delegating action upon results to the
-   * <code>RegionStateVisitor</code> passed as second parameter.
+   * {@code RegionStateVisitor} passed as second parameter.
    * @param regionEncodedName encoded name for the Region we want to query META for.
-   * @param visitor The <code>RegionStateVisitor</code> instance to react over the query results.
+   * @param visitor           The {@code RegionStateVisitor} instance to react over the query
+   *                          results.
    * @throws IOException If some error occurs while querying META or parsing results.
    */
   public void visitMetaForRegion(final String regionEncodedName, final RegionStateVisitor visitor)
@@ -146,7 +147,7 @@ public class RegionStateStore {
   }
 
   public static void visitMetaEntry(final RegionStateVisitor visitor, final Result result)
-      throws IOException {
+    throws IOException {
     final RegionLocations rl = CatalogFamilyFormat.getRegionLocations(result);
     if (rl == null) return;
 
@@ -168,17 +169,18 @@ public class RegionStateStore {
       final long openSeqNum = hrl.getSeqNum();
 
       LOG.debug(
-        "Load hbase:meta entry region={}, regionState={}, lastHost={}, " +
-          "regionLocation={}, openSeqNum={}",
+        "Load hbase:meta entry region={}, regionState={}, lastHost={}, "
+          + "regionLocation={}, openSeqNum={}",
         regionInfo.getEncodedName(), state, lastHost, regionLocation, openSeqNum);
       visitor.visitRegionState(result, regionInfo, state, regionLocation, lastHost, openSeqNum);
     }
   }
 
-  void updateRegionLocation(RegionStateNode regionStateNode) throws IOException {
+  private Put generateUpdateRegionLocationPut(RegionStateNode regionStateNode) throws IOException {
     long time = EnvironmentEdgeManager.currentTime();
-    long openSeqNum = regionStateNode.getState() == State.OPEN ? regionStateNode.getOpenSeqNum() :
-      HConstants.NO_SEQNUM;
+    long openSeqNum = regionStateNode.getState() == State.OPEN
+      ? regionStateNode.getOpenSeqNum()
+      : HConstants.NO_SEQNUM;
     RegionInfo regionInfo = regionStateNode.getRegionInfo();
     State state = regionStateNode.getState();
     ServerName regionLocation = regionStateNode.getRegionLocation();
@@ -195,8 +197,10 @@ public class RegionStateStore {
         "Open region should be on a server");
       MetaTableAccessor.addLocation(put, regionLocation, openSeqNum, replicaId);
       // only update replication barrier for default replica
-      if (regionInfo.getReplicaId() == RegionInfo.DEFAULT_REPLICA_ID &&
-        hasGlobalReplicationScope(regionInfo.getTable())) {
+      if (
+        regionInfo.getReplicaId() == RegionInfo.DEFAULT_REPLICA_ID
+          && hasGlobalReplicationScope(regionInfo.getTable())
+      ) {
         ReplicationBarrierFamilyFormat.addReplicationBarrier(put, openSeqNum);
         info.append(", repBarrier=").append(openSeqNum);
       }
@@ -217,11 +221,34 @@ public class RegionStateStore {
       .setTimestamp(put.getTimestamp()).setType(Cell.Type.Put).setValue(Bytes.toBytes(state.name()))
       .build());
     LOG.info(info.toString());
-    updateRegionLocation(regionInfo, state, put);
+    return put;
+  }
+
+  CompletableFuture<Void> updateRegionLocation(RegionStateNode regionStateNode) {
+    Put put;
+    try {
+      put = generateUpdateRegionLocationPut(regionStateNode);
+    } catch (IOException e) {
+      return FutureUtils.failedFuture(e);
+    }
+    RegionInfo regionInfo = regionStateNode.getRegionInfo();
+    State state = regionStateNode.getState();
+    CompletableFuture<Void> future = updateRegionLocation(regionInfo, state, put);
     if (regionInfo.isMetaRegion() && regionInfo.isFirst()) {
       // mirror the meta location to zookeeper
-      mirrorMetaLocation(regionInfo, regionLocation, state);
+      // we store meta location in master local region which means the above method is
+      // synchronous(we just wrap the result with a CompletableFuture to make it look like
+      // asynchronous), so it is OK to just call this method directly here
+      assert future.isDone();
+      if (!future.isCompletedExceptionally()) {
+        try {
+          mirrorMetaLocation(regionInfo, regionStateNode.getRegionLocation(), state);
+        } catch (IOException e) {
+          return FutureUtils.failedFuture(e);
+        }
+      }
     }
+    return future;
   }
 
   private void mirrorMetaLocation(RegionInfo regionInfo, ServerName serverName, State state)
@@ -245,25 +272,31 @@ public class RegionStateStore {
     }
   }
 
-  private void updateRegionLocation(RegionInfo regionInfo, State state, Put put)
-    throws IOException {
-    try {
-      if (regionInfo.isMetaRegion()) {
+  private CompletableFuture<Void> updateRegionLocation(RegionInfo regionInfo, State state,
+    Put put) {
+    CompletableFuture<Void> future;
+    if (regionInfo.isMetaRegion()) {
+      try {
         masterRegion.update(r -> r.put(put));
-      } else {
-        try (Table table = master.getConnection().getTable(TableName.META_TABLE_NAME)) {
-          table.put(put);
-        }
+        future = CompletableFuture.completedFuture(null);
+      } catch (Exception e) {
+        future = FutureUtils.failedFuture(e);
       }
-    } catch (IOException e) {
-      // TODO: Revist!!!! Means that if a server is loaded, then we will abort our host!
-      // In tests we abort the Master!
-      String msg = String.format("FAILED persisting region=%s state=%s",
-        regionInfo.getShortNameToLog(), state);
-      LOG.error(msg, e);
-      master.abort(msg, e);
-      throw e;
+    } else {
+      AsyncTable<?> table = master.getAsyncConnection().getTable(TableName.META_TABLE_NAME);
+      future = table.put(put);
     }
+    FutureUtils.addListener(future, (r, e) -> {
+      if (e != null) {
+        // TODO: Revist!!!! Means that if a server is loaded, then we will abort our host!
+        // In tests we abort the Master!
+        String msg = String.format("FAILED persisting region=%s state=%s",
+          regionInfo.getShortNameToLog(), state);
+        LOG.error(msg, e);
+        master.abort(msg, e);
+      }
+    });
+    return future;
   }
 
   private long getOpenSeqNumForParentRegion(RegionInfo region) throws IOException {
@@ -280,8 +313,8 @@ public class RegionStateStore {
   private void multiMutate(RegionInfo ri, List<Mutation> mutations) throws IOException {
     debugLogMutations(mutations);
     byte[] row =
-      Bytes.toBytes(RegionReplicaUtil.getRegionInfoForDefaultReplica(ri).getRegionNameAsString() +
-        HConstants.DELIMITER);
+      Bytes.toBytes(RegionReplicaUtil.getRegionInfoForDefaultReplica(ri).getRegionNameAsString()
+        + HConstants.DELIMITER);
     MutateRowsRequest.Builder builder = MutateRowsRequest.newBuilder();
     for (Mutation mutation : mutations) {
       if (mutation instanceof Put) {
@@ -298,9 +331,8 @@ public class RegionStateStore {
     MutateRowsRequest request = builder.build();
     AsyncTable<?> table =
       master.getConnection().toAsyncConnection().getTable(TableName.META_TABLE_NAME);
-    CompletableFuture<MutateRowsResponse> future =
-      table.<MultiRowMutationService, MutateRowsResponse> coprocessorService(
-        MultiRowMutationService::newStub,
+    CompletableFuture<MutateRowsResponse> future = table.<MultiRowMutationService,
+      MutateRowsResponse> coprocessorService(MultiRowMutationService::newStub,
         (stub, controller, done) -> stub.mutateRows(controller, request, done), row);
     FutureUtils.get(future);
   }
@@ -357,8 +389,10 @@ public class RegionStateStore {
     // default OFFLINE state. If Master gets restarted after this step, start up sequence of
     // master tries to assign these offline regions. This is followed by re-assignments of the
     // daughter regions from resumed {@link SplitTableRegionProcedure}
-    MetaTableAccessor.addRegionStateToPut(putA, RegionState.State.CLOSED);
-    MetaTableAccessor.addRegionStateToPut(putB, RegionState.State.CLOSED);
+    MetaTableAccessor.addRegionStateToPut(putA, RegionInfo.DEFAULT_REPLICA_ID,
+      RegionState.State.CLOSED);
+    MetaTableAccessor.addRegionStateToPut(putB, RegionInfo.DEFAULT_REPLICA_ID,
+      RegionState.State.CLOSED);
 
     // new regions, openSeqNum = 1 is fine.
     addSequenceNum(putA, 1, splitA.getReplicaId());
@@ -381,7 +415,7 @@ public class RegionStateStore {
   public void mergeRegions(RegionInfo child, RegionInfo[] parents, ServerName serverName,
     TableDescriptor htd) throws IOException {
     boolean globalScope = htd.hasGlobalReplicationScope();
-    long time = HConstants.LATEST_TIMESTAMP;
+    long time = EnvironmentEdgeManager.currentTime();
     List<Mutation> mutations = new ArrayList<>();
     List<RegionInfo> replicationParents = new ArrayList<>();
     for (RegionInfo ri : parents) {
@@ -402,7 +436,8 @@ public class RegionStateStore {
     // default OFFLINE state. If Master gets restarted after this step, start up sequence of
     // master tries to assign this offline region. This is followed by re-assignments of the
     // merged region from resumed {@link MergeTableRegionsProcedure}
-    MetaTableAccessor.addRegionStateToPut(putOfMerged, RegionState.State.CLOSED);
+    MetaTableAccessor.addRegionStateToPut(putOfMerged, RegionInfo.DEFAULT_REPLICA_ID,
+      RegionState.State.CLOSED);
     mutations.add(putOfMerged);
     // The merged is a new region, openSeqNum = 1 is fine. ServerName may be null
     // if crash after merge happened but before we got to here.. means in-memory
@@ -433,7 +468,7 @@ public class RegionStateStore {
   }
 
   /**
-   * @return Return all regioninfos listed in the 'info:merge*' columns of the given {@code region}.
+   * Returns Return all regioninfos listed in the 'info:merge*' columns of the given {@code region}.
    */
   public List<RegionInfo> getMergeRegions(RegionInfo region) throws IOException {
     return CatalogFamilyFormat.getMergeRegions(getRegionCatalogResult(region).rawCells());
@@ -441,7 +476,7 @@ public class RegionStateStore {
 
   /**
    * Deletes merge qualifiers for the specified merge region.
-   * @param connection connection we're using
+   * @param connection  connection we're using
    * @param mergeRegion the merged region
    */
   public void deleteMergeQualifiers(RegionInfo mergeRegion) throws IOException {
@@ -465,16 +500,16 @@ public class RegionStateStore {
     // the previous GCMultipleMergedRegionsProcedure is still going on, in this case, the second
     // GCMultipleMergedRegionsProcedure could delete the merged region by accident!
     if (qualifiers.isEmpty()) {
-      LOG.info("No merged qualifiers for region " + mergeRegion.getRegionNameAsString() +
-        " in meta table, they are cleaned up already, Skip.");
+      LOG.info("No merged qualifiers for region " + mergeRegion.getRegionNameAsString()
+        + " in meta table, they are cleaned up already, Skip.");
       return;
     }
     try (Table table = master.getConnection().getTable(TableName.META_TABLE_NAME)) {
       table.delete(delete);
     }
-    LOG.info("Deleted merge references in " + mergeRegion.getRegionNameAsString() +
-      ", deleted qualifiers " +
-      qualifiers.stream().map(Bytes::toStringBinary).collect(Collectors.joining(", ")));
+    LOG.info(
+      "Deleted merge references in " + mergeRegion.getRegionNameAsString() + ", deleted qualifiers "
+        + qualifiers.stream().map(Bytes::toStringBinary).collect(Collectors.joining(", ")));
   }
 
   static Put addMergeRegions(Put put, Collection<RegionInfo> mergeRegions) throws IOException {
@@ -531,7 +566,7 @@ public class RegionStateStore {
   /**
    * Overwrites the specified regions from hbase:meta. Deletes old rows for the given regions and
    * adds new ones. Regions added back have state CLOSED.
-   * @param connection connection we're using
+   * @param connection  connection we're using
    * @param regionInfos list of regions to be added to META
    */
   public void overwriteRegions(List<RegionInfo> regionInfos, int regionReplication)
@@ -592,7 +627,6 @@ public class RegionStateStore {
     }
     return deletes;
   }
-
 
   public void removeRegionReplicas(TableName tableName, int oldReplicaCount, int newReplicaCount)
     throws IOException {
@@ -660,17 +694,18 @@ public class RegionStateStore {
       return State.valueOf(state);
     } catch (IllegalArgumentException e) {
       LOG.warn(
-        "BAD value {} in hbase:meta info:state column for region {} , " +
-          "Consider using HBCK2 setRegionState ENCODED_REGION_NAME STATE",
+        "BAD value {} in hbase:meta info:state column for region {} , "
+          + "Consider using HBCK2 setRegionState ENCODED_REGION_NAME STATE",
         state, regionInfo.getEncodedName());
       return null;
     }
   }
 
   public static byte[] getStateColumn(int replicaId) {
-    return replicaId == 0 ? HConstants.STATE_QUALIFIER :
-      Bytes.toBytes(HConstants.STATE_QUALIFIER_STR + META_REPLICA_ID_DELIMITER +
-        String.format(RegionInfo.REPLICA_ID_FORMAT, replicaId));
+    return replicaId == 0
+      ? HConstants.STATE_QUALIFIER
+      : Bytes.toBytes(HConstants.STATE_QUALIFIER_STR + META_REPLICA_ID_DELIMITER
+        + String.format(RegionInfo.REPLICA_ID_FORMAT, replicaId));
   }
 
   private static void debugLogMutations(List<? extends Mutation> mutations) throws IOException {

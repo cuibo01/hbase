@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,8 +26,8 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.CellScannable;
-import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.ExtendedCellScannable;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
@@ -72,13 +72,14 @@ public class TestRpcControllerFactory {
     }
 
     @Override
-    public HBaseRpcController newController(RegionInfo regionInfo, CellScanner cellScanner) {
+    public HBaseRpcController newController(RegionInfo regionInfo,
+      ExtendedCellScanner cellScanner) {
       return new CountingRpcController(super.newController(regionInfo, cellScanner));
     }
 
     @Override
     public HBaseRpcController newController(RegionInfo regionInfo,
-        List<CellScannable> cellIterables) {
+      List<ExtendedCellScannable> cellIterables) {
       return new CountingRpcController(super.newController(regionInfo, cellIterables));
     }
   }
@@ -140,7 +141,7 @@ public class TestRpcControllerFactory {
     conf.setInt(HConstants.HBASE_RPC_TIMEOUT_KEY, HConstants.DEFAULT_HBASE_RPC_TIMEOUT + 1);
 
     try (Connection connection = ConnectionFactory.createConnection(conf);
-        Table table = connection.getTable(tableName)) {
+      Table table = connection.getTable(tableName)) {
       byte[] row = Bytes.toBytes("row");
       Put p = new Put(row);
       p.addColumn(fam1, fam1, Bytes.toBytes("val0"));
@@ -192,7 +193,7 @@ public class TestRpcControllerFactory {
 
       // reversed, regular
       scanInfo.setReadType(ReadType.STREAM);
-      counter = doScan(table, scanInfo, counter + 1);
+      doScan(table, scanInfo, counter + 1);
 
       // make sure we have no priority count
       verifyPriorityGroupCount(HConstants.ADMIN_QOS, 0);

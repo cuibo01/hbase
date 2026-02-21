@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -34,6 +34,7 @@ import org.apache.hadoop.hbase.io.hfile.HFileContext;
 import org.apache.hadoop.hbase.io.hfile.HFileContextBuilder;
 import org.apache.hadoop.hbase.regionserver.BloomType;
 import org.apache.hadoop.hbase.regionserver.HStoreFile;
+import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
 import org.apache.hadoop.hbase.regionserver.StoreFileScanner;
 import org.apache.hadoop.hbase.regionserver.StoreFileWriter;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
@@ -49,11 +50,11 @@ public class TestMobFile {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMobFile.class);
+    HBaseClassTestRule.forClass(TestMobFile.class);
 
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private Configuration conf = TEST_UTIL.getConfiguration();
-  private CacheConfig cacheConf =  new CacheConfig(conf);
+  private CacheConfig cacheConf = new CacheConfig(conf);
   @Rule
   public TestName testName = new TestName();
 
@@ -63,19 +64,20 @@ public class TestMobFile {
     FileSystem fs = testDir.getFileSystem(conf);
     HFileContext meta = new HFileContextBuilder().withBlockSize(8 * 1024).build();
     StoreFileWriter writer = new StoreFileWriter.Builder(conf, cacheConf, fs).withOutputDir(testDir)
-        .withFileContext(meta).build();
+      .withFileContext(meta).build();
     String caseName = testName.getMethodName();
     MobTestUtil.writeStoreFile(writer, caseName);
 
-    MobFile mobFile =
-        new MobFile(new HStoreFile(fs, writer.getPath(), conf, cacheConf, BloomType.NONE, true));
+    StoreFileInfo storeFileInfo =
+      StoreFileInfo.createStoreFileInfoForHFile(conf, fs, writer.getPath(), true);
+    MobFile mobFile = new MobFile(new HStoreFile(storeFileInfo, BloomType.NONE, cacheConf));
     byte[] family = Bytes.toBytes(caseName);
     byte[] qualify = Bytes.toBytes(caseName);
 
     // Test the start key
     byte[] startKey = Bytes.toBytes("aa"); // The start key bytes
     KeyValue expectedKey =
-        new KeyValue(startKey, family, qualify, Long.MAX_VALUE, Type.Put, startKey);
+      new KeyValue(startKey, family, qualify, Long.MAX_VALUE, Type.Put, startKey);
     KeyValue seekKey = expectedKey.createKeyOnly(false);
     Cell cell = mobFile.readCell(seekKey, false).getCell();
     MobTestUtil.assertCellEquals(expectedKey, cell);
@@ -111,15 +113,14 @@ public class TestMobFile {
   public void testGetScanner() throws Exception {
     Path testDir = TEST_UTIL.getDataTestDir();
     FileSystem fs = testDir.getFileSystem(conf);
-    HFileContext meta = new HFileContextBuilder().withBlockSize(8*1024).build();
-    StoreFileWriter writer = new StoreFileWriter.Builder(conf, cacheConf, fs)
-            .withOutputDir(testDir)
-            .withFileContext(meta)
-            .build();
+    HFileContext meta = new HFileContextBuilder().withBlockSize(8 * 1024).build();
+    StoreFileWriter writer = new StoreFileWriter.Builder(conf, cacheConf, fs).withOutputDir(testDir)
+      .withFileContext(meta).build();
     MobTestUtil.writeStoreFile(writer, testName.getMethodName());
 
-    MobFile mobFile =
-        new MobFile(new HStoreFile(fs, writer.getPath(), conf, cacheConf, BloomType.NONE, true));
+    StoreFileInfo storeFileInfo =
+      StoreFileInfo.createStoreFileInfoForHFile(conf, fs, writer.getPath(), true);
+    MobFile mobFile = new MobFile(new HStoreFile(storeFileInfo, BloomType.NONE, cacheConf));
     assertNotNull(mobFile.getScanner());
     assertTrue(mobFile.getScanner() instanceof StoreFileScanner);
   }

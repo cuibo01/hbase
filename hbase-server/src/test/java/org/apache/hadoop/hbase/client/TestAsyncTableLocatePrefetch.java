@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -58,7 +58,8 @@ public class TestAsyncTableLocatePrefetch {
     TEST_UTIL.createMultiRegionTable(TABLE_NAME, FAMILY);
     TEST_UTIL.waitTableAvailable(TABLE_NAME);
     CONN = ConnectionFactory.createAsyncConnection(TEST_UTIL.getConfiguration()).get();
-    LOCATOR = new AsyncNonMetaRegionLocator((AsyncConnectionImpl) CONN);
+    LOCATOR =
+      new AsyncNonMetaRegionLocator((AsyncConnectionImpl) CONN, AsyncConnectionImpl.RETRY_TIMER);
   }
 
   @AfterClass
@@ -76,7 +77,8 @@ public class TestAsyncTableLocatePrefetch {
     // confirm that the locations of all the regions have been cached.
     assertNotNull(LOCATOR.getRegionLocationInCache(TABLE_NAME, Bytes.toBytes("aaa")));
     for (byte[] row : HBaseTestingUtil.KEYS_FOR_HBA_CREATE_TABLE) {
-      assertNotNull(LOCATOR.getRegionLocationInCache(TABLE_NAME, row));
+      assertNotNull("Expected location to not be null for " + Bytes.toStringBinary(row),
+        LOCATOR.getRegionLocationInCache(TABLE_NAME, row));
     }
   }
 }

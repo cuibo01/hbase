@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,24 +21,18 @@ import static org.apache.hadoop.security.UserGroupInformation.loginUserFromKeyta
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+
 import java.io.Closeable;
 import java.io.File;
+import java.net.URI;
 import java.util.Collection;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
-import org.apache.hadoop.hbase.security.HBaseKerberosUtils;
-import org.apache.hadoop.hbase.security.access.AccessController;
-import org.apache.hadoop.hbase.security.access.PermissionStorage;
-import org.apache.hadoop.hbase.security.access.SecureTestUtil;
-import org.apache.hadoop.hbase.security.provider.SaslClientAuthenticationProviders;
 import org.apache.hadoop.hbase.security.token.AuthenticationTokenIdentifier;
-import org.apache.hadoop.hbase.security.token.TokenProvider;
-import org.apache.hadoop.hbase.security.visibility.VisibilityTestUtil;
+import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.MapReduceTests;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.zookeeper.ZKClusterId;
 import org.apache.hadoop.io.LongWritable;
@@ -49,7 +43,6 @@ import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.TokenIdentifier;
-import org.junit.After;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -57,22 +50,17 @@ import org.junit.experimental.categories.Category;
 /**
  * Test different variants of initTableMapperJob method
  */
-@Category({MapReduceTests.class, MediumTests.class})
+@Category({ MapReduceTests.class, LargeTests.class })
 public class TestTableMapReduceUtil {
   private static final String HTTP_PRINCIPAL = "HTTP/localhost";
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestTableMapReduceUtil.class);
-
-  @After
-  public void after() {
-    SaslClientAuthenticationProviders.reset();
-  }
+    HBaseClassTestRule.forClass(TestTableMapReduceUtil.class);
 
   /*
-   * initTableSnapshotMapperJob is tested in {@link TestTableSnapshotInputFormat} because
-   * the method depends on an online cluster.
+   * initTableSnapshotMapperJob is tested in {@link TestTableSnapshotInputFormat} because the method
+   * depends on an online cluster.
    */
 
   @Test
@@ -80,9 +68,8 @@ public class TestTableMapReduceUtil {
     Configuration configuration = new Configuration();
     Job job = Job.getInstance(configuration, "tableName");
     // test
-    TableMapReduceUtil.initTableMapperJob(
-      "Table", new Scan(), Import.Importer.class, Text.class, Text.class, job,
-      false, WALInputFormat.class);
+    TableMapReduceUtil.initTableMapperJob("Table", new Scan(), Import.Importer.class, Text.class,
+      Text.class, job, false, WALInputFormat.class);
     assertEquals(WALInputFormat.class, job.getInputFormatClass());
     assertEquals(Import.Importer.class, job.getMapperClass());
     assertEquals(LongWritable.class, job.getOutputKeyClass());
@@ -95,9 +82,8 @@ public class TestTableMapReduceUtil {
   public void testInitTableMapperJob2() throws Exception {
     Configuration configuration = new Configuration();
     Job job = Job.getInstance(configuration, "tableName");
-    TableMapReduceUtil.initTableMapperJob(
-      Bytes.toBytes("Table"), new Scan(), Import.Importer.class, Text.class,
-      Text.class, job, false, WALInputFormat.class);
+    TableMapReduceUtil.initTableMapperJob(Bytes.toBytes("Table"), new Scan(), Import.Importer.class,
+      Text.class, Text.class, job, false, WALInputFormat.class);
     assertEquals(WALInputFormat.class, job.getInputFormatClass());
     assertEquals(Import.Importer.class, job.getMapperClass());
     assertEquals(LongWritable.class, job.getOutputKeyClass());
@@ -110,9 +96,8 @@ public class TestTableMapReduceUtil {
   public void testInitTableMapperJob3() throws Exception {
     Configuration configuration = new Configuration();
     Job job = Job.getInstance(configuration, "tableName");
-    TableMapReduceUtil.initTableMapperJob(
-      Bytes.toBytes("Table"), new Scan(), Import.Importer.class, Text.class,
-      Text.class, job);
+    TableMapReduceUtil.initTableMapperJob(Bytes.toBytes("Table"), new Scan(), Import.Importer.class,
+      Text.class, Text.class, job);
     assertEquals(TableInputFormat.class, job.getInputFormatClass());
     assertEquals(Import.Importer.class, job.getMapperClass());
     assertEquals(LongWritable.class, job.getOutputKeyClass());
@@ -125,9 +110,8 @@ public class TestTableMapReduceUtil {
   public void testInitTableMapperJob4() throws Exception {
     Configuration configuration = new Configuration();
     Job job = Job.getInstance(configuration, "tableName");
-    TableMapReduceUtil.initTableMapperJob(
-      Bytes.toBytes("Table"), new Scan(), Import.Importer.class, Text.class,
-      Text.class, job, false);
+    TableMapReduceUtil.initTableMapperJob(Bytes.toBytes("Table"), new Scan(), Import.Importer.class,
+      Text.class, Text.class, job, false);
     assertEquals(TableInputFormat.class, job.getInputFormatClass());
     assertEquals(Import.Importer.class, job.getMapperClass());
     assertEquals(LongWritable.class, job.getOutputKeyClass());
@@ -136,32 +120,8 @@ public class TestTableMapReduceUtil {
     assertEquals("Table", job.getConfiguration().get(TableInputFormat.INPUT_TABLE));
   }
 
-  private static Closeable startSecureMiniCluster(
-    HBaseTestingUtil util, MiniKdc kdc, String principal) throws Exception {
-    Configuration conf = util.getConfiguration();
-
-    SecureTestUtil.enableSecurity(conf);
-    VisibilityTestUtil.enableVisiblityLabels(conf);
-    SecureTestUtil.verifyConfiguration(conf);
-
-    conf.set(CoprocessorHost.REGION_COPROCESSOR_CONF_KEY,
-      AccessController.class.getName() + ',' + TokenProvider.class.getName());
-
-    HBaseKerberosUtils.setSecuredConfiguration(conf,
-      principal + '@' + kdc.getRealm(), HTTP_PRINCIPAL + '@' + kdc.getRealm());
-
-    util.startMiniCluster();
-    try {
-      util.waitUntilAllRegionsAssigned(PermissionStorage.ACL_TABLE_NAME);
-    } catch (Exception e) {
-      util.shutdownMiniCluster();
-      throw e;
-    }
-
-    return util::shutdownMiniCluster;
-  }
-
-  @Test public void testInitCredentialsForCluster1() throws Exception {
+  @Test
+  public void testInitCredentialsForCluster1() throws Exception {
     HBaseTestingUtil util1 = new HBaseTestingUtil();
     HBaseTestingUtil util2 = new HBaseTestingUtil();
 
@@ -185,8 +145,9 @@ public class TestTableMapReduceUtil {
     }
   }
 
-  @Test @SuppressWarnings("unchecked") public void testInitCredentialsForCluster2()
-    throws Exception {
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testInitCredentialsForCluster2() throws Exception {
     HBaseTestingUtil util1 = new HBaseTestingUtil();
     HBaseTestingUtil util2 = new HBaseTestingUtil();
 
@@ -198,8 +159,8 @@ public class TestTableMapReduceUtil {
       kdc.createPrincipal(keytab, userPrincipal, HTTP_PRINCIPAL);
       loginUserFromKeytab(userPrincipal + '@' + kdc.getRealm(), keytab.getAbsolutePath());
 
-      try (Closeable util1Closeable = startSecureMiniCluster(util1, kdc, userPrincipal);
-        Closeable util2Closeable = startSecureMiniCluster(util2, kdc, userPrincipal)) {
+      try (Closeable ignored1 = util1.startSecureMiniCluster(kdc, userPrincipal, HTTP_PRINCIPAL);
+        Closeable ignored2 = util2.startSecureMiniCluster(kdc, userPrincipal, HTTP_PRINCIPAL)) {
         Configuration conf1 = util1.getConfiguration();
         Job job = Job.getInstance(conf1);
 
@@ -220,7 +181,8 @@ public class TestTableMapReduceUtil {
     }
   }
 
-  @Test public void testInitCredentialsForCluster3() throws Exception {
+  @Test
+  public void testInitCredentialsForCluster3() throws Exception {
     HBaseTestingUtil util1 = new HBaseTestingUtil();
 
     File keytab = new File(util1.getDataTestDir("keytab").toUri().getPath());
@@ -231,7 +193,7 @@ public class TestTableMapReduceUtil {
       kdc.createPrincipal(keytab, userPrincipal, HTTP_PRINCIPAL);
       loginUserFromKeytab(userPrincipal + '@' + kdc.getRealm(), keytab.getAbsolutePath());
 
-      try (Closeable util1Closeable = startSecureMiniCluster(util1, kdc, userPrincipal)) {
+      try (Closeable ignored1 = util1.startSecureMiniCluster(kdc, userPrincipal, HTTP_PRINCIPAL)) {
         HBaseTestingUtil util2 = new HBaseTestingUtil();
         // Assume util2 is insecure cluster
         // Do not start util2 because cannot boot secured mini cluster and insecure mini cluster at
@@ -251,8 +213,9 @@ public class TestTableMapReduceUtil {
     }
   }
 
-  @Test @SuppressWarnings("unchecked") public void testInitCredentialsForCluster4()
-    throws Exception {
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testInitCredentialsForCluster4() throws Exception {
     HBaseTestingUtil util1 = new HBaseTestingUtil();
     // Assume util1 is insecure cluster
     // Do not start util1 because cannot boot secured mini cluster and insecure mini cluster at once
@@ -266,11 +229,50 @@ public class TestTableMapReduceUtil {
       kdc.createPrincipal(keytab, userPrincipal, HTTP_PRINCIPAL);
       loginUserFromKeytab(userPrincipal + '@' + kdc.getRealm(), keytab.getAbsolutePath());
 
-      try (Closeable util2Closeable = startSecureMiniCluster(util2, kdc, userPrincipal)) {
+      try (Closeable ignored2 = util2.startSecureMiniCluster(kdc, userPrincipal, HTTP_PRINCIPAL)) {
         Configuration conf1 = util1.getConfiguration();
         Job job = Job.getInstance(conf1);
 
         TableMapReduceUtil.initCredentialsForCluster(job, util2.getConfiguration());
+
+        Credentials credentials = job.getCredentials();
+        Collection<Token<? extends TokenIdentifier>> tokens = credentials.getAllTokens();
+        assertEquals(1, tokens.size());
+
+        String clusterId = ZKClusterId.readClusterIdZNode(util2.getZooKeeperWatcher());
+        Token<AuthenticationTokenIdentifier> tokenForCluster =
+          (Token<AuthenticationTokenIdentifier>) credentials.getToken(new Text(clusterId));
+        assertEquals(userPrincipal + '@' + kdc.getRealm(),
+          tokenForCluster.decodeIdentifier().getUsername());
+      }
+    } finally {
+      kdc.stop();
+    }
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testInitCredentialsForClusterUri() throws Exception {
+    HBaseTestingUtil util1 = new HBaseTestingUtil();
+    HBaseTestingUtil util2 = new HBaseTestingUtil();
+
+    File keytab = new File(util1.getDataTestDir("keytab").toUri().getPath());
+    MiniKdc kdc = util1.setupMiniKdc(keytab);
+    try {
+      String username = UserGroupInformation.getLoginUser().getShortUserName();
+      String userPrincipal = username + "/localhost";
+      kdc.createPrincipal(keytab, userPrincipal, HTTP_PRINCIPAL);
+      loginUserFromKeytab(userPrincipal + '@' + kdc.getRealm(), keytab.getAbsolutePath());
+
+      try (Closeable ignored1 = util1.startSecureMiniCluster(kdc, userPrincipal, HTTP_PRINCIPAL);
+        Closeable ignored2 = util2.startSecureMiniCluster(kdc, userPrincipal, HTTP_PRINCIPAL)) {
+        Configuration conf1 = util1.getConfiguration();
+        Job job = Job.getInstance(conf1);
+
+        // use Configuration from util1 and URI from util2, to make sure that we use the URI instead
+        // of rely on the Configuration
+        TableMapReduceUtil.initCredentialsForCluster(job, util1.getConfiguration(),
+          new URI(util2.getRpcConnnectionURI()));
 
         Credentials credentials = job.getCredentials();
         Collection<Token<? extends TokenIdentifier>> tokens = credentials.getAllTokens();

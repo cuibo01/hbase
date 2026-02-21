@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.regionserver.compactions;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.function.Consumer;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.regionserver.HStore;
@@ -29,8 +30,6 @@ import org.apache.hadoop.hbase.security.User;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 /**
  * Compact passed set of files. Create an instance and then call
@@ -47,10 +46,11 @@ public class DefaultCompactor extends Compactor<StoreFileWriter> {
   private final CellSinkFactory<StoreFileWriter> writerFactory =
     new CellSinkFactory<StoreFileWriter>() {
       @Override
-      public StoreFileWriter createWriter(InternalScanner scanner,
-        org.apache.hadoop.hbase.regionserver.compactions.Compactor.FileDetails fd,
-        boolean shouldDropBehind, boolean major) throws IOException {
-        return DefaultCompactor.this.createWriter(fd, shouldDropBehind, major);
+      public StoreFileWriter createWriter(InternalScanner scanner, FileDetails fd,
+        boolean shouldDropBehind, boolean major, Consumer<Path> writerCreationTracker)
+        throws IOException {
+        return DefaultCompactor.this.createWriter(fd, shouldDropBehind, major,
+          writerCreationTracker);
       }
     };
 
@@ -58,38 +58,35 @@ public class DefaultCompactor extends Compactor<StoreFileWriter> {
    * Do a minor/major compaction on an explicit set of storefiles from a Store.
    */
   public List<Path> compact(final CompactionRequestImpl request,
-      ThroughputController throughputController, User user) throws IOException {
+    ThroughputController throughputController, User user) throws IOException {
     return compact(request, defaultScannerFactory, writerFactory, throughputController, user);
   }
 
   @Override
-  protected List<Path> commitWriter(FileDetails fd,
-      CompactionRequestImpl request) throws IOException {
-    List<Path> newFiles = Lists.newArrayList(writer.getPath());
+  protected List<Path> commitWriter(StoreFileWriter writer, FileDetails fd,
+    CompactionRequestImpl request) throws IOException {
+    List<Path> newFiles = writer.getPaths();
     writer.appendMetadata(fd.maxSeqId, request.isAllFiles(), request.getFiles());
     writer.close();
     return newFiles;
   }
 
   @Override
-  protected void abortWriter() throws IOException {
-    abortWriter(writer);
-    // this step signals that the target file is no longer written and can be cleaned up
-    writer = null;
-  }
-
   protected final void abortWriter(StoreFileWriter writer) throws IOException {
-    Path leftoverFile = writer.getPath();
+    List<Path> leftoverFiles = writer.getPaths();
     try {
       writer.close();
     } catch (IOException e) {
       LOG.warn("Failed to close the writer after an unfinished compaction.", e);
     }
     try {
-      store.getFileSystem().delete(leftoverFile, false);
+      for (Path path : leftoverFiles) {
+        store.getFileSystem().delete(path, false);
+      }
     } catch (IOException e) {
       LOG.warn("Failed to delete the leftover file {} after an unfinished compaction.",
-        leftoverFile, e);
+        leftoverFiles, e);
     }
   }
+
 }

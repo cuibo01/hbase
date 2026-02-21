@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,16 +22,12 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.List;
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlRootElement;
-import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
-import org.apache.hadoop.hbase.rest.model.CellModel;
 import org.apache.hadoop.hbase.rest.model.RowModel;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -48,7 +43,7 @@ import org.apache.hbase.thirdparty.javax.ws.rs.core.StreamingOutput;
 import org.apache.hbase.thirdparty.javax.ws.rs.core.UriInfo;
 
 @InterfaceAudience.Private
-public class TableScanResource  extends ResourceBase {
+public class TableScanResource extends ResourceBase {
   private static final Logger LOG = LoggerFactory.getLogger(TableScanResource.class);
 
   TableResource tableResource;
@@ -88,13 +83,7 @@ public class TableScanResource  extends ResourceBase {
             if ((rs == null) || (count <= 0)) {
               return null;
             }
-            byte[] rowKey = rs.getRow();
-            RowModel rModel = new RowModel(rowKey);
-            List<Cell> kvs = rs.listCells();
-            for (Cell kv : kvs) {
-              rModel.addCell(new CellModel(CellUtil.cloneFamily(kv), CellUtil.cloneQualifier(kv),
-                  kv.getTimestamp(), CellUtil.cloneValue(kv)));
-            }
+            RowModel rModel = RestUtil.createRowModelFromResult(rs);
             count--;
             if (count == 0) {
               results.close();
@@ -108,18 +97,16 @@ public class TableScanResource  extends ResourceBase {
 
   @GET
   @Produces({ Constants.MIMETYPE_PROTOBUF, Constants.MIMETYPE_PROTOBUF_IETF })
-  public Response getProtobuf(
-      final @Context UriInfo uriInfo,
-      final @HeaderParam("Accept") String contentType) {
+  public Response getProtobuf(final @Context UriInfo uriInfo,
+    final @HeaderParam("Accept") String contentType) {
     if (LOG.isTraceEnabled()) {
-      LOG.trace("GET " + uriInfo.getAbsolutePath() + " as " +
-              MIMETYPE_BINARY);
+      LOG.trace("GET " + uriInfo.getAbsolutePath() + " as " + MIMETYPE_BINARY);
     }
     servlet.getMetrics().incrementRequests(1);
     try {
       int fetchSize = this.servlet.getConfiguration().getInt(Constants.SCAN_FETCH_SIZE, 10);
-      StreamingOutput stream = new ProtobufStreamingOutput(this.results, contentType,
-          userRequestedLimit, fetchSize);
+      StreamingOutput stream =
+        new ProtobufStreamingOutput(this.results, contentType, userRequestedLimit, fetchSize);
       servlet.getMetrics().incrementSucessfulScanRequests(1);
       ResponseBuilder response = Response.ok(stream);
       response.header("content-type", contentType);

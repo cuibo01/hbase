@@ -32,6 +32,7 @@ import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.TableNotEnabledException;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RegionInfoBuilder;
@@ -68,6 +69,8 @@ public class TestCatalogJanitorCluster {
   private static final TableName T3 = TableName.valueOf("t3");
   private static final TableName T4 = TableName.valueOf("t4");
   private static final TableName T5 = TableName.valueOf("t5");
+  private static final TableName T6 = TableName.valueOf("t6");
+  private static final TableName T7 = TableName.valueOf("t7");
 
   @Before
   public void before() throws Exception {
@@ -84,6 +87,9 @@ public class TestCatalogJanitorCluster {
     final byte[][] keysForT5 = { Bytes.toBytes("bb"), Bytes.toBytes("cc"), Bytes.toBytes("dd") };
 
     TEST_UTIL.createTable(T5, HConstants.CATALOG_FAMILY, keysForT5);
+
+    TEST_UTIL.createMultiRegionTable(T6, new byte[][] { HConstants.CATALOG_FAMILY });
+    TEST_UTIL.createMultiRegionTable(T7, new byte[][] { HConstants.CATALOG_FAMILY });
   }
 
   @After
@@ -104,7 +110,7 @@ public class TestCatalogJanitorCluster {
     RegionStateStore regionStateStore =
       TEST_UTIL.getHBaseCluster().getMaster().getAssignmentManager().getRegionStateStore();
     janitor.scan();
-    Report report = janitor.getLastReport();
+    CatalogJanitorReport report = janitor.getLastReport();
     // Assert no problems.
     assertTrue(report.isEmpty());
     // Now remove first region in table t2 to see if catalogjanitor scan notices.
@@ -184,8 +190,8 @@ public class TestCatalogJanitorCluster {
     // add a new region [a, cc)
     RegionInfo newRiT4 = RegionInfoBuilder.newBuilder(T4).setStartKey("a".getBytes())
       .setEndKey("cc".getBytes()).build();
-    Put putForT4 = MetaTableAccessor.makePutFromRegionInfo(newRiT4,
-      EnvironmentEdgeManager.currentTime());
+    Put putForT4 =
+      MetaTableAccessor.makePutFromRegionInfo(newRiT4, EnvironmentEdgeManager.currentTime());
     MetaTableAccessor.putsToMetaTable(TEST_UTIL.getConnection(), Arrays.asList(putForT4));
 
     janitor.scan();
@@ -207,8 +213,8 @@ public class TestCatalogJanitorCluster {
     // add a new region [a, g)
     RegionInfo newRiT5 = RegionInfoBuilder.newBuilder(T5).setStartKey("a".getBytes())
       .setEndKey("g".getBytes()).build();
-    Put putForT5 = MetaTableAccessor.makePutFromRegionInfo(newRiT5,
-      EnvironmentEdgeManager.currentTime());
+    Put putForT5 =
+      MetaTableAccessor.makePutFromRegionInfo(newRiT5, EnvironmentEdgeManager.currentTime());
     MetaTableAccessor.putsToMetaTable(TEST_UTIL.getConnection(), Arrays.asList(putForT5));
 
     janitor.scan();
@@ -231,16 +237,19 @@ public class TestCatalogJanitorCluster {
   }
 
   @Test
-  public void testHoles() throws IOException {
+  public void testHoles() throws IOException, InterruptedException {
     CatalogJanitor janitor = TEST_UTIL.getHBaseCluster().getMaster().getCatalogJanitor();
 
-    Report report = janitor.getLastReport();
+    CatalogJanitorReport report = janitor.getLastReport();
     // Assert no problems.
     assertTrue(report.isEmpty());
     // Verify start and end region holes
     verifyCornerHoles(janitor, T1);
     // Verify start and end region holes
     verifyCornerHoles(janitor, T2);
+    // Verify start and end region holes when next table is disable see: HBASE-27560
+    disableTable(T7);
+    verifyCornerHoles(janitor, T6);
     verifyMiddleHole(janitor);
     // Verify that MetaFixer is able to fix these holes
     fixHoles(janitor);
@@ -249,9 +258,9 @@ public class TestCatalogJanitorCluster {
   private void fixHoles(CatalogJanitor janitor) throws IOException {
     MetaFixer metaFixer = new MetaFixer(TEST_UTIL.getHBaseCluster().getMaster());
     janitor.scan();
-    Report report = janitor.getLastReport();
-    // Verify total number of holes, 2 in t1 and t2 each and one in t3
-    assertEquals("Number of holes are not matching", 5, report.getHoles().size());
+    CatalogJanitorReport report = janitor.getLastReport();
+    // Verify total number of holes, 2 in t1, t2, t6 each and one in t3
+    assertEquals("Number of holes are not matching", 7, report.getHoles().size());
     metaFixer.fix();
     janitor.scan();
     report = janitor.getLastReport();
@@ -307,12 +316,14 @@ public class TestCatalogJanitorCluster {
   private LinkedList<Pair<RegionInfo, RegionInfo>> getHoles(CatalogJanitor janitor,
     TableName tableName) throws IOException {
     janitor.scan();
-    Report lastReport = janitor.getLastReport();
+    CatalogJanitorReport lastReport = janitor.getLastReport();
     assertFalse(lastReport.isEmpty());
     LinkedList<Pair<RegionInfo, RegionInfo>> holes = new LinkedList<>();
     for (Pair<RegionInfo, RegionInfo> hole : lastReport.getHoles()) {
-      if (hole.getFirst().getTable().equals(tableName) ||
-        hole.getSecond().getTable().equals(tableName)) {
+      if (
+        hole.getFirst().getTable().equals(tableName)
+          || hole.getSecond().getTable().equals(tableName)
+      ) {
         holes.add(hole);
       }
     }
@@ -324,5 +335,14 @@ public class TestCatalogJanitorCluster {
       TEST_UTIL.getConnection().getRegionLocator(tableName).getRegionLocation(row).getRegion();
     assertNotNull(regionInfo);
     return regionInfo;
+  }
+
+  private void disableTable(TableName tableName) throws IOException, InterruptedException {
+    try {
+      TEST_UTIL.getAdmin().disableTable(tableName);
+      TEST_UTIL.waitTableDisabled(tableName, 30000);
+    } catch (TableNotEnabledException e) {
+      LOG.debug("Table: " + tableName + " already disabled, ignore.");
+    }
   }
 }

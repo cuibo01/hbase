@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -38,8 +38,8 @@ import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
 import org.apache.hadoop.hbase.procedure2.ProcedureSuspendedException;
 import org.apache.hadoop.hbase.procedure2.ProcedureYieldException;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
+import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -53,7 +53,7 @@ import org.slf4j.LoggerFactory;
  * Confirm that we will do backoff when retrying on closing a region, to avoid consuming all the
  * CPUs.
  */
-@Category({ MasterTests.class, MediumTests.class })
+@Category({ MasterTests.class, LargeTests.class })
 public class TestCloseRegionWhileRSCrash {
   private static final Logger LOG = LoggerFactory.getLogger(TestCloseRegionWhileRSCrash.class);
 
@@ -72,7 +72,7 @@ public class TestCloseRegionWhileRSCrash {
   private static CountDownLatch RESUME = new CountDownLatch(1);
 
   public static final class DummyServerProcedure extends Procedure<MasterProcedureEnv>
-      implements ServerProcedureInterface {
+    implements ServerProcedureInterface {
 
     private ServerName serverName;
 
@@ -100,7 +100,7 @@ public class TestCloseRegionWhileRSCrash {
 
     @Override
     protected Procedure<MasterProcedureEnv>[] execute(MasterProcedureEnv env)
-        throws ProcedureYieldException, ProcedureSuspendedException, InterruptedException {
+      throws ProcedureYieldException, ProcedureSuspendedException, InterruptedException {
       ARRIVE.countDown();
       RESUME.await();
       return null;

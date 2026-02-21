@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.util;
 
 import org.apache.yetus.audience.InterfaceAudience;
@@ -24,7 +23,7 @@ import org.apache.yetus.audience.InterfaceAudience;
  * SMA measure the overall average execution time of a specific method.
  */
 @InterfaceAudience.Private
-public class SimpleMovingAverage extends MovingAverage {
+public class SimpleMovingAverage<T> extends MovingAverage<T> {
   private double averageTime = 0.0;
   protected long count = 0;
 
@@ -36,7 +35,7 @@ public class SimpleMovingAverage extends MovingAverage {
 
   @Override
   public void updateMostRecentTime(long elapsed) {
-    averageTime += (elapsed - averageTime) / (++count);
+    averageTime += (elapsed - averageTime) / ++count;
   }
 
   @Override

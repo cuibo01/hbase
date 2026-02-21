@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -6,7 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -57,7 +59,8 @@ public final class StoreFileTrackerFactory {
    * Maps between configuration names for trackers and implementation classes.
    */
   public enum Trackers {
-    DEFAULT(DefaultStoreFileTracker.class), FILE(FileBasedStoreFileTracker.class),
+    DEFAULT(DefaultStoreFileTracker.class),
+    FILE(FileBasedStoreFileTracker.class),
     MIGRATION(MigrationStoreFileTracker.class);
 
     final Class<? extends StoreFileTracker> clazz;
@@ -84,7 +87,7 @@ public final class StoreFileTrackerFactory {
     return conf.get(TRACKER_IMPL, Trackers.DEFAULT.name());
   }
 
-  static String getStoreFileTrackerName(Class<? extends StoreFileTracker> clazz) {
+  public static String getStoreFileTrackerName(Class<? extends StoreFileTracker> clazz) {
     Trackers name = CLASS_TO_ENUM.get(clazz);
     return name != null ? name.name() : clazz.getName();
   }
@@ -116,7 +119,7 @@ public final class StoreFileTrackerFactory {
   public static StoreFileTracker create(Configuration conf, boolean isPrimaryReplica,
     StoreContext ctx) {
     Class<? extends StoreFileTracker> tracker = getTrackerClass(conf);
-    LOG.info("instantiating StoreFileTracker impl {}", tracker.getName());
+    LOG.debug("instantiating StoreFileTracker impl {}", tracker.getName());
     return ReflectionUtils.newInstance(tracker, conf, isPrimaryReplica, ctx);
   }
 
@@ -126,10 +129,16 @@ public final class StoreFileTrackerFactory {
    */
   public static StoreFileTracker create(Configuration conf, TableDescriptor td,
     ColumnFamilyDescriptor cfd, HRegionFileSystem regionFs) {
+    return create(conf, td, cfd, regionFs, true);
+  }
+
+  public static StoreFileTracker create(Configuration conf, TableDescriptor td,
+    ColumnFamilyDescriptor cfd, HRegionFileSystem regionFs, boolean isPrimaryReplica) {
     StoreContext ctx =
       StoreContext.getBuilder().withColumnFamilyDescriptor(cfd).withRegionFileSystem(regionFs)
         .withFamilyStoreDirectoryPath(regionFs.getStoreDir(cfd.getNameAsString())).build();
-    return StoreFileTrackerFactory.create(mergeConfigurations(conf, td, cfd), true, ctx);
+    return StoreFileTrackerFactory.create(mergeConfigurations(conf, td, cfd), isPrimaryReplica,
+      ctx);
   }
 
   private static Configuration mergeConfigurations(Configuration global, TableDescriptor table,
@@ -167,21 +176,24 @@ public final class StoreFileTrackerFactory {
       throw new IllegalArgumentException("Should not specify " + configName + " as "
         + Trackers.MIGRATION + " because it can not be nested");
     }
-    LOG.info("instantiating StoreFileTracker impl {} as {}", tracker.getName(), configName);
+    LOG.debug("instantiating StoreFileTracker impl {} as {}", tracker.getName(), configName);
     return ReflectionUtils.newInstance(tracker, conf, isPrimaryReplica, ctx);
   }
 
   public static TableDescriptor updateWithTrackerConfigs(Configuration conf,
-      TableDescriptor descriptor) {
-    //CreateTableProcedure needs to instantiate the configured SFT impl, in order to update table
-    //descriptors with the SFT impl specific configs. By the time this happens, the table has no
-    //regions nor stores yet, so it can't create a proper StoreContext.
+    TableDescriptor descriptor) {
+    // CreateTableProcedure needs to instantiate the configured SFT impl, in order to update table
+    // descriptors with the SFT impl specific configs. By the time this happens, the table has no
+    // regions nor stores yet, so it can't create a proper StoreContext.
     if (StringUtils.isEmpty(descriptor.getValue(TRACKER_IMPL))) {
-      StoreFileTracker tracker =
-        StoreFileTrackerFactory.create(conf, true, null);
+      StoreFileTracker tracker = StoreFileTrackerFactory.create(conf, true, null);
       TableDescriptorBuilder builder = TableDescriptorBuilder.newBuilder(descriptor);
       return tracker.updateWithTrackerConfigs(builder).build();
     }
     return descriptor;
+  }
+
+  public static boolean isMigration(Class<?> clazz) {
+    return MigrationStoreFileTracker.class.isAssignableFrom(clazz);
   }
 }

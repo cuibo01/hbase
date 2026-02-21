@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,10 +17,16 @@
  */
 package org.apache.hadoop.hbase.regionserver.wal;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
@@ -30,6 +35,7 @@ import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.SingleProcessHBaseCluster;
 import org.apache.hadoop.hbase.StartTestingClusterOption;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.Waiter;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Get;
@@ -47,8 +53,10 @@ import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALFactory;
+import org.apache.hadoop.hbase.wal.WALProvider;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -58,10 +66,12 @@ import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
+
 /**
  * Test log deletion as logs are rolled.
  */
-public abstract class AbstractTestLogRolling  {
+public abstract class AbstractTestLogRolling {
   private static final Logger LOG = LoggerFactory.getLogger(AbstractTestLogRolling.class);
   protected HRegionServer server;
   protected String tableName;
@@ -71,9 +81,14 @@ public abstract class AbstractTestLogRolling  {
   protected Admin admin;
   protected SingleProcessHBaseCluster cluster;
   protected static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
-  @Rule public final TestName name = new TestName();
+  @Rule
+  public final TestName name = new TestName();
+  protected static int syncLatencyMillis;
+  private static int rowNum = 1;
+  private static final AtomicBoolean slowSyncHookCalled = new AtomicBoolean();
+  protected static ScheduledExecutorService EXECUTOR;
 
-  public AbstractTestLogRolling()  {
+  public AbstractTestLogRolling() {
     this.server = null;
     this.tableName = null;
 
@@ -116,6 +131,17 @@ public abstract class AbstractTestLogRolling  {
     // disable low replication check for log roller to get a more stable result
     // TestWALOpenAfterDNRollingStart will test this option.
     conf.setLong("hbase.regionserver.hlog.check.lowreplication.interval", 24L * 60 * 60 * 1000);
+
+    // For slow sync threshold test: roll after 5 slow syncs in 10 seconds
+    conf.setInt(FSHLog.SLOW_SYNC_ROLL_THRESHOLD, 5);
+    conf.setInt(FSHLog.SLOW_SYNC_ROLL_INTERVAL_MS, 10 * 1000);
+    // For slow sync threshold test: roll once after a sync above this threshold
+    conf.setInt(FSHLog.ROLL_ON_SYNC_TIME_MS, 5000);
+
+    // Slow sync executor.
+    EXECUTOR = Executors
+      .newSingleThreadScheduledExecutor(new ThreadFactoryBuilder().setNameFormat("Slow-sync-%d")
+        .setDaemon(true).setUncaughtExceptionHandler(Threads.LOGGING_EXCEPTION_HANDLER).build());
   }
 
   @Before
@@ -133,19 +159,22 @@ public abstract class AbstractTestLogRolling  {
   }
 
   @After
-  public void tearDown() throws Exception  {
+  public void tearDown() throws Exception {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  protected void startAndWriteData() throws IOException, InterruptedException {
-    // When the hbase:meta table can be opened, the region servers are running
-    TEST_UTIL.getConnection().getTable(TableName.META_TABLE_NAME);
+  @AfterClass
+  public static void tearDownAfterClass() {
+    EXECUTOR.shutdownNow();
+  }
+
+  private void startAndWriteData() throws IOException, InterruptedException {
     this.server = cluster.getRegionServerThreads().get(0).getRegionServer();
 
     Table table = createTestTable(this.tableName);
 
     server = TEST_UTIL.getRSForFirstRegionInTable(table.getName());
-    for (int i = 1; i <= 256; i++) {    // 256 writes should cause 8 log rolls
+    for (int i = 1; i <= 256; i++) { // 256 writes should cause 8 log rolls
       doPut(table, i);
       if (i % 32 == 0) {
         // After every 32 writes sleep to let the log roller run
@@ -157,6 +186,74 @@ public abstract class AbstractTestLogRolling  {
       }
     }
   }
+
+  private static void setSyncLatencyMillis(int latency) {
+    syncLatencyMillis = latency;
+  }
+
+  protected final AbstractFSWAL<?> getWALAndRegisterSlowSyncHook(RegionInfo region)
+    throws IOException {
+    // Get a reference to the wal.
+    final AbstractFSWAL<?> log = (AbstractFSWAL<?>) server.getWAL(region);
+
+    // Register a WALActionsListener to observe if a SLOW_SYNC roll is requested
+    log.registerWALActionsListener(new WALActionsListener() {
+      @Override
+      public void logRollRequested(RollRequestReason reason) {
+        switch (reason) {
+          case SLOW_SYNC:
+            slowSyncHookCalled.lazySet(true);
+            break;
+          default:
+            break;
+        }
+      }
+    });
+    return log;
+  }
+
+  protected final void checkSlowSync(AbstractFSWAL<?> log, Table table, int slowSyncLatency,
+    int writeCount, boolean slowSync) throws Exception {
+    if (slowSyncLatency > 0) {
+      setSyncLatencyMillis(slowSyncLatency);
+      setSlowLogWriter(log.conf);
+    } else {
+      setDefaultLogWriter(log.conf);
+    }
+
+    // Set up for test
+    log.rollWriter(true);
+    slowSyncHookCalled.set(false);
+
+    final WALProvider.WriterBase oldWriter = log.getWriter();
+
+    // Write some data
+    for (int i = 0; i < writeCount; i++) {
+      writeData(table, rowNum++);
+    }
+
+    if (slowSync) {
+      TEST_UTIL.waitFor(10000, 100, new Waiter.ExplainingPredicate<Exception>() {
+        @Override
+        public boolean evaluate() throws Exception {
+          return log.getWriter() != oldWriter;
+        }
+
+        @Override
+        public String explainFailure() throws Exception {
+          return "Waited too long for our test writer to get rolled out";
+        }
+      });
+
+      assertTrue("Should have triggered log roll due to SLOW_SYNC", slowSyncHookCalled.get());
+    } else {
+      assertFalse("Should not have triggered log roll due to SLOW_SYNC", slowSyncHookCalled.get());
+    }
+  }
+
+  protected abstract void setSlowLogWriter(Configuration conf);
+
+  protected abstract void setDefaultLogWriter(Configuration conf);
 
   /**
    * Tests that log rolling doesn't hang when no data is written.
@@ -175,19 +272,6 @@ public abstract class AbstractTestLogRolling  {
     }
   }
 
-  private void assertLogFileSize(WAL log) throws InterruptedException {
-    if (AbstractFSWALProvider.getNumRolledLogFiles(log) > 0) {
-      assertTrue(AbstractFSWALProvider.getLogFileSize(log) > 0);
-    } else {
-      for (int i = 0; i < 10; i++) {
-        if (AbstractFSWALProvider.getLogFileSize(log) != 0) {
-          Thread.sleep(10);
-        }
-      }
-      assertEquals(0, AbstractFSWALProvider.getLogFileSize(log));
-    }
-  }
-
   /**
    * Tests that logs are deleted
    */
@@ -198,21 +282,27 @@ public abstract class AbstractTestLogRolling  {
     startAndWriteData();
     RegionInfo region = server.getRegions(TableName.valueOf(tableName)).get(0).getRegionInfo();
     final WAL log = server.getWAL(region);
-    LOG.info("after writing there are " + AbstractFSWALProvider.getNumRolledLogFiles(log) + " log files");
-    assertLogFileSize(log);
+    LOG.info(
+      "after writing there are " + AbstractFSWALProvider.getNumRolledLogFiles(log) + " log files");
+
+    // roll the log, so we should have at least one rolled file and the log file size should be
+    // greater than 0, in case in the above method we rolled in the last round and then flushed so
+    // all the old wal files are deleted and cause the below assertion to fail
+    log.rollWriter();
+
+    assertThat(AbstractFSWALProvider.getLogFileSize(log), greaterThan(0L));
 
     // flush all regions
     for (HRegion r : server.getOnlineRegionsLocalContext()) {
       r.flush(true);
     }
 
-    // Now roll the log
+    // Now roll the log the again
     log.rollWriter();
 
-    int count = AbstractFSWALProvider.getNumRolledLogFiles(log);
-    LOG.info("after flushing all regions and rolling logs there are " + count + " log files");
-    assertTrue(("actual count: " + count), count <= 2);
-    assertLogFileSize(log);
+    // should have deleted all the rolled wal files
+    TEST_UTIL.waitFor(5000, () -> AbstractFSWALProvider.getNumRolledLogFiles(log) == 0);
+    assertEquals(0, AbstractFSWALProvider.getLogFileSize(log));
   }
 
   protected String getName() {
@@ -236,23 +326,20 @@ public abstract class AbstractTestLogRolling  {
     get.addFamily(HConstants.CATALOG_FAMILY);
     Result result = table.get(get);
     assertTrue(result.size() == 1);
-    assertTrue(Bytes.equals(value,
-                result.getValue(HConstants.CATALOG_FAMILY, null)));
+    assertTrue(Bytes.equals(value, result.getValue(HConstants.CATALOG_FAMILY, null)));
     LOG.info("Validated row " + row);
   }
 
   /**
-   * Tests that logs are deleted when some region has a compaction
-   * record in WAL and no other records. See HBASE-8597.
+   * Tests that logs are deleted when some region has a compaction record in WAL and no other
+   * records. See HBASE-8597.
    */
   @Test
   public void testCompactionRecordDoesntBlockRolling() throws Exception {
-    Table table = null;
 
     // When the hbase:meta table can be opened, the region servers are running
-    Table t = TEST_UTIL.getConnection().getTable(TableName.META_TABLE_NAME);
-    try {
-      table = createTestTable(getName());
+    try (Table t = TEST_UTIL.getConnection().getTable(TableName.META_TABLE_NAME);
+      Table table = createTestTable(getName())) {
 
       server = TEST_UTIL.getRSForFirstRegionInTable(table.getName());
       HRegion region = server.getRegions(table.getName()).get(0);
@@ -294,9 +381,6 @@ public abstract class AbstractTestLogRolling  {
       log.rollWriter(); // Now 2nd WAL is deleted and 3rd is added.
       assertEquals("Should have 1 WALs at the end", 1,
         AbstractFSWALProvider.getNumRolledLogFiles(log));
-    } finally {
-      if (t != null) t.close();
-      if (table != null) table.close();
     }
   }
 
@@ -309,7 +393,7 @@ public abstract class AbstractTestLogRolling  {
   protected Table createTestTable(String tableName) throws IOException {
     // Create the test table and open it
     TableDescriptor desc = TableDescriptorBuilder.newBuilder(TableName.valueOf(getName()))
-        .setColumnFamily(ColumnFamilyDescriptorBuilder.of(HConstants.CATALOG_FAMILY)).build();
+      .setColumnFamily(ColumnFamilyDescriptorBuilder.of(HConstants.CATALOG_FAMILY)).build();
     admin.createTable(desc);
     return TEST_UTIL.getConnection().getTable(desc.getTableName());
   }

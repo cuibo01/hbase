@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,10 +19,10 @@ package org.apache.hadoop.hbase.procedure;
 
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyListOf;
-import static org.mockito.Matchers.anyString;
-import static org.mockito.Matchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -60,12 +60,12 @@ import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
  * This only works correctly when we do <i>class level parallelization</i> of tests. If we do method
  * level serialization this class will likely throw all kinds of errors.
  */
-@Category({MasterTests.class, SmallTests.class})
+@Category({ MasterTests.class, SmallTests.class })
 public class TestProcedureCoordinator {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestProcedureCoordinator.class);
+    HBaseClassTestRule.forClass(TestProcedureCoordinator.class);
 
   // general test constants
   private static final long WAKE_FREQUENCY = 1000;
@@ -98,21 +98,21 @@ public class TestProcedureCoordinator {
   }
 
   /**
-   * Currently we can only handle one procedure at a time.  This makes sure we handle that and
-   * reject submitting more.
+   * Currently we can only handle one procedure at a time. This makes sure we handle that and reject
+   * submitting more.
    */
   @Test
   public void testThreadPoolSize() throws Exception {
     ProcedureCoordinator coordinator = buildNewCoordinator();
-    Procedure proc = new Procedure(coordinator,  monitor,
-        WAKE_FREQUENCY, TIMEOUT, procName, procData, expected);
+    Procedure proc =
+      new Procedure(coordinator, monitor, WAKE_FREQUENCY, TIMEOUT, procName, procData, expected);
     Procedure procSpy = spy(proc);
 
-    Procedure proc2 = new Procedure(coordinator,  monitor,
-        WAKE_FREQUENCY, TIMEOUT, procName +"2", procData, expected);
+    Procedure proc2 = new Procedure(coordinator, monitor, WAKE_FREQUENCY, TIMEOUT, procName + "2",
+      procData, expected);
     Procedure procSpy2 = spy(proc2);
-    when(coordinator.createProcedure(any(), eq(procName), eq(procData), anyListOf(String.class)))
-    .thenReturn(procSpy, procSpy2);
+    when(coordinator.createProcedure(any(), eq(procName), eq(procData), anyList()))
+      .thenReturn(procSpy, procSpy2);
 
     coordinator.startProcedure(procSpy.getErrorMonitor(), procName, procData, expected);
     // null here means second procedure failed to start.
@@ -128,27 +128,26 @@ public class TestProcedureCoordinator {
     coordinator = buildNewCoordinator();
     // setup the proc
     List<String> expected = Arrays.asList("cohort");
-    Procedure proc = new Procedure(coordinator, WAKE_FREQUENCY,
-        TIMEOUT, procName, procData, expected);
+    Procedure proc =
+      new Procedure(coordinator, WAKE_FREQUENCY, TIMEOUT, procName, procData, expected);
     final Procedure procSpy = spy(proc);
 
-    when(coordinator.createProcedure(any(), eq(procName), eq(procData), anyListOf(String.class)))
-        .thenReturn(procSpy);
+    when(coordinator.createProcedure(any(), eq(procName), eq(procData), anyList()))
+      .thenReturn(procSpy);
 
     // use the passed controller responses
     IOException cause = new IOException("Failed to reach comms during acquire");
-    doThrow(cause).when(controller)
-        .sendGlobalBarrierAcquire(eq(procSpy), eq(procData), anyListOf(String.class));
+    doThrow(cause).when(controller).sendGlobalBarrierAcquire(eq(procSpy), eq(procData), anyList());
 
     // run the operation
     proc = coordinator.startProcedure(proc.getErrorMonitor(), procName, procData, expected);
     // and wait for it to finish
-    while(!proc.completedLatch.await(WAKE_FREQUENCY, TimeUnit.MILLISECONDS));
+    while (!proc.completedLatch.await(WAKE_FREQUENCY, TimeUnit.MILLISECONDS))
+      ;
     verify(procSpy, atLeastOnce()).receive(any());
     verify(coordinator, times(1)).rpcConnectionFailure(anyString(), eq(cause));
     verify(controller, times(1)).sendGlobalBarrierAcquire(procSpy, procData, expected);
-    verify(controller, never()).sendGlobalBarrierReached(any(),
-        anyListOf(String.class));
+    verify(controller, never()).sendGlobalBarrierReached(any(), anyList());
   }
 
   /**
@@ -160,28 +159,27 @@ public class TestProcedureCoordinator {
 
     // setup the task and spy on it
     List<String> expected = Arrays.asList("cohort");
-    final Procedure spy = spy(new Procedure(coordinator,
-        WAKE_FREQUENCY, TIMEOUT, procName, procData, expected));
+    final Procedure spy =
+      spy(new Procedure(coordinator, WAKE_FREQUENCY, TIMEOUT, procName, procData, expected));
 
-    when(coordinator.createProcedure(any(), eq(procName), eq(procData), anyListOf(String.class)))
-    .thenReturn(spy);
+    when(coordinator.createProcedure(any(), eq(procName), eq(procData), anyList())).thenReturn(spy);
 
     // use the passed controller responses
     IOException cause = new IOException("Failed to reach controller during prepare");
-    doAnswer(new AcquireBarrierAnswer(procName, new String[] { "cohort" }))
-        .when(controller).sendGlobalBarrierAcquire(eq(spy), eq(procData), anyListOf(String.class));
-    doThrow(cause).when(controller).sendGlobalBarrierReached(eq(spy), anyListOf(String.class));
+    doAnswer(new AcquireBarrierAnswer(procName, new String[] { "cohort" })).when(controller)
+      .sendGlobalBarrierAcquire(eq(spy), eq(procData), anyList());
+    doThrow(cause).when(controller).sendGlobalBarrierReached(eq(spy), anyList());
 
     // run the operation
-    Procedure task = coordinator.startProcedure(spy.getErrorMonitor(), procName, procData, expected);
+    Procedure task =
+      coordinator.startProcedure(spy.getErrorMonitor(), procName, procData, expected);
     // and wait for it to finish
-    while(!task.completedLatch.await(WAKE_FREQUENCY, TimeUnit.MILLISECONDS));
+    while (!task.completedLatch.await(WAKE_FREQUENCY, TimeUnit.MILLISECONDS))
+      ;
     verify(spy, atLeastOnce()).receive(any());
     verify(coordinator, times(1)).rpcConnectionFailure(anyString(), eq(cause));
-    verify(controller, times(1)).sendGlobalBarrierAcquire(eq(spy),
-        eq(procData), anyListOf(String.class));
-    verify(controller, times(1)).sendGlobalBarrierReached(any(),
-        anyListOf(String.class));
+    verify(controller, times(1)).sendGlobalBarrierAcquire(eq(spy), eq(procData), anyList());
+    verify(controller, times(1)).sendGlobalBarrierReached(any(), anyList());
   }
 
   @Test
@@ -201,8 +199,8 @@ public class TestProcedureCoordinator {
 
   public void runSimpleProcedure(String... members) throws Exception {
     coordinator = buildNewCoordinator();
-    Procedure task = new Procedure(coordinator, monitor, WAKE_FREQUENCY,
-        TIMEOUT, procName, procData, Arrays.asList(members));
+    Procedure task = new Procedure(coordinator, monitor, WAKE_FREQUENCY, TIMEOUT, procName,
+      procData, Arrays.asList(members));
     final Procedure spy = spy(task);
     runCoordinatedProcedure(spy, members);
   }
@@ -215,8 +213,8 @@ public class TestProcedureCoordinator {
     final String[] cohort = new String[] { "one", "two", "three", "four" };
     coordinator = buildNewCoordinator();
     final ProcedureCoordinator ref = coordinator;
-    Procedure task = new Procedure(coordinator, monitor, WAKE_FREQUENCY,
-        TIMEOUT, procName, procData, Arrays.asList(cohort));
+    Procedure task = new Procedure(coordinator, monitor, WAKE_FREQUENCY, TIMEOUT, procName,
+      procData, Arrays.asList(cohort));
     final Procedure spy = spy(task);
 
     AcquireBarrierAnswer prepare = new AcquireBarrierAnswer(procName, cohort) {
@@ -249,9 +247,8 @@ public class TestProcedureCoordinator {
   /**
    * Just run a procedure with the standard name and data, with not special task for the mock
    * coordinator (it works just like a regular coordinator). For custom behavior see
-   * {@link #runCoordinatedOperation(Procedure, AcquireBarrierAnswer, BarrierAnswer, String[])}
-   * .
-   * @param spy Spy on a real {@link Procedure}
+   * {@link #runCoordinatedOperation(Procedure, AcquireBarrierAnswer, BarrierAnswer, String[])} .
+   * @param spy    Spy on a real {@link Procedure}
    * @param cohort expected cohort members
    * @throws Exception on failure
    */
@@ -260,29 +257,28 @@ public class TestProcedureCoordinator {
       new BarrierAnswer(procName, cohort), cohort);
   }
 
-  public void runCoordinatedOperation(Procedure spy, AcquireBarrierAnswer prepare,
-      String... cohort) throws Exception {
+  public void runCoordinatedOperation(Procedure spy, AcquireBarrierAnswer prepare, String... cohort)
+    throws Exception {
     runCoordinatedOperation(spy, prepare, new BarrierAnswer(procName, cohort), cohort);
   }
 
-  public void runCoordinatedOperation(Procedure spy, BarrierAnswer commit,
-      String... cohort) throws Exception {
+  public void runCoordinatedOperation(Procedure spy, BarrierAnswer commit, String... cohort)
+    throws Exception {
     runCoordinatedOperation(spy, new AcquireBarrierAnswer(procName, cohort), commit, cohort);
   }
 
   public void runCoordinatedOperation(Procedure spy, AcquireBarrierAnswer prepareOperation,
-      BarrierAnswer commitOperation, String... cohort) throws Exception {
+    BarrierAnswer commitOperation, String... cohort) throws Exception {
     List<String> expected = Arrays.asList(cohort);
-    when(coordinator.createProcedure(any(), eq(procName), eq(procData), anyListOf(String.class)))
-      .thenReturn(spy);
+    when(coordinator.createProcedure(any(), eq(procName), eq(procData), anyList())).thenReturn(spy);
 
     // use the passed controller responses
     doAnswer(prepareOperation).when(controller).sendGlobalBarrierAcquire(spy, procData, expected);
-    doAnswer(commitOperation).when(controller)
-        .sendGlobalBarrierReached(eq(spy), anyListOf(String.class));
+    doAnswer(commitOperation).when(controller).sendGlobalBarrierReached(eq(spy), anyList());
 
     // run the operation
-    Procedure task = coordinator.startProcedure(spy.getErrorMonitor(), procName, procData, expected);
+    Procedure task =
+      coordinator.startProcedure(spy.getErrorMonitor(), procName, procData, expected);
     // and wait for it to finish
     task.waitForCompleted();
 
@@ -293,7 +289,7 @@ public class TestProcedureCoordinator {
     inorder.verify(spy).sendGlobalBarrierStart();
     inorder.verify(controller).sendGlobalBarrierAcquire(task, procData, expected);
     inorder.verify(spy).sendGlobalBarrierReached();
-    inorder.verify(controller).sendGlobalBarrierReached(eq(task), anyListOf(String.class));
+    inorder.verify(controller).sendGlobalBarrierReached(eq(task), anyList());
   }
 
   private static abstract class OperationAnswer implements Answer<Void> {

@@ -22,6 +22,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+
 import java.util.HashSet;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -33,12 +34,12 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({MiscTests.class, SmallTests.class})
+@Category({ MiscTests.class, SmallTests.class })
 public class TestServerName {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestServerName.class);
+    HBaseClassTestRule.forClass(TestServerName.class);
 
   @Test
   public void testHash() {
@@ -81,14 +82,14 @@ public class TestServerName {
     assertEquals(sn.toString(), parsedSn.toString());
     assertEquals(sn.getHostnameLowerCase(), parsedSn.getHostnameLowerCase());
     assertEquals(sn.getPort(), parsedSn.getPort());
-    assertEquals(sn.getStartcode(), parsedSn.getStartcode());
+    assertEquals(sn.getStartCode(), parsedSn.getStartCode());
 
     final String hostnamePortStr = sn.getAddress().toString();
     byte[] bytes = Bytes.toBytes(hostnamePortStr);
     parsedSn = ServerName.parseVersionedServerName(bytes);
     assertEquals(sn.getHostnameLowerCase(), parsedSn.getHostnameLowerCase());
     assertEquals(sn.getPort(), parsedSn.getPort());
-    assertEquals(ServerName.NON_STARTCODE, parsedSn.getStartcode());
+    assertEquals(ServerName.NON_STARTCODE, parsedSn.getStartCode());
   }
 
   @Test
@@ -100,12 +101,10 @@ public class TestServerName {
     assertFalse(sn.equals(sn3));
     assertEquals(sn.hashCode(), sn2.hashCode());
     assertNotSame(sn.hashCode(), sn3.hashCode());
-    assertEquals(sn.toString(),
-        ServerName.valueOf("www.example.org", 1234, 5678).toString());
-    assertEquals(sn.toString(),
-        ServerName.valueOf("www.example.org:1234", 5678).toString());
+    assertEquals(sn.toString(), ServerName.valueOf("www.example.org", 1234, 5678).toString());
+    assertEquals(sn.toString(), ServerName.valueOf("www.example.org:1234", 5678).toString());
     assertEquals("www.example.org" + ServerName.SERVERNAME_SEPARATOR + "1234"
-        + ServerName.SERVERNAME_SEPARATOR + "5678", sn.toString());
+      + ServerName.SERVERNAME_SEPARATOR + "5678", sn.toString());
   }
 
   @Test

@@ -318,6 +318,13 @@ For more on the HBase Shell, see http://hbase.apache.org/book.html
       hbase_receiver.send :define_singleton_method, :exit, lambda { |rc = 0|
         @shell.exit(rc)
       }
+      at_exit do
+        # Non-deamon Netty threadpool in ZK ClientCnxnSocketNetty cannot be shut down otherwise
+        begin
+          hbase.shutdown
+        rescue Exception
+        end
+      end
       ::IRB::WorkSpace.new(hbase_receiver.get_binding)
     end
 
@@ -390,6 +397,8 @@ Shell.load_command_group(
     locate_region
     list_regions
     clone_table_schema
+    list_enabled_tables
+    list_disabled_tables
   ],
   aliases: {
     'describe' => ['desc']
@@ -446,6 +455,7 @@ Shell.load_command_group(
     compact
     compaction_switch
     flush
+    flush_master_store
     get_balancer_decisions
     get_balancer_rejections
     get_slowlog_responses
@@ -457,6 +467,7 @@ Shell.load_command_group(
     unassign
     zk_dump
     wal_roll
+    wal_roll_all
     hbck_chore_run
     catalogjanitor_run
     catalogjanitor_switch
@@ -473,6 +484,8 @@ Shell.load_command_group(
     splitormerge_enabled
     clear_compaction_queues
     list_deadservers
+    list_liveservers
+    list_unknownservers
     clear_deadservers
     clear_block_cache
     stop_master
@@ -482,6 +495,7 @@ Shell.load_command_group(
     list_decommissioned_regionservers
     decommission_regionservers
     recommission_regionserver
+    truncate_region
   ],
   # TODO: remove older hlog_roll command
   aliases: {
@@ -521,6 +535,8 @@ Shell.load_command_group(
     list_peer_configs
     update_peer_config
     transit_peer_sync_replication_state
+    peer_modification_enabled
+    peer_modification_switch
   ]
 )
 
@@ -560,6 +576,7 @@ Shell.load_command_group(
     list_snapshot_sizes
     enable_rpc_throttle
     disable_rpc_throttle
+    rpc_throttle_enabled
     enable_exceed_throttle_quota
     disable_exceed_throttle_quota
   ]
@@ -623,5 +640,14 @@ Shell.load_command_group(
     alter_rsgroup_config
     show_rsgroup_config
     get_namespace_rsgroup
+  ]
+)
+
+Shell.load_command_group(
+  'storefiletracker',
+  full_name: 'StoreFileTracker',
+  commands: %w[
+    change_sft
+    change_sft_all
   ]
 )

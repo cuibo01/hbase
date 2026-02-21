@@ -198,23 +198,21 @@ echo "Writing out configuration for HBase."
 rm -rf "${working_dir}/hbase-conf"
 mkdir "${working_dir}/hbase-conf"
 
-if [ -f "${component_install}/conf/log4j2.xml" ]; then
-  cp "${component_install}/conf/log4j2.xml" "${working_dir}/hbase-conf/log4j2.xml"
+if [ -f "${component_install}/conf/log4j2.properties" ]; then
+  cp "${component_install}/conf/log4j2.properties" "${working_dir}/hbase-conf/log4j2.properties"
 else
-  cat >"${working_dir}/hbase-conf/log4j2.xml" <<EOF
-<Configuration>
-  <Appenders>
-    <!-- Console appender -->
-    <Console name="console" target="SYSTEM_ERR">
-      <PatternLayout pattern="%d{ISO8601} %-5p [%t] %c{2}: %.1000m%n" />
-    </Console>
-  </Appenders>
-  <Loggers>
-    <Root level="${sys:hbase.root.logger.level:-info}">
-      <AppenderRef ref="${sys:hbase.root.logger.appender:-console}" />
-    </Root>
-  </Loggers>
-</Configuration>
+  cat >"${working_dir}/hbase-conf/log4j2.properties" <<EOF
+status = debug
+dest = err
+name = PropertiesConfig
+
+appender.console.type = Console
+appender.console.target = SYSTEM_ERR
+appender.console.name = Console
+appender.console.layout.type = PatternLayout
+appender.console.layout.pattern = %d{ISO8601} %-5p [%t] %c{2}: %.1000m%n
+
+rootLogger = ${sys:hbase.root.logger:-INFO,console}
 EOF
 fi
 
@@ -283,7 +281,10 @@ trap cleanup EXIT SIGQUIT
 
 echo "Starting up Hadoop"
 
-if [ "${hadoop_version%.*.*}" -gt 2 ]; then
+if [[ "${hadoop_version%.*.*.*}" = "3.4.0" || "${hadoop_version%.*.*.*}" = "3.4.1" ]]; then
+  # writeDetails is broken in 3.4.0 and 3.4.1. See MAPREDUCE-7492
+  "${mapred_exec}" minicluster -format -writeConfig "${working_dir}/hbase-conf/core-site.xml" >"${working_dir}/hadoop_cluster_command.out" 2>"${working_dir}/hadoop_cluster_command.err" &
+elif [ "${hadoop_version%.*.*}" -gt 2 ]; then
   "${mapred_exec}" minicluster -format -writeConfig "${working_dir}/hbase-conf/core-site.xml" -writeDetails "${working_dir}/hadoop_cluster_info.json" >"${working_dir}/hadoop_cluster_command.out" 2>"${working_dir}/hadoop_cluster_command.err" &
 else
   HADOOP_CLASSPATH="${timeline_service_dir}/*:${timeline_service_dir}/lib/*:${yarn_server_tests_test_jar}" "${hadoop_exec}" jar "${mapred_jobclient_test_jar}" minicluster -format -writeConfig "${working_dir}/hbase-conf/core-site.xml" -writeDetails "${working_dir}/hadoop_cluster_info.json" >"${working_dir}/hadoop_cluster_command.out" 2>"${working_dir}/hadoop_cluster_command.err" &
@@ -326,7 +327,7 @@ redirect_and_run "${working_dir}/hadoop_cluster_smoke" \
     "${hadoop_exec}" --config "${working_dir}/hbase-conf/" fs -ls -R /
 
 echo "Starting up HBase"
-HBASE_CONF_DIR="${working_dir}/hbase-conf/" "${component_install}/bin/start-hbase.sh"
+HBASE_CONF_DIR="${working_dir}/hbase-conf/" HBASE_LOG_DIR="${working_dir}" "${component_install}/bin/start-hbase.sh"
 
 sleep_time=2
 until "${component_install}/bin/hbase" --config "${working_dir}/hbase-conf/" shell --noninteractive >"${working_dir}/waiting_hbase_startup.log" 2>&1 <<EOF
@@ -346,53 +347,53 @@ EOF
 
 echo "writing out example TSV to example.tsv"
 cat >"${working_dir}/example.tsv" <<EOF
-row1	value8	value8	
+row1	value8	value8
 row3			value2
-row2	value9		
-row10		value1	
+row2	value9
+row10		value1
 pow1	value8		value8
-pow3		value2	
+pow3		value2
 pow2			value9
-pow10	value1		
+pow10	value1
 paw1		value8	value8
-paw3	value2		
-paw2		value9	
+paw3	value2
+paw2		value9
 paw10			value1
-raw1	value8	value8	
+raw1	value8	value8
 raw3			value2
-raw2	value9		
-raw10		value1	
+raw2	value9
+raw10		value1
 aow1	value8		value8
-aow3		value2	
+aow3		value2
 aow2			value9
-aow10	value1		
+aow10	value1
 aaw1		value8	value8
-aaw3	value2		
-aaw2		value9	
+aaw3	value2
+aaw2		value9
 aaw10			value1
-how1	value8	value8	
+how1	value8	value8
 how3			value2
-how2	value9		
-how10		value1	
+how2	value9
+how10		value1
 zow1	value8		value8
-zow3		value2	
+zow3		value2
 zow2			value9
-zow10	value1		
+zow10	value1
 zaw1		value8	value8
-zaw3	value2		
-zaw2		value9	
+zaw3	value2
+zaw2		value9
 zaw10			value1
-haw1	value8	value8	
+haw1	value8	value8
 haw3			value2
-haw2	value9		
-haw10		value1	
+haw2	value9
+haw10		value1
 low1	value8		value8
-low3		value2	
+low3		value2
 low2			value9
-low10	value1		
+low10	value1
 law1		value8	value8
-law3	value2		
-law2		value9	
+law3	value2
+law2		value9
 law10			value1
 EOF
 
@@ -515,11 +516,11 @@ public class HBaseClientReadWriteExample {
 }
 EOF
 redirect_and_run "${working_dir}/hbase-shaded-client-compile" \
-    javac -cp "${hbase_client}/lib/shaded-clients/hbase-shaded-client-byo-hadoop-${hbase_version}.jar:${hadoop_jars}" "${working_dir}/HBaseClientReadWriteExample.java"
+    $JAVA_HOME/bin/javac -cp "${hbase_client}/lib/shaded-clients/hbase-shaded-client-byo-hadoop-${hbase_version}.jar:${hadoop_jars}" "${working_dir}/HBaseClientReadWriteExample.java"
 echo "Running shaded client example. It'll fetch the set of regions, round-trip them to a file in HDFS, then write them one-per-row into the test table."
 # The order of classpath entries here is important. if we're using non-shaded Hadoop 3 / 2.9.0 jars, we have to work around YARN-2190.
 redirect_and_run "${working_dir}/hbase-shaded-client-example" \
-    java -cp "${working_dir}/hbase-conf/:${hbase_client}/lib/shaded-clients/hbase-shaded-client-byo-hadoop-${hbase_version}.jar:${hbase_dep_classpath}:${working_dir}:${hadoop_jars}" HBaseClientReadWriteExample
+    $JAVA_HOME/bin/java -cp "${working_dir}/hbase-conf/:${hbase_client}/lib/shaded-clients/hbase-shaded-client-byo-hadoop-${hbase_version}.jar:${hbase_dep_classpath}:${working_dir}:${hadoop_jars}" HBaseClientReadWriteExample
 
 echo "Checking on results of example program."
 "${hadoop_exec}" --config "${working_dir}/hbase-conf/" fs -copyToLocal "example-region-listing.data" "${working_dir}/example-region-listing.data"

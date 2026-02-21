@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,8 +21,6 @@ import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Used to calculate the hash {@link Hash} algorithms for Bloomfilters.
- *
- * @param <T> the type of HashKey
  */
 @InterfaceAudience.Private
 public abstract class HashKey<T> {
@@ -32,14 +30,9 @@ public abstract class HashKey<T> {
     this.t = t;
   }
 
-  /**
-   * @param pos
-   * @return The byte at the given position in this HashKey
-   */
+  /** Return The byte at the given position in this HashKey */
   public abstract byte get(int pos);
 
-  /**
-   * @return The number of bytes in this HashKey
-   */
+  /** Returns The number of bytes in this HashKey */
   public abstract int length();
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -57,12 +57,14 @@ public class TestRegisterPeerWorkerWhenRestarting extends SyncReplicationTestBas
     }
 
     @Override
-    public void remoteProcedureCompleted(long procId) {
-      if (FAIL && getMasterProcedureExecutor()
-        .getProcedure(procId) instanceof SyncReplicationReplayWALRemoteProcedure) {
+    public void remoteProcedureCompleted(long procId, byte[] data) {
+      if (
+        FAIL && getMasterProcedureExecutor()
+          .getProcedure(procId) instanceof SyncReplicationReplayWALRemoteProcedure
+      ) {
         throw new RuntimeException("Inject error");
       }
-      super.remoteProcedureCompleted(procId);
+      super.remoteProcedureCompleted(procId, data);
     }
   }
 
@@ -109,8 +111,8 @@ public class TestRegisterPeerWorkerWhenRestarting extends SyncReplicationTestBas
     UTIL2.waitFor(60000,
       () -> procExec.getProcedures().stream().filter(p -> p instanceof RecoverStandbyProcedure)
         .map(p -> (RecoverStandbyProcedure) p)
-        .anyMatch(p -> p.getCurrentStateId() == DISPATCH_WALS_VALUE ||
-          p.getCurrentStateId() == UNREGISTER_PEER_FROM_WORKER_STORAGE_VALUE));
+        .anyMatch(p -> p.getCurrentStateId() == DISPATCH_WALS_VALUE
+          || p.getCurrentStateId() == UNREGISTER_PEER_FROM_WORKER_STORAGE_VALUE));
     // failover to another master
     MasterThread mt = UTIL2.getMiniHBaseCluster().getMasterThread();
     mt.getMaster().abort("for testing");
@@ -118,8 +120,8 @@ public class TestRegisterPeerWorkerWhenRestarting extends SyncReplicationTestBas
     FAIL = false;
     t.join();
     // make sure the new master can finish the transition
-    UTIL2.waitFor(60000, () -> UTIL2.getAdmin()
-      .getReplicationPeerSyncReplicationState(PEER_ID) == SyncReplicationState.DOWNGRADE_ACTIVE);
+    UTIL2.waitFor(60000, () -> UTIL2.getAdmin().getReplicationPeerSyncReplicationState(PEER_ID)
+        == SyncReplicationState.DOWNGRADE_ACTIVE);
     verify(UTIL2, 0, 100);
   }
 }

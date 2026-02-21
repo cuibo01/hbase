@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,22 +27,28 @@ import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.compress.HFileTestBase;
 import org.apache.hadoop.hbase.testclassification.IOTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
+import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-@Category({IOTests.class, SmallTests.class})
+@Category({ IOTests.class, SmallTests.class })
 public class TestHFileCompressionZstd extends HFileTestBase {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestHFileCompressionZstd.class);
+    HBaseClassTestRule.forClass(TestHFileCompressionZstd.class);
 
   private static Configuration conf;
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
+    HFileTestBase.setUpBeforeClass();
+  }
+
+  @Before
+  public void setUp() throws Exception {
     conf = TEST_UTIL.getConfiguration();
     conf.set(Compression.ZSTD_CODEC_CLASS_KEY, ZstdCodec.class.getCanonicalName());
     Compression.Algorithm.ZSTD.reload(conf);
@@ -50,9 +56,19 @@ public class TestHFileCompressionZstd extends HFileTestBase {
   }
 
   @Test
-  public void test() throws Exception {
-    Path path = new Path(TEST_UTIL.getDataTestDir(),
-      HBaseTestingUtil.getRandomUUID().toString() + ".hfile");
+  public void testWithStreamDecompression() throws Exception {
+    conf.setBoolean("hbase.io.compress.zstd.allowByteBuffDecompression", false);
+    Compression.Algorithm.ZSTD.reload(conf);
+
+    Path path =
+      new Path(TEST_UTIL.getDataTestDir(), HBaseTestingUtil.getRandomUUID().toString() + ".hfile");
+    doTest(conf, path, Compression.Algorithm.ZSTD);
+  }
+
+  @Test
+  public void testWithByteBuffDecompression() throws Exception {
+    Path path =
+      new Path(TEST_UTIL.getDataTestDir(), HBaseTestingUtil.getRandomUUID().toString() + ".hfile");
     doTest(conf, path, Compression.Algorithm.ZSTD);
   }
 

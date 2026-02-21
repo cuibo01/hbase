@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -161,6 +161,20 @@ public abstract class HBaseClusterInterface implements Closeable, Configurable {
   public abstract void resumeRegionServer(ServerName serverName) throws IOException;
 
   /**
+   * Wait for the specified region server to suspend the thread / process.
+   * @throws IOException if something goes wrong or timeout occurs
+   */
+  public abstract void waitForRegionServerToSuspend(ServerName serverName, long timeout)
+    throws IOException;
+
+  /**
+   * Wait for the specified region server to resume the thread / process.
+   * @throws IOException if something goes wrong or timeout occurs
+   */
+  public abstract void waitForRegionServerToResume(ServerName serverName, long timeout)
+    throws IOException;
+
+  /**
    * Starts a new zookeeper node on the given hostname or if this is a mini/local cluster, silently
    * logs warning message.
    * @param hostname the hostname to start the regionserver on
@@ -263,6 +277,41 @@ public abstract class HBaseClusterInterface implements Closeable, Configurable {
     throws IOException;
 
   /**
+   * Starts a new journalnode on the given hostname or if this is a mini/local cluster, silently
+   * logs warning message.
+   * @throws IOException if something goes wrong
+   */
+  public abstract void startJournalNode(ServerName serverName) throws IOException;
+
+  /**
+   * Kills the journalnode process if this is a distributed cluster, otherwise, this causes master
+   * to exit doing basic clean up only.
+   * @throws IOException if something goes wrong
+   */
+  public abstract void killJournalNode(ServerName serverName) throws IOException;
+
+  /**
+   * Stops the journalnode if this is a distributed cluster, otherwise silently logs warning
+   * message.
+   * @throws IOException if something goes wrong
+   */
+  public abstract void stopJournalNode(ServerName serverName) throws IOException;
+
+  /**
+   * Wait for the specified journalnode to join the cluster
+   * @throws IOException if something goes wrong or timeout occurs
+   */
+  public abstract void waitForJournalNodeToStart(ServerName serverName, long timeout)
+    throws IOException;
+
+  /**
+   * Wait for the specified journalnode to stop
+   * @throws IOException if something goes wrong or timeout occurs
+   */
+  public abstract void waitForJournalNodeToStop(ServerName serverName, long timeout)
+    throws IOException;
+
+  /**
    * Starts a new master on the given hostname or if this is a mini/local cluster, starts a master
    * locally.
    * @param hostname the hostname to start the master on
@@ -346,7 +395,7 @@ public abstract class HBaseClusterInterface implements Closeable, Configurable {
   /**
    * Get the ServerName of region server serving the specified region
    * @param regionName Name of the region in bytes
-   * @param tn Table name that has the region.
+   * @param tn         Table name that has the region.
    * @return ServerName that hosts the region or null
    */
   public abstract ServerName getServerHoldingRegion(final TableName tn, byte[] regionName)

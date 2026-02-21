@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,12 +19,9 @@ package org.apache.hadoop.hbase.replication;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
@@ -45,6 +42,8 @@ import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+
+import org.apache.hbase.thirdparty.com.google.common.collect.ImmutableMap;
 
 @Category({ MediumTests.class, ReplicationTests.class })
 public class TestNonHBaseReplicationEndpoint {
@@ -80,19 +79,15 @@ public class TestNonHBaseReplicationEndpoint {
 
   @Test
   public void test() throws IOException {
-    TableDescriptor td = TableDescriptorBuilder.newBuilder(tableName)
-      .setColumnFamily(ColumnFamilyDescriptorBuilder.newBuilder(famName)
-        .setScope(HConstants.REPLICATION_SCOPE_GLOBAL).build())
-      .build();
+    TableDescriptor td =
+      TableDescriptorBuilder.newBuilder(tableName).setColumnFamily(ColumnFamilyDescriptorBuilder
+        .newBuilder(famName).setScope(HConstants.REPLICATION_SCOPE_GLOBAL).build()).build();
     Table table = UTIL.createTable(td, HBaseTestingUtil.KEYS_FOR_HBA_CREATE_TABLE);
 
     ReplicationPeerConfig peerConfig = ReplicationPeerConfig.newBuilder()
       .setReplicationEndpointImpl(NonHBaseReplicationEndpoint.class.getName())
       .setReplicateAllUserTables(false)
-      .setTableCFsMap(new HashMap<TableName, List<String>>() {{
-          put(tableName, new ArrayList<>());
-        }
-      }).build();
+      .setTableCFsMap(ImmutableMap.of(tableName, new ArrayList<>())).build();
 
     ADMIN.addReplicationPeer("1", peerConfig);
     loadData(table);

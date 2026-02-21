@@ -19,8 +19,10 @@ package org.apache.hadoop.hbase.master.normalizer;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
@@ -34,23 +36,27 @@ import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.apache.hbase.thirdparty.com.google.common.util.concurrent.RateLimiter;
 import org.apache.hbase.thirdparty.org.apache.commons.collections4.CollectionUtils;
 
 /**
  * Consumes normalization request targets ({@link TableName}s) off the
- * {@link RegionNormalizerWorkQueue}, dispatches them to the {@link RegionNormalizer},
- * and executes the resulting {@link NormalizationPlan}s.
+ * {@link RegionNormalizerWorkQueue}, dispatches them to the {@link RegionNormalizer}, and executes
+ * the resulting {@link NormalizationPlan}s.
  */
 @InterfaceAudience.Private
 class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnable {
   public static final String HBASE_TABLE_NORMALIZATION_ENABLED =
-      "hbase.table.normalization.enabled";
+    "hbase.table.normalization.enabled";
   private static final Logger LOG = LoggerFactory.getLogger(RegionNormalizerWorker.class);
 
   static final String RATE_LIMIT_BYTES_PER_SEC_KEY =
     "hbase.normalizer.throughput.max_bytes_per_sec";
   private static final long RATE_UNLIMITED_BYTES = 1_000_000_000_000L; // 1TB/sec
+
+  static final String CUMULATIVE_SIZE_LIMIT_MB_KEY = "hbase.normalizer.plans_size_limit.mb";
+  static final long DEFAULT_CUMULATIVE_SIZE_LIMIT_MB = Long.MAX_VALUE;
 
   private final MasterServices masterServices;
   private final RegionNormalizer regionNormalizer;
@@ -61,13 +67,10 @@ class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnab
   private final boolean defaultNormalizerTableLevel;
   private long splitPlanCount;
   private long mergePlanCount;
+  private final AtomicLong cumulativePlansSizeLimitMb;
 
-  RegionNormalizerWorker(
-    final Configuration configuration,
-    final MasterServices masterServices,
-    final RegionNormalizer regionNormalizer,
-    final RegionNormalizerWorkQueue<TableName> workQueue
-  ) {
+  RegionNormalizerWorker(final Configuration configuration, final MasterServices masterServices,
+    final RegionNormalizer regionNormalizer, final RegionNormalizerWorkQueue<TableName> workQueue) {
     this.masterServices = masterServices;
     this.regionNormalizer = regionNormalizer;
     this.workQueue = workQueue;
@@ -76,6 +79,8 @@ class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnab
     this.mergePlanCount = 0;
     this.rateLimiter = loadRateLimiter(configuration);
     this.defaultNormalizerTableLevel = extractDefaultNormalizerValue(configuration);
+    this.cumulativePlansSizeLimitMb = new AtomicLong(
+      configuration.getLong(CUMULATIVE_SIZE_LIMIT_MB_KEY, DEFAULT_CUMULATIVE_SIZE_LIMIT_MB));
   }
 
   private boolean extractDefaultNormalizerValue(final Configuration configuration) {
@@ -86,7 +91,7 @@ class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnab
   @Override
   public void registerChildren(ConfigurationManager manager) {
     if (regionNormalizer instanceof ConfigurationObserver) {
-      final ConfigurationObserver observer = (ConfigurationObserver)  regionNormalizer;
+      final ConfigurationObserver observer = (ConfigurationObserver) regionNormalizer;
       manager.registerObserver(observer);
     }
   }
@@ -94,14 +99,25 @@ class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnab
   @Override
   public void deregisterChildren(ConfigurationManager manager) {
     if (regionNormalizer instanceof ConfigurationObserver) {
-      final ConfigurationObserver observer = (ConfigurationObserver)  regionNormalizer;
+      final ConfigurationObserver observer = (ConfigurationObserver) regionNormalizer;
       manager.deregisterObserver(observer);
     }
+  }
+
+  private static long logLongConfigurationUpdated(final String key, final long oldValue,
+    final long newValue) {
+    if (oldValue != newValue) {
+      LOG.info("Updated configuration for key '{}' from {} to {}", key, oldValue, newValue);
+    }
+    return newValue;
   }
 
   @Override
   public void onConfigurationChange(Configuration conf) {
     rateLimiter.setRate(loadRateLimit(conf));
+    cumulativePlansSizeLimitMb.set(
+      logLongConfigurationUpdated(CUMULATIVE_SIZE_LIMIT_MB_KEY, cumulativePlansSizeLimitMb.get(),
+        conf.getLong(CUMULATIVE_SIZE_LIMIT_MB_KEY, DEFAULT_CUMULATIVE_SIZE_LIMIT_MB)));
   }
 
   private static RateLimiter loadRateLimiter(final Configuration configuration) {
@@ -194,15 +210,14 @@ class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnab
       boolean normalizationEnabled;
       if (tblDesc != null) {
         String defined = tblDesc.getValue(TableDescriptorBuilder.NORMALIZATION_ENABLED);
-        if(defined != null) {
+        if (defined != null) {
           normalizationEnabled = tblDesc.isNormalizationEnabled();
         } else {
           normalizationEnabled = this.defaultNormalizerTableLevel;
         }
         if (!normalizationEnabled) {
-          LOG.debug("Skipping table {} because normalization is disabled in its table properties " +
-              "and normalization is also disabled at table level by default",
-            tableName);
+          LOG.debug("Skipping table {} because normalization is disabled in its table properties "
+            + "and normalization is also disabled at table level by default", tableName);
           return Collections.emptyList();
         }
       }
@@ -211,12 +226,42 @@ class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnab
       return Collections.emptyList();
     }
 
-    final List<NormalizationPlan> plans = regionNormalizer.computePlansForTable(tblDesc);
+    List<NormalizationPlan> plans = regionNormalizer.computePlansForTable(tblDesc);
+
+    plans = truncateForSize(plans);
+
     if (CollectionUtils.isEmpty(plans)) {
       LOG.debug("No normalization required for table {}.", tableName);
       return Collections.emptyList();
     }
     return plans;
+  }
+
+  private List<NormalizationPlan> truncateForSize(List<NormalizationPlan> plans) {
+    if (cumulativePlansSizeLimitMb.get() != DEFAULT_CUMULATIVE_SIZE_LIMIT_MB) {
+      List<NormalizationPlan> maybeTruncatedPlans = new ArrayList<>(plans.size());
+      long totalCumulativeSizeMb = 0;
+      long truncatedCumulativeSizeMb = 0;
+      for (NormalizationPlan plan : plans) {
+        totalCumulativeSizeMb += plan.getPlanSizeMb();
+        if (totalCumulativeSizeMb <= cumulativePlansSizeLimitMb.get()) {
+          truncatedCumulativeSizeMb += plan.getPlanSizeMb();
+          maybeTruncatedPlans.add(plan);
+        }
+      }
+      if (maybeTruncatedPlans.size() != plans.size()) {
+        LOG.debug(
+          "Truncating list of normalization plans that RegionNormalizerWorker will process "
+            + "because of {}. Original list had {} plan(s), new list has {} plan(s). "
+            + "Original list covered regions with cumulative size {} mb, "
+            + "new list covers regions with cumulative size {} mb.",
+          CUMULATIVE_SIZE_LIMIT_MB_KEY, plans.size(), maybeTruncatedPlans.size(),
+          totalCumulativeSizeMb, truncatedCumulativeSizeMb);
+      }
+      return maybeTruncatedPlans;
+    } else {
+      return plans;
+    }
   }
 
   private void submitPlans(final List<NormalizationPlan> plans) {
@@ -250,10 +295,8 @@ class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnab
   private void submitMergePlan(final MergeNormalizationPlan plan) {
     final int totalSizeMb;
     try {
-      final long totalSizeMbLong = plan.getNormalizationTargets()
-        .stream()
-        .mapToLong(NormalizationTarget::getRegionSizeMb)
-        .reduce(0, Math::addExact);
+      final long totalSizeMbLong = plan.getNormalizationTargets().stream()
+        .mapToLong(NormalizationTarget::getRegionSizeMb).reduce(0, Math::addExact);
       totalSizeMb = Math.toIntExact(totalSizeMbLong);
     } catch (ArithmeticException e) {
       LOG.debug("Sum of merge request size overflows rate limiter data type. {}", plan);
@@ -261,14 +304,11 @@ class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnab
       return;
     }
 
-    final RegionInfo[] infos = plan.getNormalizationTargets()
-      .stream()
-      .map(NormalizationTarget::getRegionInfo)
-      .toArray(RegionInfo[]::new);
+    final RegionInfo[] infos = plan.getNormalizationTargets().stream()
+      .map(NormalizationTarget::getRegionInfo).toArray(RegionInfo[]::new);
     final long pid;
     try {
-      pid = masterServices.mergeRegions(
-        infos, false, HConstants.NO_NONCE, HConstants.NO_NONCE);
+      pid = masterServices.mergeRegions(infos, false, HConstants.NO_NONCE, HConstants.NO_NONCE);
     } catch (IOException e) {
       LOG.info("failed to submit plan {}.", plan, e);
       planSkipped(plan.getType());
@@ -298,8 +338,7 @@ class RegionNormalizerWorker implements PropagatingConfigurationObserver, Runnab
 
     final long pid;
     try {
-      pid = masterServices.splitRegion(
-        info, null, HConstants.NO_NONCE, HConstants.NO_NONCE);
+      pid = masterServices.splitRegion(info, null, HConstants.NO_NONCE, HConstants.NO_NONCE);
     } catch (IOException e) {
       LOG.info("failed to submit plan {}.", plan, e);
       planSkipped(plan.getType());

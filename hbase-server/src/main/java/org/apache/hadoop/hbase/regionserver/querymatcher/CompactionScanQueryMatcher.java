@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,15 +20,14 @@ package org.apache.hadoop.hbase.regionserver.querymatcher;
 import static org.apache.hadoop.hbase.HConstants.EMPTY_START_ROW;
 
 import java.io.IOException;
-
-import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeepDeletedCells;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.regionserver.RegionCoprocessorHost;
 import org.apache.hadoop.hbase.regionserver.ScanInfo;
 import org.apache.hadoop.hbase.regionserver.ScanType;
 import org.apache.hadoop.hbase.util.Pair;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Query matcher for compaction.
@@ -46,9 +45,9 @@ public abstract class CompactionScanQueryMatcher extends ScanQueryMatcher {
   protected final KeepDeletedCells keepDeletedCells;
 
   protected CompactionScanQueryMatcher(ScanInfo scanInfo, DeleteTracker deletes,
-      ColumnTracker columnTracker, long readPointToUse, long oldestUnexpiredTS, long now) {
+    ColumnTracker columnTracker, long readPointToUse, long oldestUnexpiredTS, long now) {
     super(createStartKeyFromRow(EMPTY_START_ROW, scanInfo), scanInfo, columnTracker,
-        oldestUnexpiredTS, now);
+      oldestUnexpiredTS, now);
     this.maxReadPointToTrackVersions = readPointToUse;
     this.deletes = deletes;
     this.keepDeletedCells = scanInfo.getKeepDeletedCells();
@@ -71,7 +70,7 @@ public abstract class CompactionScanQueryMatcher extends ScanQueryMatcher {
   }
 
   @Override
-  public boolean moreRowsMayExistAfter(Cell cell) {
+  public boolean moreRowsMayExistAfter(ExtendedCell cell) {
     return true;
   }
 
@@ -82,7 +81,7 @@ public abstract class CompactionScanQueryMatcher extends ScanQueryMatcher {
   }
 
   @Override
-  public Cell getNextKeyHint(Cell cell) throws IOException {
+  public ExtendedCell getNextKeyHint(ExtendedCell cell) throws IOException {
     // no filter, so no key hint.
     return null;
   }
@@ -92,43 +91,45 @@ public abstract class CompactionScanQueryMatcher extends ScanQueryMatcher {
     deletes.reset();
   }
 
-  protected final void trackDelete(Cell cell) {
+  protected final void trackDelete(ExtendedCell cell) {
     // If keepDeletedCells is true, then we only remove cells by versions or TTL during
     // compaction, so we do not need to track delete here.
     // If keepDeletedCells is TTL and the delete marker is expired, then we can make sure that the
     // minVerions is larger than 0(otherwise we will just return at preCheck). So here we still
     // need to track the delete marker to see if it masks some cells.
-    if (keepDeletedCells == KeepDeletedCells.FALSE
-        || (keepDeletedCells == KeepDeletedCells.TTL && cell.getTimestamp() < oldestUnexpiredTS)) {
+    if (
+      keepDeletedCells == KeepDeletedCells.FALSE
+        || (keepDeletedCells == KeepDeletedCells.TTL && cell.getTimestamp() < oldestUnexpiredTS)
+    ) {
       deletes.add(cell);
     }
   }
 
   public static CompactionScanQueryMatcher create(ScanInfo scanInfo, ScanType scanType,
-      long readPointToUse, long earliestPutTs, long oldestUnexpiredTS, long now,
-      byte[] dropDeletesFromRow, byte[] dropDeletesToRow,
-      RegionCoprocessorHost regionCoprocessorHost) throws IOException {
-    Pair<DeleteTracker, ColumnTracker> trackers = getTrackers(regionCoprocessorHost, null,
-        scanInfo,oldestUnexpiredTS, null);
+    long readPointToUse, long earliestPutTs, long oldestUnexpiredTS, long now,
+    byte[] dropDeletesFromRow, byte[] dropDeletesToRow, RegionCoprocessorHost regionCoprocessorHost)
+    throws IOException {
+    Pair<DeleteTracker, ColumnTracker> trackers =
+      getTrackers(regionCoprocessorHost, null, scanInfo, oldestUnexpiredTS, null);
     DeleteTracker deleteTracker = trackers.getFirst();
     ColumnTracker columnTracker = trackers.getSecond();
     if (dropDeletesFromRow == null) {
       if (scanType == ScanType.COMPACT_RETAIN_DELETES) {
         if (scanInfo.isNewVersionBehavior()) {
           return new IncludeAllCompactionQueryMatcher(scanInfo, deleteTracker, columnTracker,
-              readPointToUse, oldestUnexpiredTS, now);
+            readPointToUse, oldestUnexpiredTS, now);
         } else {
           return new MinorCompactionScanQueryMatcher(scanInfo, deleteTracker, columnTracker,
-              readPointToUse, oldestUnexpiredTS, now);
+            readPointToUse, oldestUnexpiredTS, now);
         }
       } else {
         return new MajorCompactionScanQueryMatcher(scanInfo, deleteTracker, columnTracker,
-            readPointToUse, earliestPutTs, oldestUnexpiredTS, now);
+          readPointToUse, earliestPutTs, oldestUnexpiredTS, now);
       }
     } else {
       return new StripeCompactionScanQueryMatcher(scanInfo, deleteTracker, columnTracker,
-          readPointToUse, earliestPutTs, oldestUnexpiredTS, now, dropDeletesFromRow,
-          dropDeletesToRow);
+        readPointToUse, earliestPutTs, oldestUnexpiredTS, now, dropDeletesFromRow,
+        dropDeletesToRow);
     }
   }
 }

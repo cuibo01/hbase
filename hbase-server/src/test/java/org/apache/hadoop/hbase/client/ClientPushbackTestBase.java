@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -91,7 +91,7 @@ public abstract class ClientPushbackTestBase {
   protected abstract void mutate(Put put) throws IOException;
 
   protected abstract void mutate(Put put, AtomicLong endTime, CountDownLatch latch)
-      throws IOException;
+    throws IOException;
 
   protected abstract void mutateRow(RowMutations mutations) throws IOException;
 
@@ -129,8 +129,8 @@ public abstract class ClientPushbackTestBase {
     // check that the load reported produces a nonzero delay
     long backoffTime = backoffPolicy.getBackoffTime(server, regionName, serverStats);
     assertNotEquals("Reported load does not produce a backoff", 0, backoffTime);
-    LOG.debug("Backoff calculated for " + region.getRegionInfo().getRegionNameAsString() + " @ " +
-      server + " is " + backoffTime);
+    LOG.debug("Backoff calculated for " + region.getRegionInfo().getRegionNameAsString() + " @ "
+      + server + " is " + backoffTime);
 
     CountDownLatch latch = new CountDownLatch(1);
     AtomicLong endTime = new AtomicLong();
@@ -142,14 +142,14 @@ public abstract class ClientPushbackTestBase {
     // time reported by above debug logging has significantly deviated.
     MetricsConnection metrics = getConnectionMetrics();
     String name = server.getServerName() + "," + Bytes.toStringBinary(regionName);
-    MetricsConnection.RegionStats rsStats = metrics.serverStats.get(server).get(regionName);
+    MetricsConnection.RegionStats rsStats = metrics.getServerStats().get(server).get(regionName);
     assertEquals(name, rsStats.name);
     assertEquals(rsStats.heapOccupancyHist.getSnapshot().getMean(),
       (double) regionStats.getHeapOccupancyPercent(), 0.1);
     assertEquals(rsStats.memstoreLoadHist.getSnapshot().getMean(),
       (double) regionStats.getMemStoreLoadPercent(), 0.1);
 
-    MetricsConnection.RunnerStats runnerStats = metrics.runnerStats;
+    MetricsConnection.RunnerStats runnerStats = metrics.getRunnerStats();
 
     assertEquals(1, runnerStats.delayRunners.getCount());
     assertEquals(1, runnerStats.normalRunners.getCount());

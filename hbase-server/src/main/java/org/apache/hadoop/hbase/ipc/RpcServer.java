@@ -15,11 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.ipc;
 
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHORIZATION;
 
+import com.google.errorprone.annotations.RestrictedApi;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -38,12 +38,15 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CallQueueTooBigException;
 import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.conf.ConfigurationObserver;
+import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
 import org.apache.hadoop.hbase.io.ByteBuffAllocator;
 import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
 import org.apache.hadoop.hbase.monitoring.TaskMonitor;
+import org.apache.hadoop.hbase.monitoring.ThreadLocalServerSideScanMetrics;
 import org.apache.hadoop.hbase.namequeues.NamedQueueRecorder;
 import org.apache.hadoop.hbase.namequeues.RpcLogDetails;
 import org.apache.hadoop.hbase.regionserver.RSRpcServices;
@@ -52,7 +55,9 @@ import org.apache.hadoop.hbase.security.SaslUtil;
 import org.apache.hadoop.hbase.security.SaslUtil.QualityOfProtection;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.security.UserProvider;
+import org.apache.hadoop.hbase.security.provider.SaslServerAuthenticationProviders;
 import org.apache.hadoop.hbase.security.token.AuthenticationTokenSecretManager;
+import org.apache.hadoop.hbase.util.CoprocessorConfigurationUtil;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.GsonUtil;
 import org.apache.hadoop.hbase.util.Pair;
@@ -67,6 +72,7 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
 import org.apache.hbase.thirdparty.com.google.gson.Gson;
 import org.apache.hbase.thirdparty.com.google.protobuf.BlockingService;
 import org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.MethodDescriptor;
@@ -80,23 +86,22 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos.ConnectionHea
 
 /**
  * An RPC server that hosts protobuf described Services.
- *
  */
 @InterfaceAudience.Private
-public abstract class RpcServer implements RpcServerInterface,
-    ConfigurationObserver {
+public abstract class RpcServer implements RpcServerInterface, ConfigurationObserver {
   // LOG is being used in CallRunner and the log level is being changed in tests
   public static final Logger LOG = LoggerFactory.getLogger(RpcServer.class);
-  protected static final CallQueueTooBigException CALL_QUEUE_TOO_BIG_EXCEPTION
-      = new CallQueueTooBigException();
+  protected static final CallQueueTooBigException CALL_QUEUE_TOO_BIG_EXCEPTION =
+    new CallQueueTooBigException();
 
   private static final String MULTI_GETS = "multi.gets";
   private static final String MULTI_MUTATIONS = "multi.mutations";
   private static final String MULTI_SERVICE_CALLS = "multi.service_calls";
 
   private final boolean authorize;
-  private final boolean isOnlineLogProviderEnabled;
+  private volatile boolean isOnlineLogProviderEnabled;
   protected boolean isSecurityEnabled;
+  protected final SaslServerAuthenticationProviders saslProviders;
 
   public static final byte CURRENT_VERSION = 0;
 
@@ -104,7 +109,7 @@ public abstract class RpcServer implements RpcServerInterface,
    * Whether we allow a fallback to SIMPLE auth for insecure clients when security is enabled.
    */
   public static final String FALLBACK_TO_INSECURE_CLIENT_AUTH =
-          "hbase.ipc.server.fallback-to-simple-auth-allowed";
+    "hbase.ipc.server.fallback-to-simple-auth-allowed";
 
   /**
    * How many calls/handler are allowed in the queue.
@@ -115,15 +120,16 @@ public abstract class RpcServer implements RpcServerInterface,
 
   protected static final String AUTH_FAILED_FOR = "Auth failed for ";
   protected static final String AUTH_SUCCESSFUL_FOR = "Auth successful for ";
-  protected static final Logger AUDITLOG = LoggerFactory.getLogger("SecurityLogger."
-      + Server.class.getName());
+  protected static final Logger AUDITLOG =
+    LoggerFactory.getLogger("SecurityLogger." + Server.class.getName());
   protected SecretManager<TokenIdentifier> secretManager;
   protected final Map<String, String> saslProps;
+  protected final String serverPrincipal;
 
   protected ServiceAuthorizationManager authManager;
 
-  /** This is set to Call object before Handler invokes an RPC and ybdie
-   * after the call returns.
+  /**
+   * This is set to Call object before Handler invokes an RPC and ybdie after the call returns.
    */
   protected static final ThreadLocal<RpcCall> CurCall = new ThreadLocal<>();
 
@@ -159,9 +165,9 @@ public abstract class RpcServer implements RpcServerInterface,
   protected final boolean tcpKeepAlive; // if T then use keepalives
 
   /**
-   * This flag is used to indicate to sub threads when they should go down.  When we call
-   * {@link #start()}, all threads started will consult this flag on whether they should
-   * keep going.  It is set to false when {@link #stop()} is called.
+   * This flag is used to indicate to sub threads when they should go down. When we call
+   * {@link #start()}, all threads started will consult this flag on whether they should keep going.
+   * It is set to false when {@link #stop()} is called.
    */
   volatile boolean running = true;
 
@@ -179,10 +185,12 @@ public abstract class RpcServer implements RpcServerInterface,
 
   protected static final String WARN_RESPONSE_TIME = "hbase.ipc.warn.response.time";
   protected static final String WARN_RESPONSE_SIZE = "hbase.ipc.warn.response.size";
+  protected static final String WARN_SCAN_RESPONSE_TIME = "hbase.ipc.warn.response.time.scan";
+  protected static final String WARN_SCAN_RESPONSE_SIZE = "hbase.ipc.warn.response.size.scan";
 
   /**
-   * Minimum allowable timeout (in milliseconds) in rpc request's header. This
-   * configuration exists to prevent the rpc service regarding this request as timeout immediately.
+   * Minimum allowable timeout (in milliseconds) in rpc request's header. This configuration exists
+   * to prevent the rpc service regarding this request as timeout immediately.
    */
   protected static final String MIN_CLIENT_REQUEST_TIMEOUT = "hbase.ipc.min.client.request.timeout";
   protected static final int DEFAULT_MIN_CLIENT_REQUEST_TIMEOUT = 20;
@@ -199,8 +207,10 @@ public abstract class RpcServer implements RpcServerInterface,
   protected static final Gson GSON = GsonUtil.createGsonWithDisableHtmlEscaping().create();
 
   protected final int maxRequestSize;
-  protected final int warnResponseTime;
-  protected final int warnResponseSize;
+  protected volatile int warnResponseTime;
+  protected volatile int warnResponseSize;
+  protected volatile int warnScanResponseTime;
+  protected volatile int warnScanResponseSize;
 
   protected final int minClientRequestTimeout;
 
@@ -209,18 +219,19 @@ public abstract class RpcServer implements RpcServerInterface,
 
   protected final RpcScheduler scheduler;
 
-  protected UserProvider userProvider;
+  protected final UserProvider userProvider;
 
   protected final ByteBuffAllocator bbAllocator;
 
   protected volatile boolean allowFallbackToSimpleAuth;
+
+  volatile RpcCoprocessorHost cpHost;
 
   /**
    * Used to get details for scan with a scanner_id<br/>
    * TODO try to figure out a better way and remove reference from regionserver package later.
    */
   private RSRpcServices rsRpcServices;
-
 
   /**
    * Use to add online slowlog responses
@@ -233,22 +244,25 @@ public abstract class RpcServer implements RpcServerInterface,
   }
 
   /**
-   * Datastructure for passing a {@link BlockingService} and its associated class of
-   * protobuf service interface.  For example, a server that fielded what is defined
-   * in the client protobuf service would pass in an implementation of the client blocking service
-   * and then its ClientService.BlockingInterface.class.  Used checking connection setup.
+   * Datastructure for passing a {@link BlockingService} and its associated class of protobuf
+   * service interface. For example, a server that fielded what is defined in the client protobuf
+   * service would pass in an implementation of the client blocking service and then its
+   * ClientService.BlockingInterface.class. Used checking connection setup.
    */
   public static class BlockingServiceAndInterface {
     private final BlockingService service;
     private final Class<?> serviceInterface;
+
     public BlockingServiceAndInterface(final BlockingService service,
-        final Class<?> serviceInterface) {
+      final Class<?> serviceInterface) {
       this.service = service;
       this.serviceInterface = serviceInterface;
     }
+
     public Class<?> getServiceInterface() {
       return this.serviceInterface;
     }
+
     public BlockingService getBlockingService() {
       return this.service;
     }
@@ -256,19 +270,17 @@ public abstract class RpcServer implements RpcServerInterface,
 
   /**
    * Constructs a server listening on the named port and address.
-   * @param server hosting instance of {@link Server}. We will do authentications if an
-   * instance else pass null for no authentication check.
-   * @param name Used keying this rpc servers' metrics and for naming the Listener thread.
-   * @param services A list of services.
-   * @param bindAddress Where to listen
-   * @param conf
-   * @param scheduler
+   * @param server           hosting instance of {@link Server}. We will do authentications if an
+   *                         instance else pass null for no authentication check.
+   * @param name             Used keying this rpc servers' metrics and for naming the Listener
+   *                         thread.
+   * @param services         A list of services.
+   * @param bindAddress      Where to listen
    * @param reservoirEnabled Enable ByteBufferPool or not.
    */
   public RpcServer(final Server server, final String name,
-      final List<BlockingServiceAndInterface> services,
-      final InetSocketAddress bindAddress, Configuration conf,
-      RpcScheduler scheduler, boolean reservoirEnabled) throws IOException {
+    final List<BlockingServiceAndInterface> services, final InetSocketAddress bindAddress,
+    Configuration conf, RpcScheduler scheduler, boolean reservoirEnabled) throws IOException {
     this.bbAllocator = ByteBuffAllocator.create(conf, reservoirEnabled);
     this.server = server;
     this.services = services;
@@ -278,10 +290,12 @@ public abstract class RpcServer implements RpcServerInterface,
     this.maxQueueSizeInBytes =
       this.conf.getLong("hbase.ipc.server.max.callqueue.size", DEFAULT_MAX_CALLQUEUE_SIZE);
 
-    this.warnResponseTime = conf.getInt(WARN_RESPONSE_TIME, DEFAULT_WARN_RESPONSE_TIME);
-    this.warnResponseSize = conf.getInt(WARN_RESPONSE_SIZE, DEFAULT_WARN_RESPONSE_SIZE);
-    this.minClientRequestTimeout = conf.getInt(MIN_CLIENT_REQUEST_TIMEOUT,
-        DEFAULT_MIN_CLIENT_REQUEST_TIMEOUT);
+    this.warnResponseTime = getWarnResponseTime(conf);
+    this.warnResponseSize = getWarnResponseSize(conf);
+    this.warnScanResponseTime = getWarnScanResponseTime(conf);
+    this.warnScanResponseSize = getWarnScanResponseSize(conf);
+    this.minClientRequestTimeout =
+      conf.getInt(MIN_CLIENT_REQUEST_TIMEOUT, DEFAULT_MIN_CLIENT_REQUEST_TIMEOUT);
     this.maxRequestSize = conf.getInt(MAX_REQUEST_SIZE, DEFAULT_MAX_REQUEST_SIZE);
 
     this.metrics = new MetricsHBaseServer(name, new MetricsHBaseServerWrapperImpl(this));
@@ -296,13 +310,18 @@ public abstract class RpcServer implements RpcServerInterface,
     if (isSecurityEnabled) {
       saslProps = SaslUtil.initSaslProperties(conf.get("hbase.rpc.protection",
         QualityOfProtection.AUTHENTICATION.name().toLowerCase(Locale.ROOT)));
+      serverPrincipal = Preconditions.checkNotNull(userProvider.getCurrentUserName(),
+        "can not get current user name when security is enabled");
     } else {
       saslProps = Collections.emptyMap();
+      serverPrincipal = HConstants.EMPTY_STRING;
     }
+    this.saslProviders = new SaslServerAuthenticationProviders(conf);
 
-    this.isOnlineLogProviderEnabled = conf.getBoolean(HConstants.SLOW_LOG_BUFFER_ENABLED_KEY,
-      HConstants.DEFAULT_ONLINE_LOG_PROVIDER_ENABLED);
+    this.isOnlineLogProviderEnabled = getIsOnlineLogProviderEnabled(conf);
     this.scheduler = scheduler;
+
+    initializeCoprocessorHost(getConf());
   }
 
   @Override
@@ -314,6 +333,58 @@ public abstract class RpcServer implements RpcServerInterface,
     if (authorize) {
       refreshAuthManager(newConf, new HBasePolicyProvider());
     }
+    refreshSlowLogConfiguration(newConf);
+    if (
+      CoprocessorConfigurationUtil.checkConfigurationChange(this.cpHost, newConf,
+        CoprocessorHost.RPC_COPROCESSOR_CONF_KEY)
+    ) {
+      LOG.info("Update the RPC coprocessor(s) because the configuration has changed");
+      initializeCoprocessorHost(newConf);
+    }
+  }
+
+  private void refreshSlowLogConfiguration(Configuration newConf) {
+    boolean newIsOnlineLogProviderEnabled = getIsOnlineLogProviderEnabled(newConf);
+    if (isOnlineLogProviderEnabled != newIsOnlineLogProviderEnabled) {
+      isOnlineLogProviderEnabled = newIsOnlineLogProviderEnabled;
+    }
+    int newWarnResponseTime = getWarnResponseTime(newConf);
+    if (warnResponseTime != newWarnResponseTime) {
+      warnResponseTime = newWarnResponseTime;
+    }
+    int newWarnResponseSize = getWarnResponseSize(newConf);
+    if (warnResponseSize != newWarnResponseSize) {
+      warnResponseSize = newWarnResponseSize;
+    }
+    int newWarnResponseTimeScan = getWarnScanResponseTime(newConf);
+    if (warnScanResponseTime != newWarnResponseTimeScan) {
+      warnScanResponseTime = newWarnResponseTimeScan;
+    }
+    int newWarnScanResponseSize = getWarnScanResponseSize(newConf);
+    if (warnScanResponseSize != newWarnScanResponseSize) {
+      warnScanResponseSize = newWarnScanResponseSize;
+    }
+  }
+
+  private static boolean getIsOnlineLogProviderEnabled(Configuration conf) {
+    return conf.getBoolean(HConstants.SLOW_LOG_BUFFER_ENABLED_KEY,
+      HConstants.DEFAULT_ONLINE_LOG_PROVIDER_ENABLED);
+  }
+
+  private static int getWarnResponseTime(Configuration conf) {
+    return conf.getInt(WARN_RESPONSE_TIME, DEFAULT_WARN_RESPONSE_TIME);
+  }
+
+  private static int getWarnResponseSize(Configuration conf) {
+    return conf.getInt(WARN_RESPONSE_SIZE, DEFAULT_WARN_RESPONSE_SIZE);
+  }
+
+  private static int getWarnScanResponseTime(Configuration conf) {
+    return conf.getInt(WARN_SCAN_RESPONSE_TIME, getWarnResponseTime(conf));
+  }
+
+  private static int getWarnScanResponseSize(Configuration conf) {
+    return conf.getInt(WARN_SCAN_RESPONSE_SIZE, getWarnResponseSize(conf));
   }
 
   protected void initReconfigurable(Configuration confToLoad) {
@@ -354,12 +425,10 @@ public abstract class RpcServer implements RpcServerInterface,
     if (!isSecurityEnabled) return null;
     if (server == null) return null;
     Configuration conf = server.getConfiguration();
-    long keyUpdateInterval =
-        conf.getLong("hbase.auth.key.update.interval", 24*60*60*1000);
-    long maxAge =
-        conf.getLong("hbase.auth.token.max.lifetime", 7*24*60*60*1000);
+    long keyUpdateInterval = conf.getLong("hbase.auth.key.update.interval", 24 * 60 * 60 * 1000);
+    long maxAge = conf.getLong("hbase.auth.token.max.lifetime", 7 * 24 * 60 * 60 * 1000);
     return new AuthenticationTokenSecretManager(conf, server.getZooKeeper(),
-        server.getServerName().toString(), keyUpdateInterval, maxAge);
+      server.getServerName().toString(), keyUpdateInterval, maxAge);
   }
 
   public SecretManager<? extends TokenIdentifier> getSecretManager() {
@@ -372,22 +441,21 @@ public abstract class RpcServer implements RpcServerInterface,
   }
 
   /**
-   * This is a server side method, which is invoked over RPC. On success
-   * the return response has protobuf response payload. On failure, the
-   * exception name and the stack trace are returned in the protobuf response.
+   * This is a server side method, which is invoked over RPC. On success the return response has
+   * protobuf response payload. On failure, the exception name and the stack trace are returned in
+   * the protobuf response.
    */
   @Override
-  public Pair<Message, CellScanner> call(RpcCall call,
-      MonitoredRPCHandler status) throws IOException {
+  public Pair<Message, ExtendedCellScanner> call(RpcCall call, MonitoredRPCHandler status)
+    throws IOException {
     try {
       MethodDescriptor md = call.getMethod();
       Message param = call.getParam();
-      status.setRPC(md.getName(), new Object[]{param},
-        call.getReceiveTime());
+      status.setRPC(md.getName(), new Object[] { param }, call.getReceiveTime());
       // TODO: Review after we add in encoded data blocks.
       status.setRPCPacket(param);
       status.resume("Servicing call");
-      //get an instance of the method arg type
+      // get an instance of the method arg type
       HBaseRpcController controller = new HBaseRpcControllerImpl(call.getCellScanner());
       controller.setCallTimeout(call.getTimeout());
       Message result = call.getService().callBlockingMethod(md, controller, param);
@@ -397,16 +465,18 @@ public abstract class RpcServer implements RpcServerInterface,
       int processingTime = (int) (endTime - startTime);
       int qTime = (int) (startTime - receiveTime);
       int totalTime = (int) (endTime - receiveTime);
+      long fsReadTime = ThreadLocalServerSideScanMetrics.getFsReadTimeCounter().get();
       if (LOG.isTraceEnabled()) {
-        LOG.trace(CurCall.get().toString() +
-            ", response " + TextFormat.shortDebugString(result) +
-            " queueTime: " + qTime +
-            " processingTime: " + processingTime +
-            " totalTime: " + totalTime);
+        LOG.trace(
+          "{}, response: {}, receiveTime: {}, queueTime: {}, processingTime: {}, "
+            + "totalTime: {}, fsReadTime: {}",
+          CurCall.get().toString(), TextFormat.shortDebugString(result),
+          CurCall.get().getReceiveTime(), qTime, processingTime, totalTime, fsReadTime);
       }
       // Use the raw request call size for now.
       long requestSize = call.getSize();
       long responseSize = result.getSerializedSize();
+      long responseBlockSize = call.getBlockBytesScanned();
       if (call.isClientCellBlockSupported()) {
         // Include the payload size in HBaseRpcController
         responseSize += call.getResponseCellSize();
@@ -419,30 +489,27 @@ public abstract class RpcServer implements RpcServerInterface,
       metrics.sentResponse(responseSize);
       // log any RPC responses that are slower than the configured warn
       // response time or larger than configured warning size
-      boolean tooSlow = (processingTime > warnResponseTime && warnResponseTime > -1);
-      boolean tooLarge = (responseSize > warnResponseSize && warnResponseSize > -1);
+      boolean tooSlow = isTooSlow(call, processingTime);
+      boolean tooLarge = isTooLarge(call, responseSize, responseBlockSize);
       if (tooSlow || tooLarge) {
         final String userName = call.getRequestUserName().orElse(StringUtils.EMPTY);
         // when tagging, we let TooLarge trump TooSmall to keep output simple
         // note that large responses will often also be slow.
-        logResponse(param,
-          md.getName(), md.getName() + "(" + param.getClass().getName() + ")",
-          tooLarge, tooSlow,
-          status.getClient(), startTime, processingTime, qTime,
-          responseSize, userName);
+        logResponse(param, md.getName(), md.getName() + "(" + param.getClass().getName() + ")",
+          tooLarge, tooSlow, status.getClient(), startTime, processingTime, qTime, responseSize,
+          responseBlockSize, fsReadTime, userName);
         if (this.namedQueueRecorder != null && this.isOnlineLogProviderEnabled) {
           // send logs to ring buffer owned by slowLogRecorder
           final String className =
             server == null ? StringUtils.EMPTY : server.getClass().getSimpleName();
-          this.namedQueueRecorder.addRecord(
-            new RpcLogDetails(call, param, status.getClient(), responseSize, className, tooSlow,
-              tooLarge));
+          this.namedQueueRecorder.addRecord(new RpcLogDetails(call, param, status.getClient(),
+            responseSize, responseBlockSize, fsReadTime, className, tooSlow, tooLarge));
         }
       }
       return new Pair<>(result, controller.cellScanner());
     } catch (Throwable e) {
-      // The above callBlockingMethod will always return a SE.  Strip the SE wrapper before
-      // putting it on the wire.  Its needed to adhere to the pb Service Interface but we don't
+      // The above callBlockingMethod will always return a SE. Strip the SE wrapper before
+      // putting it on the wire. Its needed to adhere to the pb Service Interface but we don't
       // need to pass it over the wire.
       if (e instanceof ServiceException) {
         if (e.getCause() == null) {
@@ -456,39 +523,40 @@ public abstract class RpcServer implements RpcServerInterface,
       metrics.exception(e);
 
       if (e instanceof LinkageError) throw new DoNotRetryIOException(e);
-      if (e instanceof IOException) throw (IOException)e;
+      if (e instanceof IOException) throw (IOException) e;
       LOG.error("Unexpected throwable object ", e);
       throw new IOException(e.getMessage(), e);
     }
   }
 
   /**
-   * Logs an RPC response to the LOG file, producing valid JSON objects for
-   * client Operations.
-   * @param param The parameters received in the call.
-   * @param methodName The name of the method invoked
-   * @param call The string representation of the call
-   * @param tooLarge To indicate if the event is tooLarge
-   * @param tooSlow To indicate if the event is tooSlow
-   * @param clientAddress The address of the client who made this call.
-   * @param startTime The time that the call was initiated, in ms.
-   * @param processingTime The duration that the call took to run, in ms.
-   * @param qTime The duration that the call spent on the queue
-   *   prior to being initiated, in ms.
-   * @param responseSize The size in bytes of the response buffer.
-   * @param userName UserName of the current RPC Call
+   * Logs an RPC response to the LOG file, producing valid JSON objects for client Operations.
+   * @param param             The parameters received in the call.
+   * @param methodName        The name of the method invoked
+   * @param call              The string representation of the call
+   * @param tooLarge          To indicate if the event is tooLarge
+   * @param tooSlow           To indicate if the event is tooSlow
+   * @param clientAddress     The address of the client who made this call.
+   * @param startTime         The time that the call was initiated, in ms.
+   * @param processingTime    The duration that the call took to run, in ms.
+   * @param qTime             The duration that the call spent on the queue prior to being
+   *                          initiated, in ms.
+   * @param responseSize      The size in bytes of the response buffer.
+   * @param blockBytesScanned The size of block bytes scanned to retrieve the response.
+   * @param userName          UserName of the current RPC Call
    */
-  void logResponse(Message param, String methodName, String call, boolean tooLarge,
-      boolean tooSlow, String clientAddress, long startTime, int processingTime, int qTime,
-      long responseSize, String userName) {
-    final String className = server == null ? StringUtils.EMPTY :
-      server.getClass().getSimpleName();
+  void logResponse(Message param, String methodName, String call, boolean tooLarge, boolean tooSlow,
+    String clientAddress, long startTime, int processingTime, int qTime, long responseSize,
+    long blockBytesScanned, long fsReadTime, String userName) {
+    final String className = server == null ? StringUtils.EMPTY : server.getClass().getSimpleName();
     // base information that is reported regardless of type of call
     Map<String, Object> responseInfo = new HashMap<>();
     responseInfo.put("starttimems", startTime);
     responseInfo.put("processingtimems", processingTime);
     responseInfo.put("queuetimems", qTime);
     responseInfo.put("responsesize", responseSize);
+    responseInfo.put("blockbytesscanned", blockBytesScanned);
+    responseInfo.put("fsreadtime", fsReadTime);
     responseInfo.put("client", clientAddress);
     responseInfo.put("class", className);
     responseInfo.put("method", methodName);
@@ -517,9 +585,9 @@ public abstract class RpcServer implements RpcServerInterface,
       int numGets = 0;
       int numMutations = 0;
       int numServiceCalls = 0;
-      ClientProtos.MultiRequest multi = (ClientProtos.MultiRequest)param;
+      ClientProtos.MultiRequest multi = (ClientProtos.MultiRequest) param;
       for (ClientProtos.RegionAction regionAction : multi.getRegionActionList()) {
-        for (ClientProtos.Action action: regionAction.getActionList()) {
+        for (ClientProtos.Action action : regionAction.getActionList()) {
           if (action.hasMutation()) {
             numMutations++;
           }
@@ -535,15 +603,29 @@ public abstract class RpcServer implements RpcServerInterface,
       responseInfo.put(MULTI_MUTATIONS, numMutations);
       responseInfo.put(MULTI_SERVICE_CALLS, numServiceCalls);
     }
-    final String tag = (tooLarge && tooSlow) ? "TooLarge & TooSlow"
-      : (tooSlow ? "TooSlow" : "TooLarge");
+    final String tag =
+      (tooLarge && tooSlow) ? "TooLarge & TooSlow" : (tooSlow ? "TooSlow" : "TooLarge");
     LOG.warn("(response" + tag + "): " + GSON.toJson(responseInfo));
   }
 
+  private boolean isTooSlow(RpcCall call, int processingTime) {
+    long warnResponseTime = call.getParam() instanceof ClientProtos.ScanRequest
+      ? warnScanResponseTime
+      : this.warnResponseTime;
+    return (processingTime > warnResponseTime && warnResponseTime > -1);
+  }
+
+  private boolean isTooLarge(RpcCall call, long responseSize, long responseBlockSize) {
+    long warnResponseSize = call.getParam() instanceof ClientProtos.ScanRequest
+      ? warnScanResponseSize
+      : this.warnResponseSize;
+    return (warnResponseSize > -1
+      && (responseSize > warnResponseSize || responseBlockSize > warnResponseSize));
+  }
 
   /**
-   * Truncate to number of chars decided by conf hbase.ipc.trace.log.max.length
-   * if TRACE is on else to 150 chars Refer to Jira HBASE-20826 and HBASE-20942
+   * Truncate to number of chars decided by conf hbase.ipc.trace.log.max.length if TRACE is on else
+   * to 150 chars Refer to Jira HBASE-20826 and HBASE-20942
    * @param strParam stringifiedParam to be truncated
    * @return truncated trace log string
    */
@@ -551,7 +633,7 @@ public abstract class RpcServer implements RpcServerInterface,
     if (LOG.isTraceEnabled()) {
       int traceLogMaxLength = getConf().getInt(TRACE_LOG_MAX_LENGTH, DEFAULT_TRACE_LOG_MAX_LENGTH);
       int truncatedLength =
-          strParam.length() < traceLogMaxLength ? strParam.length() : traceLogMaxLength;
+        strParam.length() < traceLogMaxLength ? strParam.length() : traceLogMaxLength;
       String truncatedFlag = truncatedLength == strParam.length() ? "" : KEY_WORD_TRUNCATED;
       return strParam.subSequence(0, truncatedLength) + truncatedFlag;
     }
@@ -587,13 +669,13 @@ public abstract class RpcServer implements RpcServerInterface,
 
   /**
    * Authorize the incoming client connection.
-   * @param user client user
+   * @param user       client user
    * @param connection incoming connection
-   * @param addr InetAddress of incoming connection
+   * @param addr       InetAddress of incoming connection
    * @throws AuthorizationException when the client isn't authorized to talk the protocol
    */
   public synchronized void authorize(UserGroupInformation user, ConnectionHeader connection,
-      InetAddress addr) throws AuthorizationException {
+    InetAddress addr) throws AuthorizationException {
     if (authorize) {
       Class<?> c = getServiceInterface(services, connection.getServiceName());
       authManager.authorize(user, c, getConf(), addr);
@@ -601,29 +683,28 @@ public abstract class RpcServer implements RpcServerInterface,
   }
 
   /**
-   * When the read or write buffer size is larger than this limit, i/o will be
-   * done in chunks of this size. Most RPC requests and responses would be
-   * be smaller.
+   * When the read or write buffer size is larger than this limit, i/o will be done in chunks of
+   * this size. Most RPC requests and responses would be be smaller.
    */
-  protected static final int NIO_BUFFER_LIMIT = 64 * 1024; //should not be more than 64KB.
+  protected static final int NIO_BUFFER_LIMIT = 64 * 1024; // should not be more than 64KB.
 
   /**
-   * This is a wrapper around {@link java.nio.channels.ReadableByteChannel#read(java.nio.ByteBuffer)}.
-   * If the amount of data is large, it writes to channel in smaller chunks.
-   * This is to avoid jdk from creating many direct buffers as the size of
-   * ByteBuffer increases. There should not be any performance degredation.
-   *
+   * This is a wrapper around
+   * {@link java.nio.channels.ReadableByteChannel#read(java.nio.ByteBuffer)}. If the amount of data
+   * is large, it writes to channel in smaller chunks. This is to avoid jdk from creating many
+   * direct buffers as the size of ByteBuffer increases. There should not be any performance
+   * degredation.
    * @param channel writable byte channel to write on
-   * @param buffer buffer to write
+   * @param buffer  buffer to write
    * @return number of bytes written
    * @throws java.io.IOException e
    * @see java.nio.channels.ReadableByteChannel#read(java.nio.ByteBuffer)
    */
-  protected int channelRead(ReadableByteChannel channel,
-                                   ByteBuffer buffer) throws IOException {
+  protected int channelRead(ReadableByteChannel channel, ByteBuffer buffer) throws IOException {
 
-    int count = (buffer.remaining() <= NIO_BUFFER_LIMIT) ?
-           channel.read(buffer) : channelIO(channel, null, buffer);
+    int count = (buffer.remaining() <= NIO_BUFFER_LIMIT)
+      ? channel.read(buffer)
+      : channelIO(channel, null, buffer);
     if (count > 0) {
       metrics.receivedBytes(count);
     }
@@ -633,17 +714,15 @@ public abstract class RpcServer implements RpcServerInterface,
   /**
    * Helper for {@link #channelRead(java.nio.channels.ReadableByteChannel, java.nio.ByteBuffer)}.
    * Only one of readCh or writeCh should be non-null.
-   *
-   * @param readCh read channel
+   * @param readCh  read channel
    * @param writeCh write channel
-   * @param buf buffer to read or write into/out of
+   * @param buf     buffer to read or write into/out of
    * @return bytes written
    * @throws java.io.IOException e
    * @see #channelRead(java.nio.channels.ReadableByteChannel, java.nio.ByteBuffer)
    */
-  private static int channelIO(ReadableByteChannel readCh,
-                               WritableByteChannel writeCh,
-                               ByteBuffer buf) throws IOException {
+  private static int channelIO(ReadableByteChannel readCh, WritableByteChannel writeCh,
+    ByteBuffer buf) throws IOException {
 
     int originalLimit = buf.limit();
     int initialRemaining = buf.remaining();
@@ -670,9 +749,8 @@ public abstract class RpcServer implements RpcServerInterface,
   }
 
   /**
-   * Needed for features such as delayed calls.  We need to be able to store the current call
-   * so that we can complete it later or ask questions of what is supported by the current ongoing
-   * call.
+   * Needed for features such as delayed calls. We need to be able to store the current call so that
+   * we can complete it later or ask questions of what is supported by the current ongoing call.
    * @return An RpcCallContext backed by the currently ongoing call (gotten from a thread local)
    */
   public static Optional<RpcCall> getCurrentCall() {
@@ -695,10 +773,9 @@ public abstract class RpcServer implements RpcServerInterface,
   }
 
   /**
-   * Used by {@link org.apache.hadoop.hbase.procedure2.store.region.RegionProcedureStore}. For
-   * master's rpc call, it may generate new procedure and mutate the region which store procedure.
-   * There are some check about rpc when mutate region, such as rpc timeout check. So unset the rpc
-   * call to avoid the rpc check.
+   * Used by {@link org.apache.hadoop.hbase.master.region.MasterRegion}, to avoid hit row lock
+   * timeout when updating master region in a rpc call. See HBASE-23895, HBASE-29251 and HBASE-29294
+   * for more details.
    * @return the currently ongoing rpc call
    */
   public static Optional<RpcCall> unsetCurrentCall() {
@@ -708,8 +785,8 @@ public abstract class RpcServer implements RpcServerInterface,
   }
 
   /**
-   * Used by {@link org.apache.hadoop.hbase.procedure2.store.region.RegionProcedureStore}. Set the
-   * rpc call back after mutate region.
+   * Used by {@link org.apache.hadoop.hbase.master.region.MasterRegion}. Set the rpc call back after
+   * mutate region.
    */
   public static void setCurrentCall(RpcCall rpcCall) {
     CurCall.set(rpcCall);
@@ -726,21 +803,32 @@ public abstract class RpcServer implements RpcServerInterface,
   }
 
   /**
+   * Returns the RPC connection attributes for the current RPC request. These attributes are sent by
+   * the client when initiating a new connection to the HBase server. The attributes are sent in
+   * {@code ConnectionHeader.attribute} protobuf message.
+   * @return the attribute map. It will be empty if the method is called outside of an RPC context.
+   */
+  public static Map<String, byte[]> getConnectionAttributes() {
+    return getCurrentCall().map(RpcCall::getConnectionAttributes).orElse(Map.of());
+  }
+
+  /**
    * The number of open RPC conections
    * @return the number of open rpc connections
    */
   abstract public int getNumOpenConnections();
 
   /**
-   * Returns the username for any user associated with the current RPC
-   * request or not present if no user is set.
+   * Returns the username for any user associated with the current RPC request or not present if no
+   * user is set.
    */
   public static Optional<String> getRequestUserName() {
     return getRequestUser().map(User::getShortName);
   }
 
   /**
-   * @return Address of remote client if a request is ongoing, else null
+   * Returns the address of the remote client associated with the current RPC request or not present
+   * if no address is set.
    */
   public static Optional<InetAddress> getRemoteAddress() {
     return getCurrentCall().map(RpcCall::getRemoteAddress);
@@ -748,11 +836,11 @@ public abstract class RpcServer implements RpcServerInterface,
 
   /**
    * @param serviceName Some arbitrary string that represents a 'service'.
-   * @param services Available service instances
+   * @param services    Available service instances
    * @return Matching BlockingServiceAndInterface pair
    */
   protected static BlockingServiceAndInterface getServiceAndInterface(
-      final List<BlockingServiceAndInterface> services, final String serviceName) {
+    final List<BlockingServiceAndInterface> services, final String serviceName) {
     for (BlockingServiceAndInterface bs : services) {
       if (bs.getBlockingService().getDescriptorForType().getName().equals(serviceName)) {
         return bs;
@@ -763,32 +851,28 @@ public abstract class RpcServer implements RpcServerInterface,
 
   /**
    * @param serviceName Some arbitrary string that represents a 'service'.
-   * @param services Available services and their service interfaces.
+   * @param services    Available services and their service interfaces.
    * @return Service interface class for <code>serviceName</code>
    */
-  protected static Class<?> getServiceInterface(
-      final List<BlockingServiceAndInterface> services,
-      final String serviceName) {
-    BlockingServiceAndInterface bsasi =
-        getServiceAndInterface(services, serviceName);
-    return bsasi == null? null: bsasi.getServiceInterface();
+  protected static Class<?> getServiceInterface(final List<BlockingServiceAndInterface> services,
+    final String serviceName) {
+    BlockingServiceAndInterface bsasi = getServiceAndInterface(services, serviceName);
+    return bsasi == null ? null : bsasi.getServiceInterface();
   }
 
   /**
    * @param serviceName Some arbitrary string that represents a 'service'.
-   * @param services Available services and their service interfaces.
+   * @param services    Available services and their service interfaces.
    * @return BlockingService that goes with the passed <code>serviceName</code>
    */
-  protected static BlockingService getService(
-      final List<BlockingServiceAndInterface> services,
-      final String serviceName) {
-    BlockingServiceAndInterface bsasi =
-        getServiceAndInterface(services, serviceName);
-    return bsasi == null? null: bsasi.getBlockingService();
+  protected static BlockingService getService(final List<BlockingServiceAndInterface> services,
+    final String serviceName) {
+    BlockingServiceAndInterface bsasi = getServiceAndInterface(services, serviceName);
+    return bsasi == null ? null : bsasi.getBlockingService();
   }
 
   protected static MonitoredRPCHandler getStatus() {
-    // It is ugly the way we park status up in RpcServer.  Let it be for now.  TODO.
+    // It is ugly the way we park status up in RpcServer. Let it be for now. TODO.
     MonitoredRPCHandler status = RpcServer.MONITORED_RPC.get();
     if (status != null) {
       return status;
@@ -799,9 +883,8 @@ public abstract class RpcServer implements RpcServerInterface,
     return status;
   }
 
-  /** Returns the remote side ip address when invoked inside an RPC
-   *  Returns null incase of an error.
-   *  @return InetAddress
+  /**
+   * Returns the remote side ip address when invoked inside an RPC Returns null incase of an error.
    */
   public static InetAddress getRemoteIp() {
     RpcCall call = CurCall.get();
@@ -833,5 +916,20 @@ public abstract class RpcServer implements RpcServerInterface,
 
   protected boolean needAuthorization() {
     return authorize;
+  }
+
+  @RestrictedApi(explanation = "Should only be called in tests", link = "",
+      allowedOnPath = ".*/src/test/.*")
+  public List<BlockingServiceAndInterface> getServices() {
+    return services;
+  }
+
+  private void initializeCoprocessorHost(Configuration conf) {
+    this.cpHost = new RpcCoprocessorHost(conf);
+  }
+
+  @Override
+  public RpcCoprocessorHost getRpcCoprocessorHost() {
+    return cpHost;
   }
 }

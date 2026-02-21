@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,6 +22,7 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
+import java.util.Collections;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.ReplicationPeerNotFoundException;
@@ -30,8 +31,11 @@ import org.apache.hadoop.hbase.SingleProcessHBaseCluster;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.procedure.ServerCrashProcedure;
 import org.apache.hadoop.hbase.procedure2.Procedure;
+import org.apache.hadoop.hbase.replication.ReplicationGroupOffset;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
+import org.apache.hadoop.hbase.replication.ReplicationQueueId;
 import org.apache.hadoop.hbase.replication.ReplicationUtils;
+import org.apache.hadoop.hbase.replication.regionserver.ReplicationSourceInterface;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.util.JVMClusterUtil.RegionServerThread;
@@ -57,6 +61,10 @@ public class TestStartupWithLegacyRegionReplicationEndpoint {
   @BeforeClass
   public static void setUp() throws Exception {
     UTIL.startMiniCluster(1);
+    // add a peer to force initialize the replication storage
+    UTIL.getAdmin().addReplicationPeer("1", ReplicationPeerConfig.newBuilder()
+      .setClusterKey(UTIL.getZkCluster().getAddress().toString() + ":/1").build());
+    UTIL.getAdmin().removeReplicationPeer("1");
   }
 
   @AfterClass
@@ -66,40 +74,39 @@ public class TestStartupWithLegacyRegionReplicationEndpoint {
 
   @Test
   public void test() throws Exception {
+    String peerId = "legacy";
     ReplicationPeerConfig peerConfig = ReplicationPeerConfig.newBuilder()
       .setClusterKey("127.0.0.1:2181:/hbase")
       .setReplicationEndpointImpl(ReplicationUtils.LEGACY_REGION_REPLICATION_ENDPOINT_NAME).build();
     SingleProcessHBaseCluster cluster = UTIL.getMiniHBaseCluster();
     HMaster master = cluster.getMaster();
     // can not use Admin.addPeer as it will fail with ClassNotFound
-    master.getReplicationPeerManager().addPeer("legacy", peerConfig, true);
+    master.getReplicationPeerManager().addPeer(peerId, peerConfig, true);
     // add a wal file to the queue
     ServerName rsName = cluster.getRegionServer(0).getServerName();
-    master.getReplicationPeerManager().getQueueStorage().addWAL(rsName,
-      ServerRegionReplicaUtil.REGION_REPLICA_REPLICATION_PEER, "test-wal-file");
+    master.getReplicationPeerManager().getQueueStorage().setOffset(
+      new ReplicationQueueId(rsName, ServerRegionReplicaUtil.REGION_REPLICA_REPLICATION_PEER), "",
+      new ReplicationGroupOffset("test-wal-file", 0), Collections.emptyMap());
     cluster.stopRegionServer(0);
     RegionServerThread rst = cluster.startRegionServer();
     // we should still have this peer
-    assertNotNull(UTIL.getAdmin().getReplicationPeerConfig("legacy"));
+    assertNotNull(UTIL.getAdmin().getReplicationPeerConfig(peerId));
     // but at RS side, we should not have this peer loaded as replication source
-    assertTrue(rst.getRegionServer().getReplicationSourceService().getReplicationManager()
-      .getSources().isEmpty());
+    assertTrue(
+      rst.getRegionServer().getReplicationSourceService().getReplicationManager().getSources()
+        .stream().map(ReplicationSourceInterface::getPeerId).noneMatch(p -> p.equals(peerId)));
 
     UTIL.shutdownMiniHBaseCluster();
     UTIL.restartHBaseCluster(1);
     // now we should have removed the peer
     assertThrows(ReplicationPeerNotFoundException.class,
       () -> UTIL.getAdmin().getReplicationPeerConfig("legacy"));
-    // at rs side, we should not have the peer this time, not only for not having replication source
-    assertTrue(UTIL.getMiniHBaseCluster().getRegionServer(0).getReplicationSourceService()
-      .getReplicationManager().getReplicationPeers().getAllPeerIds().isEmpty());
 
-    // make sure that we can finish the SCP and delete the test-wal-file
+    // make sure that we can finish the SCP
     UTIL.waitFor(15000,
       () -> UTIL.getMiniHBaseCluster().getMaster().getProcedures().stream()
         .filter(p -> p instanceof ServerCrashProcedure).map(p -> (ServerCrashProcedure) p)
         .allMatch(Procedure::isSuccess));
-    assertTrue(UTIL.getMiniHBaseCluster().getMaster().getReplicationPeerManager().getQueueStorage()
-      .getAllQueues(rsName).isEmpty());
+    // we will delete the legacy peer while migrating, so here we do not assert the replication data
   }
 }

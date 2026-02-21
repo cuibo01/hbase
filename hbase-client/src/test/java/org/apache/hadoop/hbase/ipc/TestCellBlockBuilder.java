@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,18 +21,17 @@ import static org.junit.Assert.assertEquals;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import org.apache.commons.lang3.time.StopWatch;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellScanner;
-import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.codec.Codec;
 import org.apache.hadoop.hbase.codec.KeyValueCodec;
-import org.apache.hadoop.hbase.io.SizedCellScanner;
+import org.apache.hadoop.hbase.io.SizedExtendedCellScanner;
 import org.apache.hadoop.hbase.nio.SingleByteBuff;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
@@ -52,7 +51,7 @@ import org.slf4j.LoggerFactory;
 public class TestCellBlockBuilder {
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCellBlockBuilder.class);
+    HBaseClassTestRule.forClass(TestCellBlockBuilder.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestCellBlockBuilder.class);
 
@@ -71,19 +70,19 @@ public class TestCellBlockBuilder {
   }
 
   static void doBuildCellBlockUndoCellBlock(final CellBlockBuilder builder, final Codec codec,
-      final CompressionCodec compressor) throws IOException {
+    final CompressionCodec compressor) throws IOException {
     doBuildCellBlockUndoCellBlock(builder, codec, compressor, 10, 1, false);
   }
 
   static void doBuildCellBlockUndoCellBlock(final CellBlockBuilder builder, final Codec codec,
-      final CompressionCodec compressor, final int count, final int size, final boolean sized)
-      throws IOException {
-    Cell[] cells = getCells(count, size);
-    CellScanner cellScanner = sized ? getSizedCellScanner(cells)
-        : CellUtil.createCellScanner(Arrays.asList(cells).iterator());
+    final CompressionCodec compressor, final int count, final int size, final boolean sized)
+    throws IOException {
+    ExtendedCell[] cells = getCells(count, size);
+    ExtendedCellScanner cellScanner =
+      sized ? getSizedCellScanner(cells) : PrivateCellUtil.createExtendedCellScanner(cells);
     ByteBuffer bb = builder.buildCellBlock(codec, compressor, cellScanner);
-    cellScanner = builder.createCellScannerReusingBuffers(codec, compressor,
-        new SingleByteBuff(bb));
+    cellScanner =
+      builder.createCellScannerReusingBuffers(codec, compressor, new SingleByteBuff(bb));
     int i = 0;
     while (cellScanner.advance()) {
       i++;
@@ -91,21 +90,21 @@ public class TestCellBlockBuilder {
     assertEquals(count, i);
   }
 
-  static CellScanner getSizedCellScanner(final Cell[] cells) {
+  static ExtendedCellScanner getSizedCellScanner(final ExtendedCell[] cells) {
     int size = -1;
     for (Cell cell : cells) {
       size += PrivateCellUtil.estimatedSerializedSizeOf(cell);
     }
     final int totalSize = ClassSize.align(size);
-    final CellScanner cellScanner = CellUtil.createCellScanner(cells);
-    return new SizedCellScanner() {
+    final ExtendedCellScanner cellScanner = PrivateCellUtil.createExtendedCellScanner(cells);
+    return new SizedExtendedCellScanner() {
       @Override
       public long heapSize() {
         return totalSize;
       }
 
       @Override
-      public Cell current() {
+      public ExtendedCell current() {
         return cellScanner.current();
       }
 
@@ -116,12 +115,12 @@ public class TestCellBlockBuilder {
     };
   }
 
-  static Cell[] getCells(final int howMany) {
+  static ExtendedCell[] getCells(final int howMany) {
     return getCells(howMany, 1024);
   }
 
-  static Cell[] getCells(final int howMany, final int valueSize) {
-    Cell[] cells = new Cell[howMany];
+  static ExtendedCell[] getCells(final int howMany, final int valueSize) {
+    ExtendedCell[] cells = new ExtendedCell[howMany];
     byte[] value = new byte[valueSize];
     for (int i = 0; i < howMany; i++) {
       byte[] index = Bytes.toBytes(i);
@@ -148,35 +147,33 @@ public class TestCellBlockBuilder {
   }
 
   private static void timerTests(final CellBlockBuilder builder, final int count, final int size,
-      final Codec codec, final CompressionCodec compressor) throws IOException {
+    final Codec codec, final CompressionCodec compressor) throws IOException {
     final int cycles = 1000;
     StopWatch timer = new StopWatch();
     timer.start();
     for (int i = 0; i < cycles; i++) {
-      timerTest(builder, timer, count, size, codec, compressor, false);
+      timerTest(builder, count, size, codec, compressor, false);
     }
     timer.stop();
     LOG.info("Codec=" + codec + ", compression=" + compressor + ", sized=" + false + ", count="
-        + count + ", size=" + size + ", + took=" + timer.getTime() + "ms");
+      + count + ", size=" + size + ", + took=" + timer.getTime() + "ms");
     timer.reset();
     timer.start();
     for (int i = 0; i < cycles; i++) {
-      timerTest(builder, timer, count, size, codec, compressor, true);
+      timerTest(builder, count, size, codec, compressor, true);
     }
     timer.stop();
     LOG.info("Codec=" + codec + ", compression=" + compressor + ", sized=" + true + ", count="
-        + count + ", size=" + size + ", + took=" + timer.getTime() + "ms");
+      + count + ", size=" + size + ", + took=" + timer.getTime() + "ms");
   }
 
-  private static void timerTest(final CellBlockBuilder builder, final StopWatch timer,
-      final int count, final int size, final Codec codec, final CompressionCodec compressor,
-      final boolean sized) throws IOException {
+  private static void timerTest(final CellBlockBuilder builder, final int count, final int size,
+    final Codec codec, final CompressionCodec compressor, final boolean sized) throws IOException {
     doBuildCellBlockUndoCellBlock(builder, codec, compressor, count, size, sized);
   }
 
   /**
    * For running a few tests of methods herein.
-   *
    * @param args the arguments to use for the timer test
    * @throws IOException if creating the build fails
    */

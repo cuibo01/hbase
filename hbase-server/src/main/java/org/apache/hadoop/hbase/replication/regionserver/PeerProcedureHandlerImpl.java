@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,8 +19,8 @@ package org.apache.hadoop.hbase.replication.regionserver;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.util.Map;
 import java.util.concurrent.locks.Lock;
-import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.regionserver.LogRoller;
 import org.apache.hadoop.hbase.replication.ReplicationException;
@@ -28,6 +28,7 @@ import org.apache.hadoop.hbase.replication.ReplicationPeer.PeerState;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerImpl;
 import org.apache.hadoop.hbase.replication.ReplicationPeers;
+import org.apache.hadoop.hbase.replication.ReplicationQueueId;
 import org.apache.hadoop.hbase.replication.ReplicationUtils;
 import org.apache.hadoop.hbase.replication.SyncReplicationState;
 import org.apache.hadoop.hbase.util.KeyLocker;
@@ -45,7 +46,7 @@ public class PeerProcedureHandlerImpl implements PeerProcedureHandler {
   private final KeyLocker<String> peersLock = new KeyLocker<>();
 
   public PeerProcedureHandlerImpl(ReplicationSourceManager replicationSourceManager,
-      PeerActionListener peerActionListener) {
+    PeerActionListener peerActionListener) {
     this.replicationSourceManager = replicationSourceManager;
     this.peerActionListener = peerActionListener;
   }
@@ -108,6 +109,33 @@ public class PeerProcedureHandlerImpl implements PeerProcedureHandler {
     refreshPeerState(peerId);
   }
 
+  private boolean hasReplicationConfigChange(ReplicationPeerConfig oldConfig,
+    ReplicationPeerConfig newConfig) {
+    Map<String, String> oldReplicationConfigs = oldConfig.getConfiguration();
+    Map<String, String> newReplicationConfigs = newConfig.getConfiguration();
+
+    // Check if any replication.source.* keys have changed values
+    for (Map.Entry<String, String> entry : newReplicationConfigs.entrySet()) {
+      String key = entry.getKey();
+      if (key.startsWith("replication.source.")) {
+        String oldValue = oldReplicationConfigs.get(key);
+        String newValue = entry.getValue();
+        if (!newValue.equals(oldValue)) {
+          return true;
+        }
+      }
+    }
+
+    // Check if any replication.source.* keys were removed
+    for (String key : oldReplicationConfigs.keySet()) {
+      if (key.startsWith("replication.source.") && !newReplicationConfigs.containsKey(key)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   @Override
   public void updatePeerConfig(String peerId) throws ReplicationException, IOException {
     Lock peerLock = peersLock.acquireLock(peerId);
@@ -128,9 +156,12 @@ public class PeerProcedureHandlerImpl implements PeerProcedureHandler {
       // disable it first and then enable it.
       PeerState newState = peers.refreshPeerState(peerId);
       // RS need to start work with the new replication config change
-      if (!ReplicationUtils.isNamespacesAndTableCFsEqual(oldConfig, newConfig) ||
-        oldConfig.isSerial() != newConfig.isSerial() ||
-        (oldState.equals(PeerState.ENABLED) && newState.equals(PeerState.DISABLED))) {
+      if (
+        !ReplicationUtils.isNamespacesAndTableCFsEqual(oldConfig, newConfig)
+          || oldConfig.isSerial() != newConfig.isSerial()
+          || hasReplicationConfigChange(oldConfig, newConfig)
+          || (oldState.equals(PeerState.ENABLED) && newState.equals(PeerState.DISABLED))
+      ) {
         replicationSourceManager.refreshSources(peerId);
       }
       success = true;
@@ -146,7 +177,7 @@ public class PeerProcedureHandlerImpl implements PeerProcedureHandler {
 
   @Override
   public void transitSyncReplicationPeerState(String peerId, int stage, HRegionServer rs)
-      throws ReplicationException, IOException {
+    throws ReplicationException, IOException {
     ReplicationPeers replicationPeers = replicationSourceManager.getReplicationPeers();
     Lock peerLock = peersLock.acquireLock(peerId);
     try {
@@ -160,8 +191,8 @@ public class PeerProcedureHandlerImpl implements PeerProcedureHandler {
       SyncReplicationState newSyncReplicationState = peer.getNewSyncReplicationState();
       if (stage == 0) {
         if (newSyncReplicationState != SyncReplicationState.NONE) {
-          LOG.warn("The new sync replication state for peer {} has already been set to {}, " +
-            "this should be a retry, give up", peerId, newSyncReplicationState);
+          LOG.warn("The new sync replication state for peer {} has already been set to {}, "
+            + "this should be a retry, give up", peerId, newSyncReplicationState);
           return;
         }
         // refresh the peer state first, as when we transit to STANDBY, we may need to disable the
@@ -186,8 +217,8 @@ public class PeerProcedureHandlerImpl implements PeerProcedureHandler {
       } else {
         if (newSyncReplicationState == SyncReplicationState.NONE) {
           LOG.warn(
-            "The new sync replication state for peer {} has already been clear, and the " +
-              "current state is {}, this should be a retry, give up",
+            "The new sync replication state for peer {} has already been clear, and the "
+              + "current state is {}, this should be a retry, give up",
             peerId, newSyncReplicationState);
           return;
         }
@@ -224,8 +255,8 @@ public class PeerProcedureHandlerImpl implements PeerProcedureHandler {
   }
 
   @Override
-  public void claimReplicationQueue(ServerName crashedServer, String queue)
+  public void claimReplicationQueue(ReplicationQueueId queueId)
     throws ReplicationException, IOException {
-    replicationSourceManager.claimQueue(crashedServer, queue);
+    replicationSourceManager.claimQueue(queueId);
   }
 }

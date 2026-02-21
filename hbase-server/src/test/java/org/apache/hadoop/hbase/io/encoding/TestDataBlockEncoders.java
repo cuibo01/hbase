@@ -30,12 +30,14 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Random;
-
+import java.util.concurrent.ThreadLocalRandom;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.ArrayBackedTag;
+import org.apache.hadoop.hbase.ByteBufferKeyValue;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparatorImpl;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
@@ -65,29 +67,28 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Test all of the data block encoding algorithms for correctness. Most of the
- * class generate data which will test different branches in code.
+ * Test all of the data block encoding algorithms for correctness. Most of the class generate data
+ * which will test different branches in code.
  */
-@Category({IOTests.class, LargeTests.class})
+@Category({ IOTests.class, LargeTests.class })
 @RunWith(Parameterized.class)
 public class TestDataBlockEncoders {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestDataBlockEncoders.class);
+    HBaseClassTestRule.forClass(TestDataBlockEncoders.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestDataBlockEncoders.class);
 
   private static int NUMBER_OF_KV = 10000;
   private static int NUM_RANDOM_SEEKS = 1000;
 
-  private static int ENCODED_DATA_OFFSET = HConstants.HFILEBLOCK_HEADER_SIZE
-      + DataBlockEncoding.ID_SIZE;
+  private static int ENCODED_DATA_OFFSET =
+    HConstants.HFILEBLOCK_HEADER_SIZE + DataBlockEncoding.ID_SIZE;
   static final byte[] HFILEBLOCK_DUMMY_HEADER = new byte[HConstants.HFILEBLOCK_HEADER_SIZE];
 
   private final Configuration conf = HBaseConfiguration.create();
   private final RedundantKVGenerator generator = new RedundantKVGenerator();
-  private final Random randomizer = new Random(42L);
   private final boolean includesMemstoreTS;
   private final boolean includesTags;
   private final boolean useOffheapData;
@@ -98,20 +99,18 @@ public class TestDataBlockEncoders {
   }
 
   public TestDataBlockEncoders(boolean includesMemstoreTS, boolean includesTag,
-      boolean useOffheapData) {
+    boolean useOffheapData) {
     this.includesMemstoreTS = includesMemstoreTS;
     this.includesTags = includesTag;
     this.useOffheapData = useOffheapData;
   }
 
   private HFileBlockEncodingContext getEncodingContext(Configuration conf,
-      Compression.Algorithm algo, DataBlockEncoding encoding) {
+    Compression.Algorithm algo, DataBlockEncoding encoding) {
     DataBlockEncoder encoder = encoding.getEncoder();
-    HFileContext meta = new HFileContextBuilder()
-                        .withHBaseCheckSum(false)
-                        .withIncludesMvcc(includesMemstoreTS)
-                        .withIncludesTags(includesTags)
-                        .withCompression(algo).build();
+    HFileContext meta =
+      new HFileContextBuilder().withHBaseCheckSum(false).withIncludesMvcc(includesMemstoreTS)
+        .withIncludesTags(includesTags).withCompression(algo).build();
     if (encoder != null) {
       return encoder.newDataBlockEncodingContext(conf, encoding, HFILEBLOCK_DUMMY_HEADER, meta);
     } else {
@@ -120,10 +119,7 @@ public class TestDataBlockEncoders {
   }
 
   /**
-   * Test data block encoding of empty KeyValue.
-   *
-   * @throws IOException
-   *           On test failure.
+   * Test data block encoding of empty KeyValue. On test failure.
    */
   @Test
   public void testEmptyKeyValues() throws IOException {
@@ -139,18 +135,15 @@ public class TestDataBlockEncoders {
       byte[] metaValue1 = Bytes.toBytes("metaValue1");
       byte[] metaValue2 = Bytes.toBytes("metaValue2");
       kvList.add(new KeyValue(row, family, qualifier, 0L, value,
-          new Tag[] { new ArrayBackedTag((byte) 1, metaValue1) }));
+        new Tag[] { new ArrayBackedTag((byte) 1, metaValue1) }));
       kvList.add(new KeyValue(row, family, qualifier, 0L, value,
-          new Tag[] { new ArrayBackedTag((byte) 1, metaValue2) }));
+        new Tag[] { new ArrayBackedTag((byte) 1, metaValue2) }));
     }
     testEncodersOnDataset(kvList, includesMemstoreTS, includesTags);
   }
 
   /**
-   * Test KeyValues with negative timestamp.
-   *
-   * @throws IOException
-   *           On test failure.
+   * Test KeyValues with negative timestamp. On test failure.
    */
   @Test
   public void testNegativeTimestamps() throws IOException {
@@ -163,9 +156,9 @@ public class TestDataBlockEncoders {
       byte[] metaValue1 = Bytes.toBytes("metaValue1");
       byte[] metaValue2 = Bytes.toBytes("metaValue2");
       kvList.add(new KeyValue(row, family, qualifier, 0L, value,
-          new Tag[] { new ArrayBackedTag((byte) 1, metaValue1) }));
+        new Tag[] { new ArrayBackedTag((byte) 1, metaValue1) }));
       kvList.add(new KeyValue(row, family, qualifier, 0L, value,
-          new Tag[] { new ArrayBackedTag((byte) 1, metaValue2) }));
+        new Tag[] { new ArrayBackedTag((byte) 1, metaValue2) }));
     } else {
       kvList.add(new KeyValue(row, family, qualifier, -1L, Type.Put, value));
       kvList.add(new KeyValue(row, family, qualifier, -2L, Type.Put, value));
@@ -173,10 +166,8 @@ public class TestDataBlockEncoders {
     testEncodersOnDataset(kvList, includesMemstoreTS, includesTags);
   }
 
-
   /**
-   * Test whether compression -> decompression gives the consistent results on
-   * pseudorandom sample.
+   * Test whether compression -> decompression gives the consistent results on pseudorandom sample.
    * @throws IOException On test failure.
    */
   @Test
@@ -202,13 +193,10 @@ public class TestDataBlockEncoders {
       }
       LOG.info("Encoder: " + encoder);
       ByteBuffer encodedBuffer = encodeKeyValues(encoding, sampleKv,
-          getEncodingContext(conf, Compression.Algorithm.NONE, encoding), this.useOffheapData);
-      HFileContext meta = new HFileContextBuilder()
-                          .withHBaseCheckSum(false)
-                          .withIncludesMvcc(includesMemstoreTS)
-                          .withIncludesTags(includesTags)
-                          .withCompression(Compression.Algorithm.NONE)
-                          .build();
+        getEncodingContext(conf, Compression.Algorithm.NONE, encoding), this.useOffheapData);
+      HFileContext meta =
+        new HFileContextBuilder().withHBaseCheckSum(false).withIncludesMvcc(includesMemstoreTS)
+          .withIncludesTags(includesTags).withCompression(Compression.Algorithm.NONE).build();
       DataBlockEncoder.EncodedSeeker seeker =
         encoder.createSeeker(encoder.newDataBlockDecodingContext(conf, meta));
       seeker.setCurrentBuffer(new SingleByteBuff(encodedBuffer));
@@ -217,13 +205,14 @@ public class TestDataBlockEncoders {
     LOG.info("Testing it!");
     // test it!
     // try a few random seeks
+    Random rand = ThreadLocalRandom.current();
     for (boolean seekBefore : new boolean[] { false, true }) {
       for (int i = 0; i < NUM_RANDOM_SEEKS; ++i) {
         int keyValueId;
         if (!seekBefore) {
-          keyValueId = randomizer.nextInt(sampleKv.size());
+          keyValueId = rand.nextInt(sampleKv.size());
         } else {
-          keyValueId = randomizer.nextInt(sampleKv.size() - 1) + 1;
+          keyValueId = rand.nextInt(sampleKv.size() - 1) + 1;
         }
 
         KeyValue keyValue = sampleKv.get(keyValueId);
@@ -237,14 +226,67 @@ public class TestDataBlockEncoders {
     for (boolean seekBefore : new boolean[] { false, true }) {
       checkSeekingConsistency(encodedSeekers, seekBefore, sampleKv.get(sampleKv.size() - 1));
       KeyValue midKv = sampleKv.get(sampleKv.size() / 2);
-      Cell lastMidKv =PrivateCellUtil.createLastOnRowCol(midKv);
+      ExtendedCell lastMidKv = PrivateCellUtil.createLastOnRowCol(midKv);
+      checkSeekingConsistency(encodedSeekers, seekBefore, lastMidKv);
+    }
+    LOG.info("Done");
+  }
+
+  @Test
+  public void testSeekingToOffHeapKeyValueInSample() throws IOException {
+    List<KeyValue> sampleKv = generator.generateTestKeyValues(NUMBER_OF_KV, includesTags);
+
+    // create all seekers
+    List<DataBlockEncoder.EncodedSeeker> encodedSeekers = new ArrayList<>();
+    for (DataBlockEncoding encoding : DataBlockEncoding.values()) {
+      LOG.info("Encoding: " + encoding);
+      DataBlockEncoder encoder = encoding.getEncoder();
+      if (encoder == null) {
+        continue;
+      }
+      LOG.info("Encoder: " + encoder);
+      ByteBuffer encodedBuffer = encodeKeyValues(encoding, sampleKv,
+        getEncodingContext(conf, Compression.Algorithm.NONE, encoding), this.useOffheapData);
+      HFileContext meta =
+        new HFileContextBuilder().withHBaseCheckSum(false).withIncludesMvcc(includesMemstoreTS)
+          .withIncludesTags(includesTags).withCompression(Compression.Algorithm.NONE).build();
+      DataBlockEncoder.EncodedSeeker seeker =
+        encoder.createSeeker(encoder.newDataBlockDecodingContext(conf, meta));
+      seeker.setCurrentBuffer(new SingleByteBuff(encodedBuffer));
+      encodedSeekers.add(seeker);
+    }
+    LOG.info("Testing it!");
+    // test it!
+    // try a few random seeks
+    Random rand = ThreadLocalRandom.current();
+    for (boolean seekBefore : new boolean[] { false, true }) {
+      for (int i = 0; i < NUM_RANDOM_SEEKS; ++i) {
+        int keyValueId;
+        if (!seekBefore) {
+          keyValueId = rand.nextInt(sampleKv.size());
+        } else {
+          keyValueId = rand.nextInt(sampleKv.size() - 1) + 1;
+        }
+
+        KeyValue keyValue = sampleKv.get(keyValueId);
+        checkSeekingConsistency(encodedSeekers, seekBefore, buildOffHeapKeyValue(keyValue));
+      }
+    }
+
+    // check edge cases
+    LOG.info("Checking edge cases");
+    checkSeekingConsistency(encodedSeekers, false, sampleKv.get(0));
+    for (boolean seekBefore : new boolean[] { false, true }) {
+      checkSeekingConsistency(encodedSeekers, seekBefore, sampleKv.get(sampleKv.size() - 1));
+      KeyValue midKv = sampleKv.get(sampleKv.size() / 2);
+      ExtendedCell lastMidKv = PrivateCellUtil.createLastOnRowCol(midKv);
       checkSeekingConsistency(encodedSeekers, seekBefore, lastMidKv);
     }
     LOG.info("Done");
   }
 
   static ByteBuffer encodeKeyValues(DataBlockEncoding encoding, List<KeyValue> kvs,
-      HFileBlockEncodingContext encodingContext, boolean useOffheapData) throws IOException {
+    HFileBlockEncodingContext encodingContext, boolean useOffheapData) throws IOException {
     DataBlockEncoder encoder = encoding.getEncoder();
     ByteArrayOutputStream baos = new ByteArrayOutputStream();
     baos.write(HFILEBLOCK_DUMMY_HEADER);
@@ -275,29 +317,29 @@ public class TestDataBlockEncoders {
       }
       DataBlockEncoder encoder = encoding.getEncoder();
       ByteBuffer encodedBuffer = encodeKeyValues(encoding, sampleKv,
-          getEncodingContext(conf, Compression.Algorithm.NONE, encoding), this.useOffheapData);
-      HFileContext meta = new HFileContextBuilder()
-                          .withHBaseCheckSum(false)
-                          .withIncludesMvcc(includesMemstoreTS)
-                          .withIncludesTags(includesTags)
-                          .withCompression(Compression.Algorithm.NONE)
-                          .build();
+        getEncodingContext(conf, Compression.Algorithm.NONE, encoding), this.useOffheapData);
+      HFileContext meta =
+        new HFileContextBuilder().withHBaseCheckSum(false).withIncludesMvcc(includesMemstoreTS)
+          .withIncludesTags(includesTags).withCompression(Compression.Algorithm.NONE).build();
       DataBlockEncoder.EncodedSeeker seeker =
         encoder.createSeeker(encoder.newDataBlockDecodingContext(conf, meta));
       seeker.setCurrentBuffer(new SingleByteBuff(encodedBuffer));
       int i = 0;
       do {
         KeyValue expectedKeyValue = sampleKv.get(i);
-        Cell cell = seeker.getCell();
-        if (PrivateCellUtil.compareKeyIgnoresMvcc(CellComparatorImpl.COMPARATOR, expectedKeyValue,
-          cell) != 0) {
-          int commonPrefix = PrivateCellUtil
-              .findCommonPrefixInFlatKey(expectedKeyValue, cell, false, true);
-          fail(String.format("next() produces wrong results "
-              + "encoder: %s i: %d commonPrefix: %d" + "\n expected %s\n actual      %s", encoder
-              .toString(), i, commonPrefix, Bytes.toStringBinary(expectedKeyValue.getBuffer(),
-              expectedKeyValue.getKeyOffset(), expectedKeyValue.getKeyLength()), CellUtil.toString(
-              cell, false)));
+        ExtendedCell cell = seeker.getCell();
+        if (
+          PrivateCellUtil.compareKeyIgnoresMvcc(CellComparatorImpl.COMPARATOR, expectedKeyValue,
+            cell) != 0
+        ) {
+          int commonPrefix =
+            PrivateCellUtil.findCommonPrefixInFlatKey(expectedKeyValue, cell, false, true);
+          fail(String.format(
+            "next() produces wrong results " + "encoder: %s i: %d commonPrefix: %d"
+              + "\n expected %s\n actual      %s",
+            encoder.toString(), i, commonPrefix, Bytes.toStringBinary(expectedKeyValue.getBuffer(),
+              expectedKeyValue.getKeyOffset(), expectedKeyValue.getKeyLength()),
+            CellUtil.toString(cell, false)));
         }
         i++;
       } while (seeker.next());
@@ -306,7 +348,6 @@ public class TestDataBlockEncoders {
 
   /**
    * Test whether the decompression of first key is implemented correctly.
-   * @throws IOException
    */
   @Test
   public void testFirstKeyInBlockOnSample() throws IOException {
@@ -318,8 +359,8 @@ public class TestDataBlockEncoders {
       }
       DataBlockEncoder encoder = encoding.getEncoder();
       ByteBuffer encodedBuffer = encodeKeyValues(encoding, sampleKv,
-          getEncodingContext(conf, Compression.Algorithm.NONE, encoding), this.useOffheapData);
-      Cell key = encoder.getFirstKeyCellInBlock(new SingleByteBuff(encodedBuffer));
+        getEncodingContext(conf, Compression.Algorithm.NONE, encoding), this.useOffheapData);
+      ExtendedCell key = encoder.getFirstKeyCellInBlock(new SingleByteBuff(encodedBuffer));
       KeyValue firstKv = sampleKv.get(0);
       if (0 != PrivateCellUtil.compareKeyIgnoresMvcc(CellComparatorImpl.COMPARATOR, key, firstKv)) {
         int commonPrefix = PrivateCellUtil.findCommonPrefixInFlatKey(key, firstKv, false, true);
@@ -339,8 +380,8 @@ public class TestDataBlockEncoders {
     kvList.add(expectedKV);
     DataBlockEncoding encoding = DataBlockEncoding.ROW_INDEX_V1;
     DataBlockEncoder encoder = encoding.getEncoder();
-    ByteBuffer encodedBuffer = encodeKeyValues(encoding, kvList,
-      getEncodingContext(conf, Algorithm.NONE, encoding), false);
+    ByteBuffer encodedBuffer =
+      encodeKeyValues(encoding, kvList, getEncodingContext(conf, Algorithm.NONE, encoding), false);
     HFileContext meta =
       new HFileContextBuilder().withHBaseCheckSum(false).withIncludesMvcc(includesMemstoreTS)
         .withIncludesTags(includesTags).withCompression(Compression.Algorithm.NONE).build();
@@ -352,21 +393,21 @@ public class TestDataBlockEncoders {
   }
 
   private void checkSeekingConsistency(List<DataBlockEncoder.EncodedSeeker> encodedSeekers,
-      boolean seekBefore, Cell keyValue) {
-    Cell expectedKeyValue = null;
+    boolean seekBefore, ExtendedCell keyValue) {
+    ExtendedCell expectedKeyValue = null;
     ByteBuffer expectedKey = null;
     ByteBuffer expectedValue = null;
     for (DataBlockEncoder.EncodedSeeker seeker : encodedSeekers) {
       seeker.seekToKeyInBlock(keyValue, seekBefore);
       seeker.rewind();
 
-      Cell actualKeyValue = seeker.getCell();
+      ExtendedCell actualKeyValue = seeker.getCell();
       ByteBuffer actualKey = null;
       actualKey = ByteBuffer.wrap(((KeyValue) seeker.getKey()).getKey());
       ByteBuffer actualValue = seeker.getValueShallowCopy();
 
       if (expectedKeyValue != null) {
-        assertTrue(CellUtil.equals(expectedKeyValue, actualKeyValue));
+        assertTrue(PrivateCellUtil.equals(expectedKeyValue, actualKeyValue));
       } else {
         expectedKeyValue = actualKeyValue;
       }
@@ -386,19 +427,18 @@ public class TestDataBlockEncoders {
   }
 
   private void testEncodersOnDataset(List<KeyValue> kvList, boolean includesMemstoreTS,
-      boolean includesTags) throws IOException {
-    ByteBuffer unencodedDataBuf = RedundantKVGenerator.convertKvToByteBuffer(kvList,
-        includesMemstoreTS);
+    boolean includesTags) throws IOException {
+    ByteBuffer unencodedDataBuf =
+      RedundantKVGenerator.convertKvToByteBuffer(kvList, includesMemstoreTS);
     HFileContext fileContext = new HFileContextBuilder().withIncludesMvcc(includesMemstoreTS)
-        .withIncludesTags(includesTags).build();
+      .withIncludesTags(includesTags).build();
     for (DataBlockEncoding encoding : DataBlockEncoding.values()) {
       DataBlockEncoder encoder = encoding.getEncoder();
       if (encoder == null) {
         continue;
       }
       HFileBlockEncodingContext encodingContext =
-        new HFileBlockDefaultEncodingContext(conf, encoding, HFILEBLOCK_DUMMY_HEADER,
-          fileContext);
+        new HFileBlockDefaultEncodingContext(conf, encoding, HFILEBLOCK_DUMMY_HEADER, fileContext);
       ByteArrayOutputStream baos = new ByteArrayOutputStream();
       baos.write(HFILEBLOCK_DUMMY_HEADER);
       DataOutputStream dos = new DataOutputStream(baos);
@@ -424,9 +464,9 @@ public class TestDataBlockEncoders {
     byte[] value1 = new byte[] { 0x00 };
     if (includesTags) {
       kvList.add(new KeyValue(row, family, qualifier0, 0, value0,
-          new Tag[] { new ArrayBackedTag((byte) 1, "value1") }));
+        new Tag[] { new ArrayBackedTag((byte) 1, "value1") }));
       kvList.add(new KeyValue(row, family, qualifier1, 0, value1,
-          new Tag[] { new ArrayBackedTag((byte) 1, "value1") }));
+        new Tag[] { new ArrayBackedTag((byte) 1, "value1") }));
     } else {
       kvList.add(new KeyValue(row, family, qualifier0, 0, Type.Put, value0));
       kvList.add(new KeyValue(row, family, qualifier1, 0, Type.Put, value1));
@@ -435,15 +475,15 @@ public class TestDataBlockEncoders {
   }
 
   private void testAlgorithm(byte[] encodedData, ByteBuffer unencodedDataBuf,
-      DataBlockEncoder encoder) throws IOException {
+    DataBlockEncoder encoder) throws IOException {
     // decode
     ByteArrayInputStream bais = new ByteArrayInputStream(encodedData, ENCODED_DATA_OFFSET,
-        encodedData.length - ENCODED_DATA_OFFSET);
+      encodedData.length - ENCODED_DATA_OFFSET);
     DataInputStream dis = new DataInputStream(bais);
     ByteBuffer actualDataset;
-    HFileContext meta = new HFileContextBuilder().withHBaseCheckSum(false)
-        .withIncludesMvcc(includesMemstoreTS).withIncludesTags(includesTags)
-        .withCompression(Compression.Algorithm.NONE).build();
+    HFileContext meta =
+      new HFileContextBuilder().withHBaseCheckSum(false).withIncludesMvcc(includesMemstoreTS)
+        .withIncludesTags(includesTags).withCompression(Compression.Algorithm.NONE).build();
     actualDataset = encoder.decodeKeyValues(dis, encoder.newDataBlockDecodingContext(conf, meta));
     actualDataset.rewind();
 
@@ -451,6 +491,17 @@ public class TestDataBlockEncoders {
     // the
     // mvcc in it.
     assertEquals("Encoding -> decoding gives different results for " + encoder,
-        Bytes.toStringBinary(unencodedDataBuf), Bytes.toStringBinary(actualDataset));
+      Bytes.toStringBinary(unencodedDataBuf), Bytes.toStringBinary(actualDataset));
+  }
+
+  private static ByteBufferKeyValue buildOffHeapKeyValue(KeyValue keyValue) throws IOException {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    keyValue.write(out, false);
+    byte[] bytes = out.toByteArray();
+    ByteBuffer bb = ByteBuffer.allocateDirect(bytes.length);
+    bb.put(bytes);
+    bb.flip();
+
+    return new ByteBufferKeyValue(bb, 0, bytes.length);
   }
 }

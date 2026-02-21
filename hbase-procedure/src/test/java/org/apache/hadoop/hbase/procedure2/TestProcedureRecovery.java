@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,9 +17,9 @@
  */
 package org.apache.hadoop.hbase.procedure2;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
@@ -27,7 +27,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseCommonTestingUtil;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStore;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
@@ -35,21 +34,18 @@ import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Threads;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.com.google.protobuf.Int32Value;
 
-@Category({MasterTests.class, MediumTests.class})
+@Tag(MasterTests.TAG)
+@Tag(MediumTests.TAG)
 public class TestProcedureRecovery {
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestProcedureRecovery.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestProcedureRecovery.class);
 
@@ -65,7 +61,7 @@ public class TestProcedureRecovery {
   private Path testDir;
   private Path logDir;
 
-  @Before
+  @BeforeEach
   public void setUp() throws IOException {
     htu = new HBaseCommonTestingUtil();
     testDir = htu.getDataTestDir();
@@ -82,7 +78,7 @@ public class TestProcedureRecovery {
     procSleepInterval = 0;
   }
 
-  @After
+  @AfterEach
   public void tearDown() throws IOException {
     procExecutor.stop();
     procStore.stop(false);
@@ -98,7 +94,8 @@ public class TestProcedureRecovery {
   public static class TestSingleStepProcedure extends SequentialProcedure<TestProcEnv> {
     private int step = 0;
 
-    public TestSingleStepProcedure() { }
+    public TestSingleStepProcedure() {
+    }
 
     @Override
     protected Procedure[] execute(TestProcEnv env) throws InterruptedException {
@@ -110,7 +107,8 @@ public class TestProcedureRecovery {
     }
 
     @Override
-    protected void rollback(TestProcEnv env) { }
+    protected void rollback(TestProcEnv env) {
+    }
 
     @Override
     protected boolean abort(TestProcEnv env) {
@@ -127,12 +125,12 @@ public class TestProcedureRecovery {
       env.waitOnLatch();
       LOG.debug("execute procedure " + this + " step=" + step);
       ProcedureTestingUtility.toggleKillBeforeStoreUpdate(procExecutor);
+      ProcedureTestingUtility.toggleKillBeforeStoreUpdateInRollback(procExecutor);
       step++;
       Threads.sleepWithoutInterrupt(procSleepInterval);
       if (isAborted()) {
-        setFailure(new RemoteProcedureException(getClass().getName(),
-          new ProcedureAbortedException(
-            "got an abort at " + getClass().getName() + " step=" + step)));
+        setFailure(new RemoteProcedureException(getClass().getName(), new ProcedureAbortedException(
+          "got an abort at " + getClass().getName() + " step=" + step)));
         return null;
       }
       return null;
@@ -142,6 +140,7 @@ public class TestProcedureRecovery {
     protected void rollback(TestProcEnv env) {
       LOG.debug("rollback procedure " + this + " step=" + step);
       ProcedureTestingUtility.toggleKillBeforeStoreUpdate(procExecutor);
+      ProcedureTestingUtility.toggleKillBeforeStoreUpdateInRollback(procExecutor);
       step++;
     }
 
@@ -155,7 +154,7 @@ public class TestProcedureRecovery {
       boolean aborted = abort.get();
       BaseTestStepProcedure proc = this;
       while (proc.hasParent() && !aborted) {
-        proc = (BaseTestStepProcedure)procExecutor.getProcedure(proc.getParentProcId());
+        proc = (BaseTestStepProcedure) procExecutor.getProcedure(proc.getParentProcId());
         aborted = proc.isAborted();
       }
       return aborted;
@@ -163,7 +162,8 @@ public class TestProcedureRecovery {
   }
 
   public static class TestMultiStepProcedure extends BaseTestStepProcedure {
-    public TestMultiStepProcedure() { }
+    public TestMultiStepProcedure() {
+    }
 
     @Override
     public Procedure[] execute(TestProcEnv env) throws InterruptedException {
@@ -172,7 +172,8 @@ public class TestProcedureRecovery {
     }
 
     public static class Step1Procedure extends BaseTestStepProcedure {
-      public Step1Procedure() { }
+      public Step1Procedure() {
+      }
 
       @Override
       protected Procedure[] execute(TestProcEnv env) throws InterruptedException {
@@ -182,7 +183,8 @@ public class TestProcedureRecovery {
     }
 
     public static class Step2Procedure extends BaseTestStepProcedure {
-      public Step2Procedure() { }
+      public Step2Procedure() {
+      }
     }
   }
 
@@ -294,10 +296,16 @@ public class TestProcedureRecovery {
   }
 
   public static class TestStateMachineProcedure
-      extends StateMachineProcedure<TestProcEnv, TestStateMachineProcedure.State> {
-    enum State { STATE_1, STATE_2, STATE_3, DONE }
+    extends StateMachineProcedure<TestProcEnv, TestStateMachineProcedure.State> {
+    enum State {
+      STATE_1,
+      STATE_2,
+      STATE_3,
+      DONE
+    }
 
-    public TestStateMachineProcedure() {}
+    public TestStateMachineProcedure() {
+    }
 
     public TestStateMachineProcedure(final boolean testSubmitChildProc) {
       this.submitChildProc = testSubmitChildProc;
@@ -350,6 +358,11 @@ public class TestProcedureRecovery {
     }
 
     @Override
+    protected boolean isRollbackSupported(State state) {
+      return true;
+    }
+
+    @Override
     protected void rollbackState(TestProcEnv env, final State state) {
       switch (state) {
         case STATE_1:
@@ -388,16 +401,14 @@ public class TestProcedureRecovery {
     }
 
     @Override
-    protected void serializeStateData(ProcedureStateSerializer serializer)
-        throws IOException {
+    protected void serializeStateData(ProcedureStateSerializer serializer) throws IOException {
       super.serializeStateData(serializer);
       Int32Value.Builder builder = Int32Value.newBuilder().setValue(iResult);
       serializer.serialize(builder.build());
     }
 
     @Override
-    protected void deserializeStateData(ProcedureStateSerializer serializer)
-        throws IOException {
+    protected void deserializeStateData(ProcedureStateSerializer serializer) throws IOException {
       super.deserializeStateData(serializer);
       Int32Value value = serializer.deserialize(Int32Value.class);
       iResult = value.getValue();
@@ -417,8 +428,8 @@ public class TestProcedureRecovery {
 
   @Test
   public void testStateMachineRecovery() throws Exception {
-    ProcedureTestingUtility.setToggleKillBeforeStoreUpdate(procExecutor, true);
-    ProcedureTestingUtility.setKillBeforeStoreUpdate(procExecutor, true);
+    ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdate(procExecutor, true);
+    ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdateInRollback(procExecutor, true);
 
     // Step 1 - kill
     Procedure proc = new TestStateMachineProcedure();
@@ -455,8 +466,8 @@ public class TestProcedureRecovery {
 
   @Test
   public void testStateMachineRollbackRecovery() throws Exception {
-    ProcedureTestingUtility.setToggleKillBeforeStoreUpdate(procExecutor, true);
-    ProcedureTestingUtility.setKillBeforeStoreUpdate(procExecutor, true);
+    ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdate(procExecutor, true);
+    ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdateInRollback(procExecutor, true);
 
     // Step 1 - kill
     Procedure proc = new TestStateMachineProcedure();
@@ -515,8 +526,8 @@ public class TestProcedureRecovery {
     try {
       FileStatus[] files = fs.listStatus(logDir);
       if (files != null && files.length > 0) {
-        for (FileStatus file: files) {
-          assertTrue(file.toString(), file.isFile());
+        for (FileStatus file : files) {
+          assertTrue(file.isFile(), file.toString());
           LOG.debug("log file " + file.getPath() + " size=" + file.getLen());
         }
       } else {

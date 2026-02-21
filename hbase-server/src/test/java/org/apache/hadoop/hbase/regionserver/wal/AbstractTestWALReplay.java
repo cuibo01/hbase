@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -43,6 +42,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileStatus;
@@ -50,6 +50,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
@@ -98,10 +99,12 @@ import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALEditInternalHelper;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.apache.hadoop.hbase.wal.WALSplitUtil;
 import org.apache.hadoop.hbase.wal.WALSplitter;
+import org.apache.hadoop.hbase.wal.WALStreamReader;
 import org.apache.hadoop.hdfs.DFSInputStream;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -156,10 +159,9 @@ public abstract class AbstractTestWALReplay {
     this.fs = TEST_UTIL.getDFSCluster().getFileSystem();
     this.hbaseRootDir = CommonFSUtils.getRootDir(this.conf);
     this.oldLogDir = new Path(this.hbaseRootDir, HConstants.HREGION_OLDLOGDIR_NAME);
-    String serverName =
-      ServerName.valueOf(currentTest.getMethodName() + "-manual", 16010,
-        EnvironmentEdgeManager.currentTime())
-        .toString();
+    String serverName = ServerName
+      .valueOf(currentTest.getMethodName() + "-manual", 16010, EnvironmentEdgeManager.currentTime())
+      .toString();
     this.logName = AbstractFSWALProvider.getWALDirectoryName(serverName);
     this.logDir = new Path(this.hbaseRootDir, logName);
     if (TEST_UTIL.getDFSCluster().getFileSystem().exists(this.hbaseRootDir)) {
@@ -186,8 +188,7 @@ public abstract class AbstractTestWALReplay {
   }
 
   /**
-   * @throws Exception
-   */
+   *   */
   @Test
   public void testReplayEditsAfterRegionMovedWithMultiCF() throws Exception {
     final TableName tableName = TableName.valueOf("testReplayEditsAfterRegionMovedWithMultiCF");
@@ -515,7 +516,7 @@ public abstract class AbstractTestWALReplay {
         final AtomicInteger countOfRestoredEdits = new AtomicInteger(0);
         HRegion region3 = new HRegion(basedir, wal3, newFS, newConf, hri, htd, null) {
           @Override
-          protected void restoreEdit(HStore s, Cell cell, MemStoreSizing memstoreSizing) {
+          protected void restoreEdit(HStore s, ExtendedCell cell, MemStoreSizing memstoreSizing) {
             super.restoreEdit(s, cell, memstoreSizing);
             countOfRestoredEdits.incrementAndGet();
           }
@@ -613,11 +614,12 @@ public abstract class AbstractTestWALReplay {
     @Override
     public List<Path> flushSnapshot(MemStoreSnapshot snapshot, long cacheFlushId,
       MonitoredTask status, ThroughputController throughputController,
-      FlushLifeCycleTracker tracker) throws IOException {
+      FlushLifeCycleTracker tracker, Consumer<Path> writerCreationTracker) throws IOException {
       if (throwExceptionWhenFlushing.get()) {
         throw new IOException("Simulated exception by tests");
       }
-      return super.flushSnapshot(snapshot, cacheFlushId, status, throughputController, tracker);
+      return super.flushSnapshot(snapshot, cacheFlushId, status, throughputController, tracker,
+        writerCreationTracker);
     }
   }
 
@@ -756,14 +758,16 @@ public abstract class AbstractTestWALReplay {
     // Add an edit to another family, should be skipped.
     WALEdit edit = new WALEdit();
     long now = ee.currentTime();
-    edit.add(new KeyValue(rowName, Bytes.toBytes("another family"), rowName, now, rowName));
+    WALEditInternalHelper.addExtendedCell(edit,
+      new KeyValue(rowName, Bytes.toBytes("another family"), rowName, now, rowName));
     wal.appendData(hri, new WALKeyImpl(hri.getEncodedNameAsBytes(), tableName, now, mvcc, scopes),
       edit);
 
     // Delete the c family to verify deletes make it over.
     edit = new WALEdit();
     now = ee.currentTime();
-    edit.add(new KeyValue(rowName, Bytes.toBytes("c"), null, now, KeyValue.Type.DeleteFamily));
+    WALEditInternalHelper.addExtendedCell(edit,
+      new KeyValue(rowName, Bytes.toBytes("c"), null, now, KeyValue.Type.DeleteFamily));
     wal.appendData(hri, new WALKeyImpl(hri.getEncodedNameAsBytes(), tableName, now, mvcc, scopes),
       edit);
 
@@ -832,7 +836,8 @@ public abstract class AbstractTestWALReplay {
 
     // Mock the WAL
     MockWAL wal = createMockWAL();
-
+    TEST_UTIL.createRegionDir(hri,
+      TEST_UTIL.getMiniHBaseCluster().getMaster().getMasterFileSystem());
     HRegion region = HRegion.openHRegion(this.conf, this.fs, hbaseRootDir, hri, htd, wal);
     for (ColumnFamilyDescriptor hcd : htd.getColumnFamilies()) {
       addRegionEdits(rowName, hcd.getName(), countPerFamily, this.ee, region, "x");
@@ -908,15 +913,10 @@ public abstract class AbstractTestWALReplay {
 
     // here we let the DFSInputStream throw an IOException just after the WALHeader.
     Path editFile = WALSplitUtil.getSplitEditFilesSorted(this.fs, regionDir).first();
-    FSDataInputStream stream = fs.open(editFile);
-    stream.seek(ProtobufLogReader.PB_WAL_MAGIC.length);
-    Class<? extends AbstractFSWALProvider.Reader> logReaderClass =
-      conf.getClass("hbase.regionserver.hlog.reader.impl", ProtobufLogReader.class,
-        AbstractFSWALProvider.Reader.class);
-    AbstractFSWALProvider.Reader reader = logReaderClass.getDeclaredConstructor().newInstance();
-    reader.init(this.fs, editFile, conf, stream);
-    final long headerLength = stream.getPos();
-    reader.close();
+    final long headerLength;
+    try (WALStreamReader reader = WALFactory.createStreamReader(fs, editFile, conf)) {
+      headerLength = reader.getPosition();
+    }
     FileSystem spyFs = spy(this.fs);
     doAnswer(new Answer<FSDataInputStream>() {
 
@@ -1047,6 +1047,7 @@ public abstract class AbstractTestWALReplay {
   }
 
   private MockWAL createMockWAL() throws IOException {
+    fs.mkdirs(new Path(hbaseRootDir, logName));
     MockWAL wal = new MockWAL(fs, hbaseRootDir, logName, conf);
     wal.init();
     // Set down maximum recovery so we dfsclient doesn't linger retrying something
@@ -1072,7 +1073,7 @@ public abstract class AbstractTestWALReplay {
 
     @Override
     public boolean requestFlush(HRegion region, List<byte[]> families,
-        FlushLifeCycleTracker tracker) {
+      FlushLifeCycleTracker tracker) {
       return true;
     }
 
@@ -1107,7 +1108,8 @@ public abstract class AbstractTestWALReplay {
     byte[] qualifierBytes = Bytes.toBytes(Integer.toString(index));
     byte[] columnBytes = Bytes.toBytes(Bytes.toString(family) + ":" + Integer.toString(index));
     WALEdit edit = new WALEdit();
-    edit.add(new KeyValue(rowName, family, qualifierBytes, ee.currentTime(), columnBytes));
+    WALEditInternalHelper.addExtendedCell(edit,
+      new KeyValue(rowName, family, qualifierBytes, ee.currentTime(), columnBytes));
     return edit;
   }
 

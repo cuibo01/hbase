@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,6 +18,8 @@
 package org.apache.hadoop.hbase.ipc;
 
 import java.net.SocketAddress;
+import java.util.Collections;
+import java.util.Map;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.client.MetricsConnection;
 import org.apache.hadoop.hbase.util.ReflectionUtils;
@@ -33,9 +35,10 @@ public final class RpcClientFactory {
 
   public static final String CUSTOM_RPC_CLIENT_IMPL_CONF_KEY = "hbase.rpc.client.impl";
 
-  private static final ImmutableMap<String, String> DEPRECATED_NAME_MAPPING = ImmutableMap.of(
-    "org.apache.hadoop.hbase.ipc.RpcClientImpl", BlockingRpcClient.class.getName(),
-    "org.apache.hadoop.hbase.ipc.AsyncRpcClient", NettyRpcClient.class.getName());
+  private static final ImmutableMap<String,
+    String> DEPRECATED_NAME_MAPPING = ImmutableMap.of("org.apache.hadoop.hbase.ipc.RpcClientImpl",
+      BlockingRpcClient.class.getName(), "org.apache.hadoop.hbase.ipc.AsyncRpcClient",
+      NettyRpcClient.class.getName());
 
   /**
    * Private Constructor
@@ -51,14 +54,14 @@ public final class RpcClientFactory {
   /**
    * Creates a new RpcClient by the class defined in the configuration or falls back to
    * RpcClientImpl
-   * @param conf configuration
+   * @param conf      configuration
    * @param clusterId the cluster id
-   * @param metrics the connection metrics
+   * @param metrics   the connection metrics
    * @return newly created RpcClient
    */
   public static RpcClient createClient(Configuration conf, String clusterId,
-      MetricsConnection metrics) {
-    return createClient(conf, clusterId, null, metrics);
+    MetricsConnection metrics) {
+    return createClient(conf, clusterId, null, metrics, Collections.emptyMap());
   }
 
   private static String getRpcClientClass(Configuration conf) {
@@ -73,17 +76,18 @@ public final class RpcClientFactory {
   /**
    * Creates a new RpcClient by the class defined in the configuration or falls back to
    * RpcClientImpl
-   * @param conf configuration
+   * @param conf      configuration
    * @param clusterId the cluster id
    * @param localAddr client socket bind address.
-   * @param metrics the connection metrics
+   * @param metrics   the connection metrics
    * @return newly created RpcClient
    */
   public static RpcClient createClient(Configuration conf, String clusterId,
-      SocketAddress localAddr, MetricsConnection metrics) {
+    SocketAddress localAddr, MetricsConnection metrics, Map<String, byte[]> connectionAttributes) {
     String rpcClientClass = getRpcClientClass(conf);
-    return ReflectionUtils.instantiateWithCustomCtor(rpcClientClass, new Class[] {
-        Configuration.class, String.class, SocketAddress.class, MetricsConnection.class },
-      new Object[] { conf, clusterId, localAddr, metrics });
+    return ReflectionUtils.instantiateWithCustomCtor(
+      rpcClientClass, new Class[] { Configuration.class, String.class, SocketAddress.class,
+        MetricsConnection.class, Map.class },
+      new Object[] { conf, clusterId, localAddr, metrics, connectionAttributes });
   }
 }

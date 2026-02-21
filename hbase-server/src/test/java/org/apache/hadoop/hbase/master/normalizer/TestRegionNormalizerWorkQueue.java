@@ -22,8 +22,8 @@ import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -40,6 +40,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.HBaseConfiguration;
+import org.apache.hadoop.hbase.Waiter;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.junit.ClassRule;
@@ -51,7 +53,7 @@ import org.junit.rules.TestName;
 /**
  * Tests that {@link RegionNormalizerWorkQueue} implements the contract described in its docstring.
  */
-@Category({ MasterTests.class, SmallTests.class})
+@Category({ MasterTests.class, SmallTests.class })
 public class TestRegionNormalizerWorkQueue {
 
   @ClassRule
@@ -65,9 +67,7 @@ public class TestRegionNormalizerWorkQueue {
   public void testElementUniquenessAndFIFO() throws Exception {
     final RegionNormalizerWorkQueue<Integer> queue = new RegionNormalizerWorkQueue<>();
     final List<Integer> content = new LinkedList<>();
-    IntStream.of(4, 3, 2, 1, 4, 3, 2, 1)
-      .boxed()
-      .forEach(queue::put);
+    IntStream.of(4, 3, 2, 1, 4, 3, 2, 1).boxed().forEach(queue::put);
     assertEquals(4, queue.size());
     while (queue.size() > 0) {
       content.add(queue.take());
@@ -94,8 +94,8 @@ public class TestRegionNormalizerWorkQueue {
     queue.putFirst(0);
     assertEquals(5, queue.size());
     drainTo(queue, content);
-    assertThat("putFirst items should jump the queue, preserving existing order",
-      content, contains(0, 4, 3, 2, 1));
+    assertThat("putFirst items should jump the queue, preserving existing order", content,
+      contains(0, 4, 3, 2, 1));
 
     queue.clear();
     content.clear();
@@ -103,8 +103,8 @@ public class TestRegionNormalizerWorkQueue {
     queue.putFirst(1);
     assertEquals(4, queue.size());
     drainTo(queue, content);
-    assertThat("existing items re-added with putFirst should jump the queue",
-      content, contains(1, 4, 3, 2));
+    assertThat("existing items re-added with putFirst should jump the queue", content,
+      contains(1, 4, 3, 2));
 
     queue.clear();
     content.clear();
@@ -147,16 +147,14 @@ public class TestRegionNormalizerWorkQueue {
             break;
           }
           case PUT_ALL: {
-            final List<Integer> vals = rand.ints(5, 0, maxValue)
-              .boxed()
-              .collect(Collectors.toList());
+            final List<Integer> vals =
+              rand.ints(5, 0, maxValue).boxed().collect(Collectors.toList());
             queue.putAll(vals);
             break;
           }
           case PUT_ALL_FIRST: {
-            final List<Integer> vals = rand.ints(5, 0, maxValue)
-              .boxed()
-              .collect(Collectors.toList());
+            final List<Integer> vals =
+              rand.ints(5, 0, maxValue).boxed().collect(Collectors.toList());
             queue.putAllFirst(vals);
             break;
           }
@@ -168,14 +166,13 @@ public class TestRegionNormalizerWorkQueue {
 
     final int numThreads = 5;
     final CompletableFuture<?>[] futures = IntStream.range(0, numThreads)
-      .mapToObj(val -> CompletableFuture.runAsync(producer))
-      .toArray(CompletableFuture<?>[]::new);
+      .mapToObj(val -> CompletableFuture.runAsync(producer)).toArray(CompletableFuture<?>[]::new);
     CompletableFuture.allOf(futures).join();
 
     final List<Integer> content = new ArrayList<>(queue.size());
     drainTo(queue, content);
-    assertThat("at most `maxValue` items should be present.",
-      content.size(), lessThanOrEqualTo(maxValue));
+    assertThat("at most `maxValue` items should be present.", content.size(),
+      lessThanOrEqualTo(maxValue));
     assertEquals("all items should be unique.", content.size(), new HashSet<>(content).size());
   }
 
@@ -190,6 +187,7 @@ public class TestRegionNormalizerWorkQueue {
     final RegionNormalizerWorkQueue<Integer> queue = new RegionNormalizerWorkQueue<>();
     final ConcurrentLinkedQueue<Long> takeTimes = new ConcurrentLinkedQueue<>();
     final AtomicBoolean finished = new AtomicBoolean(false);
+    final int count = 5;
     final Runnable consumer = () -> {
       try {
         while (!finished.get()) {
@@ -203,11 +201,12 @@ public class TestRegionNormalizerWorkQueue {
 
     CompletableFuture<Void> worker = CompletableFuture.runAsync(consumer);
     final long testStart = System.nanoTime();
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < count; i++) {
       Thread.sleep(10);
       queue.put(i);
     }
-
+    // should have timing information for 5 calls to take.
+    Waiter.waitFor(HBaseConfiguration.create(), 1000, () -> count == takeTimes.size());
     // set finished = true and pipe one more value in case the thread needs an extra pass through
     // the loop.
     finished.set(true);
@@ -215,9 +214,7 @@ public class TestRegionNormalizerWorkQueue {
     worker.get(1, TimeUnit.SECONDS);
 
     final Iterator<Long> times = takeTimes.iterator();
-    assertTrue("should have timing information for at least 2 calls to take.",
-      takeTimes.size() >= 5);
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < count; i++) {
       assertThat(
         "Observations collected in takeTimes should increase by roughly 10ms every interval",
         times.next(), greaterThan(testStart + TimeUnit.MILLISECONDS.toNanos(i * 10)));

@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,7 +7,7 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,13 +15,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.ipc;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.io.ByteBuffAllocator;
 import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
 import org.apache.hadoop.hbase.namequeues.NamedQueueRecorder;
@@ -36,18 +34,22 @@ import org.apache.hbase.thirdparty.com.google.protobuf.Message;
 @InterfaceAudience.Private
 public interface RpcServerInterface {
   void start();
+
   boolean isStarted();
 
   void stop();
+
   void join() throws InterruptedException;
 
   void setSocketSendBufSize(int size);
+
   InetSocketAddress getListenerAddress();
 
-  Pair<Message, CellScanner> call(RpcCall call, MonitoredRPCHandler status)
-      throws IOException;
+  Pair<Message, ExtendedCellScanner> call(RpcCall call, MonitoredRPCHandler status)
+    throws IOException;
 
   void setErrorHandler(HBaseRPCErrorHandler handler);
+
   HBaseRPCErrorHandler getErrorHandler();
 
   /**
@@ -56,7 +58,7 @@ public interface RpcServerInterface {
   MetricsHBaseServer getMetrics();
 
   /**
-   * Add/subtract from the current size of all outstanding calls.  Called on setup of a call to add
+   * Add/subtract from the current size of all outstanding calls. Called on setup of a call to add
    * call total size and then again at end of a call to remove the call size.
    * @param diff Change (plus or minus)
    */
@@ -64,7 +66,6 @@ public interface RpcServerInterface {
 
   /**
    * Refresh authentication manager policy.
-   * @param pp
    */
   void refreshAuthManager(Configuration conf, PolicyProvider pp);
 
@@ -80,9 +81,10 @@ public interface RpcServerInterface {
 
   /**
    * Set Online SlowLog Provider
-   *
    * @param namedQueueRecorder instance of {@link NamedQueueRecorder}
    */
   void setNamedQueueRecorder(final NamedQueueRecorder namedQueueRecorder);
 
+  /** Return RPC's instance of {@link RpcCoprocessorHost} */
+  RpcCoprocessorHost getRpcCoprocessorHost();
 }

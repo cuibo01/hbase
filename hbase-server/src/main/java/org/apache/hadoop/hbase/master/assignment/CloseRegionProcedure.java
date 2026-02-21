@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -45,14 +45,17 @@ public class CloseRegionProcedure extends RegionRemoteProcedureBase {
   // wrong(but do not make it wrong intentionally). The client can handle this error.
   private ServerName assignCandidate;
 
+  private boolean isSplit;
+
   public CloseRegionProcedure() {
     super();
   }
 
   public CloseRegionProcedure(TransitRegionStateProcedure parent, RegionInfo region,
-      ServerName targetServer, ServerName assignCandidate) {
+    ServerName targetServer, ServerName assignCandidate, boolean isSplit) {
     super(parent, region, targetServer);
     this.assignCandidate = assignCandidate;
+    this.isSplit = isSplit;
   }
 
   @Override
@@ -61,8 +64,9 @@ public class CloseRegionProcedure extends RegionRemoteProcedureBase {
   }
 
   @Override
-  public RemoteOperation newRemoteOperation() {
-    return new RegionCloseOperation(this, region, getProcId(), assignCandidate);
+  public RemoteOperation newRemoteOperation(MasterProcedureEnv env) {
+    return new RegionCloseOperation(this, region, getProcId(), assignCandidate, isSplit,
+      env.getMasterServices().getMasterActiveTime());
   }
 
   @Override
@@ -72,6 +76,7 @@ public class CloseRegionProcedure extends RegionRemoteProcedureBase {
     if (assignCandidate != null) {
       builder.setAssignCandidate(ProtobufUtil.toServerName(assignCandidate));
     }
+    builder.setEvictCache(isSplit);
     serializer.serialize(builder.build());
   }
 
@@ -83,6 +88,7 @@ public class CloseRegionProcedure extends RegionRemoteProcedureBase {
     if (data.hasAssignCandidate()) {
       assignCandidate = ProtobufUtil.toServerName(data.getAssignCandidate());
     }
+    isSplit = data.getEvictCache();
   }
 
   @Override
@@ -92,23 +98,23 @@ public class CloseRegionProcedure extends RegionRemoteProcedureBase {
 
   @Override
   protected void checkTransition(RegionStateNode regionNode, TransitionCode transitionCode,
-      long seqId) throws UnexpectedStateException {
+    long seqId) throws UnexpectedStateException {
     if (transitionCode != TransitionCode.CLOSED) {
-      throw new UnexpectedStateException("Received report unexpected " + transitionCode +
-        " transition, " + regionNode.toShortString() + ", " + this + ", expected CLOSED.");
+      throw new UnexpectedStateException("Received report unexpected " + transitionCode
+        + " transition, " + regionNode.toShortString() + ", " + this + ", expected CLOSED.");
     }
   }
 
   @Override
   protected void updateTransitionWithoutPersistingToMeta(MasterProcedureEnv env,
-      RegionStateNode regionNode, TransitionCode transitionCode, long seqId) throws IOException {
+    RegionStateNode regionNode, TransitionCode transitionCode, long seqId) throws IOException {
     assert transitionCode == TransitionCode.CLOSED;
     env.getAssignmentManager().regionClosedWithoutPersistingToMeta(regionNode);
   }
 
   @Override
   protected void restoreSucceedState(AssignmentManager am, RegionStateNode regionNode, long seqId)
-      throws IOException {
+    throws IOException {
     if (regionNode.getState() == State.CLOSED) {
       // should have already been persisted, ignore
       return;

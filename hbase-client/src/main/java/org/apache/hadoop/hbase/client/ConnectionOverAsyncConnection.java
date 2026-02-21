@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -29,8 +29,8 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.log.HBaseMarkers;
-import org.apache.hadoop.hbase.util.ConcurrentMapUtils.IOExceptionSupplier;
 import org.apache.hadoop.hbase.util.FutureUtils;
+import org.apache.hadoop.hbase.util.IOExceptionSupplier;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -106,6 +106,13 @@ class ConnectionOverAsyncConnection implements Connection {
     }
     if (params.getMaxKeyValueSize() != BufferedMutatorParams.UNSET) {
       builder.setMaxKeyValueSize(params.getMaxKeyValueSize());
+    }
+    if (params.getMaxMutations() != BufferedMutatorParams.UNSET) {
+      builder.setMaxMutations(params.getMaxMutations());
+    }
+    if (!params.getRequestAttributes().isEmpty()) {
+
+      builder.setRequestAttributes(params.getRequestAttributes());
     }
     return new BufferedMutatorOverAsyncBufferedMutator(builder.build(), params.getListener());
   }
@@ -189,12 +196,13 @@ class ConnectionOverAsyncConnection implements Connection {
       public Table build() {
         IOExceptionSupplier<ExecutorService> poolSupplier =
           pool != null ? () -> pool : ConnectionOverAsyncConnection.this::getBatchPool;
-        return new TableOverAsyncTable(conn,
+        AsyncTableBuilder<AdvancedScanResultConsumer> tableBuilder =
           conn.getTableBuilder(tableName).setRpcTimeout(rpcTimeout, TimeUnit.MILLISECONDS)
             .setReadRpcTimeout(readRpcTimeout, TimeUnit.MILLISECONDS)
             .setWriteRpcTimeout(writeRpcTimeout, TimeUnit.MILLISECONDS)
-            .setOperationTimeout(operationTimeout, TimeUnit.MILLISECONDS).build(),
-          poolSupplier);
+            .setOperationTimeout(operationTimeout, TimeUnit.MILLISECONDS);
+        requestAttributes.forEach(tableBuilder::setRequestAttribute);
+        return new TableOverAsyncTable(conn, tableBuilder.build(), poolSupplier);
       }
     };
   }

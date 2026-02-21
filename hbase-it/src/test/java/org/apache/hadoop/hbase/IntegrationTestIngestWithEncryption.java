@@ -18,19 +18,14 @@
 package org.apache.hadoop.hbase;
 
 import java.io.IOException;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Waiter.Predicate;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.TableDescriptor;
-import org.apache.hadoop.hbase.io.crypto.KeyProviderForTesting;
+import org.apache.hadoop.hbase.io.crypto.MockAesKeyProvider;
 import org.apache.hadoop.hbase.io.hfile.HFile;
-import org.apache.hadoop.hbase.wal.WAL.Reader;
-import org.apache.hadoop.hbase.wal.WALProvider.Writer;
-import org.apache.hadoop.hbase.regionserver.wal.SecureProtobufLogReader;
-import org.apache.hadoop.hbase.regionserver.wal.SecureProtobufLogWriter;
 import org.apache.hadoop.hbase.testclassification.IntegrationTests;
 import org.apache.hadoop.hbase.util.EncryptionTest;
 import org.apache.hadoop.util.ToolRunner;
@@ -42,7 +37,7 @@ import org.slf4j.LoggerFactory;
 @Category(IntegrationTests.class)
 public class IntegrationTestIngestWithEncryption extends IntegrationTestIngest {
   private final static Logger LOG =
-      LoggerFactory.getLogger(IntegrationTestIngestWithEncryption.class);
+    LoggerFactory.getLogger(IntegrationTestIngestWithEncryption.class);
 
   boolean initialized = false;
 
@@ -53,12 +48,8 @@ public class IntegrationTestIngestWithEncryption extends IntegrationTestIngest {
     if (!util.isDistributedCluster()) {
       // Inject required configuration if we are not running in distributed mode
       conf.setInt(HFile.FORMAT_VERSION_KEY, 3);
-      conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, KeyProviderForTesting.class.getName());
+      conf.set(HConstants.CRYPTO_KEYPROVIDER_CONF_KEY, MockAesKeyProvider.class.getName());
       conf.set(HConstants.CRYPTO_MASTERKEY_NAME_CONF_KEY, "hbase");
-      conf.setClass("hbase.regionserver.hlog.reader.impl", SecureProtobufLogReader.class,
-        Reader.class);
-      conf.setClass("hbase.regionserver.hlog.writer.impl", SecureProtobufLogWriter.class,
-        Writer.class);
       conf.setBoolean(HConstants.ENABLE_WAL_ENCRYPTION, true);
     }
     // Check if the cluster configuration can support this test
@@ -88,8 +79,8 @@ public class IntegrationTestIngestWithEncryption extends IntegrationTestIngest {
     final Admin admin = util.getAdmin();
     TableDescriptor tableDescriptor = admin.getDescriptor(getTablename());
     for (ColumnFamilyDescriptor columnDescriptor : tableDescriptor.getColumnFamilies()) {
-      ColumnFamilyDescriptor updatedColumn = ColumnFamilyDescriptorBuilder
-          .newBuilder(columnDescriptor).setEncryptionType("AES").build();
+      ColumnFamilyDescriptor updatedColumn =
+        ColumnFamilyDescriptorBuilder.newBuilder(columnDescriptor).setEncryptionType("AES").build();
       LOG.info(
         "Updating CF schema for " + getTablename() + "." + columnDescriptor.getNameAsString());
       admin.disableTable(getTablename());

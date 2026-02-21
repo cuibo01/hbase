@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,12 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.rest;
 
 import java.io.IOException;
+import java.util.Base64.Decoder;
 import java.util.List;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Scan;
@@ -37,6 +35,7 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.hbase.thirdparty.javax.ws.rs.DefaultValue;
 import org.apache.hbase.thirdparty.javax.ws.rs.Encoded;
+import org.apache.hbase.thirdparty.javax.ws.rs.HeaderParam;
 import org.apache.hbase.thirdparty.javax.ws.rs.Path;
 import org.apache.hbase.thirdparty.javax.ws.rs.PathParam;
 import org.apache.hbase.thirdparty.javax.ws.rs.QueryParam;
@@ -47,25 +46,22 @@ public class TableResource extends ResourceBase {
   String table;
   private static final Logger LOG = LoggerFactory.getLogger(TableResource.class);
 
+  private static final Decoder base64Urldecoder = java.util.Base64.getUrlDecoder();
+
   /**
    * Constructor
-   * @param table
-   * @throws IOException
    */
   public TableResource(String table) throws IOException {
     super();
     this.table = table;
   }
 
-  /** @return the table name */
+  /** Returns the table name */
   String getName() {
     return table;
   }
 
-  /**
-   * @return true if the table exists
-   * @throws IOException
-   */
+  /** Returns true if the table exists n */
   boolean exists() throws IOException {
     return servlet.getAdmin().tableExists(TableName.valueOf(table));
   }
@@ -92,47 +88,54 @@ public class TableResource extends ResourceBase {
 
   @Path("{multiget: multiget.*}")
   public MultiRowResource getMultipleRowResource(final @QueryParam("v") String versions,
-      @PathParam("multiget") String path) throws IOException {
+    @PathParam("multiget") String path) throws IOException {
     return new MultiRowResource(this, versions, path.replace("multiget", "").replace("/", ""));
   }
 
   @Path("{rowspec: [^*]+}")
   public RowResource getRowResource(
-      // We need the @Encoded decorator so Jersey won't urldecode before
-      // the RowSpec constructor has a chance to parse
-      final @PathParam("rowspec") @Encoded String rowspec,
-      final @QueryParam("v") String versions,
-      final @QueryParam("check") String check,
-      final @QueryParam("rr") String returnResult) throws IOException {
-    return new RowResource(this, rowspec, versions, check, returnResult);
+    // We need the @Encoded decorator so Jersey won't urldecode before
+    // the RowSpec constructor has a chance to parse
+    final @PathParam("rowspec") @Encoded String rowspec, final @QueryParam("v") String versions,
+    final @QueryParam("check") String check, final @QueryParam("rr") String returnResult,
+    final @HeaderParam("Encoding") String keyEncodingHeader,
+    final @QueryParam(Constants.KEY_ENCODING_QUERY_PARAM_NAME) String keyEncodingQuery)
+    throws IOException {
+    String keyEncoding = (keyEncodingHeader != null) ? keyEncodingHeader : keyEncodingQuery;
+    return new RowResource(this, rowspec, versions, check, returnResult, keyEncoding);
   }
 
   @Path("{suffixglobbingspec: .*\\*/.+}")
   public RowResource getRowResourceWithSuffixGlobbing(
-      // We need the @Encoded decorator so Jersey won't urldecode before
-      // the RowSpec constructor has a chance to parse
-      final @PathParam("suffixglobbingspec") @Encoded String suffixglobbingspec,
-      final @QueryParam("v") String versions,
-      final @QueryParam("check") String check,
-      final @QueryParam("rr") String returnResult) throws IOException {
-    return new RowResource(this, suffixglobbingspec, versions, check, returnResult);
+    // We need the @Encoded decorator so Jersey won't urldecode before
+    // the RowSpec constructor has a chance to parse
+    final @PathParam("suffixglobbingspec") @Encoded String suffixglobbingspec,
+    final @QueryParam("v") String versions, final @QueryParam("check") String check,
+    final @QueryParam("rr") String returnResult,
+    final @HeaderParam("Encoding") String keyEncodingHeader,
+    final @QueryParam(Constants.KEY_ENCODING_QUERY_PARAM_NAME) String keyEncodingQuery)
+    throws IOException {
+    String keyEncoding = (keyEncodingHeader != null) ? keyEncodingHeader : keyEncodingQuery;
+    return new RowResource(this, suffixglobbingspec, versions, check, returnResult, keyEncoding);
   }
 
+  // FIXME handle binary rowkeys (like put and delete does)
   @Path("{scanspec: .*[*]$}")
-  public TableScanResource  getScanResource(
-      final @PathParam("scanspec") String scanSpec,
-      @DefaultValue(Integer.MAX_VALUE + "")
-      @QueryParam(Constants.SCAN_LIMIT) int userRequestedLimit,
-      @DefaultValue("") @QueryParam(Constants.SCAN_START_ROW) String startRow,
-      @DefaultValue("") @QueryParam(Constants.SCAN_END_ROW) String endRow,
-      @QueryParam(Constants.SCAN_COLUMN) List<String> column,
-      @DefaultValue("1") @QueryParam(Constants.SCAN_MAX_VERSIONS) int maxVersions,
-      @DefaultValue("-1") @QueryParam(Constants.SCAN_BATCH_SIZE) int batchSize,
-      @DefaultValue("0") @QueryParam(Constants.SCAN_START_TIME) long startTime,
-      @DefaultValue(Long.MAX_VALUE + "") @QueryParam(Constants.SCAN_END_TIME) long endTime,
-      @DefaultValue("true") @QueryParam(Constants.SCAN_CACHE_BLOCKS) boolean cacheBlocks,
-      @DefaultValue("false") @QueryParam(Constants.SCAN_REVERSED) boolean reversed,
-      @DefaultValue("") @QueryParam(Constants.SCAN_FILTER) String paramFilter) {
+  public TableScanResource getScanResource(final @PathParam("scanspec") String scanSpec,
+    @DefaultValue(Integer.MAX_VALUE + "") @QueryParam(Constants.SCAN_LIMIT) int userRequestedLimit,
+    @DefaultValue("") @QueryParam(Constants.SCAN_START_ROW) String startRow,
+    @DefaultValue("") @QueryParam(Constants.SCAN_END_ROW) String endRow,
+    @QueryParam(Constants.SCAN_COLUMN) List<String> column,
+    @DefaultValue("1") @QueryParam(Constants.SCAN_MAX_VERSIONS) int maxVersions,
+    @DefaultValue("-1") @QueryParam(Constants.SCAN_BATCH_SIZE) int batchSize,
+    @DefaultValue("0") @QueryParam(Constants.SCAN_START_TIME) long startTime,
+    @DefaultValue(Long.MAX_VALUE + "") @QueryParam(Constants.SCAN_END_TIME) long endTime,
+    @DefaultValue("true") @QueryParam(Constants.SCAN_CACHE_BLOCKS) boolean cacheBlocks,
+    @DefaultValue("false") @QueryParam(Constants.SCAN_REVERSED) boolean reversed,
+    @QueryParam(Constants.FILTER) String paramFilter,
+    @QueryParam(Constants.FILTER_B64) @Encoded String paramFilterB64,
+    @DefaultValue("true") @QueryParam(Constants.SCAN_INCLUDE_START_ROW) boolean includeStartRow,
+    @DefaultValue("false") @QueryParam(Constants.SCAN_INCLUDE_STOP_ROW) boolean includeStopRow) {
     try {
       Filter prefixFilter = null;
       Scan tableScan = new Scan();
@@ -141,25 +144,24 @@ public class TableResource extends ResourceBase {
         byte[] prefixBytes = Bytes.toBytes(prefix);
         prefixFilter = new PrefixFilter(Bytes.toBytes(prefix));
         if (startRow.isEmpty()) {
-          tableScan.withStartRow(prefixBytes);
+          tableScan.withStartRow(prefixBytes, includeStartRow);
         }
       }
-      if (LOG.isTraceEnabled()) {
-        LOG.trace("Query parameters  : Table Name = > " + this.table + " Start Row => " + startRow
-            + " End Row => " + endRow + " Columns => " + column + " Start Time => " + startTime
-            + " End Time => " + endTime + " Cache Blocks => " + cacheBlocks + " Max Versions => "
-            + maxVersions + " Batch Size => " + batchSize);
-      }
+      LOG.trace(
+        "Query parameters  : Table Name = > {} Start Row => {} End Row => {} Columns => {} Start Time => {} End Time => {} Cache Blocks => {} Max Versions => {} Batch Size => {} Reversed => {} LIMIT => {} FILTER => {} FILTER_B64 => {} Include Start Row => {} Include Stop Row => {}",
+        this.table, startRow, endRow, column, startTime, endTime, cacheBlocks, maxVersions,
+        batchSize, reversed, userRequestedLimit, paramFilter, paramFilterB64, includeStartRow,
+        includeStopRow);
       Table hTable = RESTServlet.getInstance().getTable(this.table);
       tableScan.setBatch(batchSize);
       tableScan.readVersions(maxVersions);
       tableScan.setTimeRange(startTime, endTime);
       if (!startRow.isEmpty()) {
-        tableScan.withStartRow(Bytes.toBytes(startRow));
+        tableScan.withStartRow(Bytes.toBytes(startRow), includeStartRow);
       }
-      tableScan.withStopRow(Bytes.toBytes(endRow));
+      tableScan.withStopRow(Bytes.toBytes(endRow), includeStopRow);
       for (String col : column) {
-        byte [][] parts = CellUtil.parseColumn(Bytes.toBytes(col.trim()));
+        byte[][] parts = CellUtil.parseColumn(Bytes.toBytes(col.trim()));
         if (parts.length == 1) {
           if (LOG.isTraceEnabled()) {
             LOG.trace("Scan family : " + Bytes.toStringBinary(parts[0]));
@@ -167,8 +169,8 @@ public class TableResource extends ResourceBase {
           tableScan.addFamily(parts[0]);
         } else if (parts.length == 2) {
           if (LOG.isTraceEnabled()) {
-            LOG.trace("Scan family and column : " + Bytes.toStringBinary(parts[0])
-                + "  " + Bytes.toStringBinary(parts[1]));
+            LOG.trace("Scan family and column : " + Bytes.toStringBinary(parts[0]) + "  "
+              + Bytes.toStringBinary(parts[1]));
           }
           tableScan.addColumn(parts[0], parts[1]);
         } else {
@@ -176,15 +178,23 @@ public class TableResource extends ResourceBase {
         }
       }
       FilterList filterList = new FilterList();
-      if (StringUtils.isNotEmpty(paramFilter)) {
+      byte[] filterBytes = null;
+      if (paramFilterB64 != null) {
+        filterBytes = base64Urldecoder.decode(paramFilterB64);
+      } else if (paramFilter != null) {
+        filterBytes = paramFilter.getBytes();
+      }
+      if (filterBytes != null) {
+        // Note that this is a completely different representation of the filters
+        // than the JSON one used in the /table/scanner endpoint
         ParseFilter pf = new ParseFilter();
-        Filter parsedParamFilter = pf.parseFilterString(paramFilter);
+        Filter parsedParamFilter = pf.parseFilterString(filterBytes);
         if (parsedParamFilter != null) {
           filterList.addFilter(parsedParamFilter);
         }
-        if (prefixFilter != null) {
-          filterList.addFilter(prefixFilter);
-        }
+      }
+      if (prefixFilter != null) {
+        filterList.addFilter(prefixFilter);
       }
       if (filterList.size() > 0) {
         tableScan.setFilter(filterList);

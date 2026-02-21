@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -91,7 +91,7 @@ public class TestSyncReplicationReplayWALManager {
     ServerMetrics serverMetrics = mock(ServerMetrics.class);
     doAnswer(inv -> onlineServers.stream()
       .collect(Collectors.toMap(Function.identity(), k -> serverMetrics))).when(serverManager)
-        .getOnlineServers();
+      .getOnlineServers();
 
     MasterFileSystem mfs = mock(MasterFileSystem.class);
     when(mfs.getFileSystem()).thenReturn(UTIL.getTestFileSystem());

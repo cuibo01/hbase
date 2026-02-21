@@ -50,7 +50,6 @@ import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.RecoverLeaseFSUtils;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
-import org.apache.hadoop.hbase.wal.WAL.Reader;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
@@ -63,10 +62,9 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.ClusterStatusProtos.Reg
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClusterStatusProtos.StoreSequenceId;
 
 /**
- * Split RegionServer WAL files. Splits the WAL into new files,
- * one per region, to be picked up on Region reopen. Deletes the split WAL when finished.
- * Create an instance and call {@link #splitWAL(FileStatus, CancelableProgressable)} per file or
- * use static helper methods.
+ * Split RegionServer WAL files. Splits the WAL into new files, one per region, to be picked up on
+ * Region reopen. Deletes the split WAL when finished. Create an instance and call
+ * {@link #splitWAL(FileStatus, CancelableProgressable)} per file or use static helper methods.
  */
 @InterfaceAudience.Private
 public class WALSplitter {
@@ -92,8 +90,8 @@ public class WALSplitter {
   private EntryBuffers entryBuffers;
 
   /**
-   * Coordinator for split log. Used by the zk-based log splitter.
-   * Not used by the procedure v2-based log splitter.
+   * Coordinator for split log. Used by the zk-based log splitter. Not used by the procedure
+   * v2-based log splitter.
    */
   private SplitLogWorkerCoordination splitLogWorkerCoordination;
 
@@ -120,10 +118,10 @@ public class WALSplitter {
   public static final boolean DEFAULT_WAL_SPLIT_TO_HFILE = false;
 
   /**
-   * True if we are to run with bounded amount of writers rather than let the count blossom.
-   * Default is 'false'. Does not apply if you have set 'hbase.wal.split.to.hfile' as that
-   * is always bounded. Only applies when you are doing recovery to 'recovered.edits'
-   * files (the old default). Bounded writing tends to have higher throughput.
+   * True if we are to run with bounded amount of writers rather than let the count blossom. Default
+   * is 'false'. Does not apply if you have set 'hbase.wal.split.to.hfile' as that is always
+   * bounded. Only applies when you are doing recovery to 'recovered.edits' files (the old default).
+   * Bounded writing tends to have higher throughput.
    */
   public final static String SPLIT_WRITER_CREATION_BOUNDED = "hbase.split.writer.creation.bounded";
 
@@ -137,14 +135,14 @@ public class WALSplitter {
   private final boolean hfile;
   private final boolean skipErrors;
 
-  WALSplitter(final WALFactory factory, Configuration conf, Path walRootDir,
-      FileSystem walFS, Path rootDir, FileSystem rootFS) {
+  WALSplitter(final WALFactory factory, Configuration conf, Path walRootDir, FileSystem walFS,
+    Path rootDir, FileSystem rootFS) {
     this(factory, conf, walRootDir, walFS, rootDir, rootFS, null, null, null);
   }
 
-  WALSplitter(final WALFactory factory, Configuration conf, Path walRootDir,
-      FileSystem walFS, Path rootDir, FileSystem rootFS, LastSequenceId idChecker,
-      SplitLogWorkerCoordination splitLogWorkerCoordination, RegionServerServices rsServices) {
+  WALSplitter(final WALFactory factory, Configuration conf, Path walRootDir, FileSystem walFS,
+    Path rootDir, FileSystem rootFS, LastSequenceId idChecker,
+    SplitLogWorkerCoordination splitLogWorkerCoordination, RegionServerServices rsServices) {
     this.conf = HBaseConfiguration.create(conf);
     String codecClassName =
       conf.get(WALCellCodec.WAL_CELL_CODEC_CLASS_KEY, WALCellCodec.class.getName());
@@ -184,16 +182,14 @@ public class WALSplitter {
   }
 
   /**
-   * Splits a WAL file.
-   * Used by old {@link org.apache.hadoop.hbase.regionserver.SplitLogWorker} and tests.
-   * Not used by new procedure-based WAL splitter.
-   *
+   * Splits a WAL file. Used by old {@link org.apache.hadoop.hbase.regionserver.SplitLogWorker} and
+   * tests. Not used by new procedure-based WAL splitter.
    * @return false if it is interrupted by the progress-able.
    */
   public static boolean splitLogFile(Path walDir, FileStatus logfile, FileSystem walFS,
-      Configuration conf, CancelableProgressable reporter, LastSequenceId idChecker,
-      SplitLogWorkerCoordination splitLogWorkerCoordination, WALFactory factory,
-      RegionServerServices rsServices) throws IOException {
+    Configuration conf, CancelableProgressable reporter, LastSequenceId idChecker,
+    SplitLogWorkerCoordination splitLogWorkerCoordination, WALFactory factory,
+    RegionServerServices rsServices) throws IOException {
     Path rootDir = CommonFSUtils.getRootDir(conf);
     FileSystem rootFS = rootDir.getFileSystem(conf);
     WALSplitter splitter = new WALSplitter(factory, conf, walDir, walFS, rootDir, rootFS, idChecker,
@@ -205,14 +201,13 @@ public class WALSplitter {
   }
 
   /**
-   * Split a folder of WAL files. Delete the directory when done.
-   * Used by tools and unit tests. It should be package private.
-   * It is public only because TestWALObserver is in a different package,
+   * Split a folder of WAL files. Delete the directory when done. Used by tools and unit tests. It
+   * should be package private. It is public only because TestWALObserver is in a different package,
    * which uses this method to do log splitting.
    * @return List of output files created by the split.
    */
   public static List<Path> split(Path walRootDir, Path walsDir, Path archiveDir, FileSystem walFS,
-      Configuration conf, final WALFactory factory) throws IOException {
+    Configuration conf, final WALFactory factory) throws IOException {
     Path rootDir = CommonFSUtils.getRootDir(conf);
     FileSystem rootFS = rootDir.getFileSystem(conf);
     WALSplitter splitter = new WALSplitter(factory, conf, walRootDir, walFS, rootDir, rootFS);
@@ -220,11 +215,11 @@ public class WALSplitter {
       SplitLogManager.getFileList(conf, Collections.singletonList(walsDir), null);
     List<Path> splits = new ArrayList<>();
     if (!wals.isEmpty()) {
-      for (FileStatus wal: wals) {
+      for (FileStatus wal : wals) {
         SplitWALResult splitWALResult = splitter.splitWAL(wal, null);
         if (splitWALResult.isFinished()) {
           WALSplitUtil.archive(wal.getPath(), splitWALResult.isCorrupt(), archiveDir, walFS, conf);
-          //splitter.outputSink.splits is mark as final, do not need null check
+          // splitter.outputSink.splits is mark as final, do not need null check
           splits.addAll(splitter.outputSink.splits);
         }
       }
@@ -236,9 +231,9 @@ public class WALSplitter {
   }
 
   /**
-   * Data structure returned as result by #splitWAL(FileStatus, CancelableProgressable).
-   * Test {@link #isFinished()} to see if we are done with the WAL and {@link #isCorrupt()} for if
-   * the WAL is corrupt.
+   * Data structure returned as result by #splitWAL(FileStatus, CancelableProgressable). Test
+   * {@link #isFinished()} to see if we are done with the WAL and {@link #isCorrupt()} for if the
+   * WAL is corrupt.
    */
   static final class SplitWALResult {
     private final boolean finished;
@@ -265,16 +260,16 @@ public class WALSplitter {
     PipelineController controller = new PipelineController();
     if (this.hfile) {
       this.entryBuffers = new BoundedEntryBuffers(controller, this.bufferSize);
-      this.outputSink = new BoundedRecoveredHFilesOutputSink(this, controller,
-        this.entryBuffers, this.numWriterThreads);
+      this.outputSink = new BoundedRecoveredHFilesOutputSink(this, controller, this.entryBuffers,
+        this.numWriterThreads);
     } else if (this.splitWriterCreationBounded) {
       this.entryBuffers = new BoundedEntryBuffers(controller, this.bufferSize);
-      this.outputSink = new BoundedRecoveredEditsOutputSink(this, controller,
-        this.entryBuffers, this.numWriterThreads);
+      this.outputSink = new BoundedRecoveredEditsOutputSink(this, controller, this.entryBuffers,
+        this.numWriterThreads);
     } else {
       this.entryBuffers = new EntryBuffers(controller, this.bufferSize);
-      this.outputSink = new RecoveredEditsOutputSink(this, controller,
-        this.entryBuffers, this.numWriterThreads);
+      this.outputSink =
+        new RecoveredEditsOutputSink(this, controller, this.entryBuffers, this.numWriterThreads);
     }
   }
 
@@ -291,10 +286,9 @@ public class WALSplitter {
     boolean cancelled = false;
     int editsCount = 0;
     int editsSkipped = 0;
-    MonitoredTask status =
-      TaskMonitor.get().createStatus("Splitting " + wal + " to temporary staging area.");
-    status.enableStatusJournal(true);
-    Reader walReader = null;
+    MonitoredTask status = TaskMonitor.get()
+      .createStatus("Splitting " + wal + " to temporary staging area.", false, true);
+    WALStreamReader walReader = null;
     this.fileBeingSplit = walStatus;
     long startTS = EnvironmentEdgeManager.currentTime();
     long length = walStatus.getLen();
@@ -323,12 +317,20 @@ public class WALSplitter {
       Entry entry;
       startTS = EnvironmentEdgeManager.currentTime();
       while ((entry = getNextLogLine(walReader, wal, this.skipErrors)) != null) {
+        if (WALEdit.isReplicationMarkerEdit(entry.getEdit())) {
+          // Skip processing the replication marker edits.
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Ignoring Replication marker edits.");
+          }
+          continue;
+        }
         byte[] region = entry.getKey().getEncodedRegionName();
         String encodedRegionNameAsStr = Bytes.toString(region);
         Long lastFlushedSequenceId = lastFlushedSequenceIds.get(encodedRegionNameAsStr);
         if (lastFlushedSequenceId == null) {
-          if (!(isRegionDirPresentUnderRoot(entry.getKey().getTableName(),
-              encodedRegionNameAsStr))) {
+          if (
+            !(isRegionDirPresentUnderRoot(entry.getKey().getTableName(), encodedRegionNameAsStr))
+          ) {
             // The region directory itself is not present in the FS. This indicates that
             // the region/table is already removed. We can just skip all the edits for this
             // region. Setting lastFlushedSequenceId as Long.MAX_VALUE so that all edits
@@ -342,13 +344,13 @@ public class WALSplitter {
               Map<byte[], Long> maxSeqIdInStores = new TreeMap<>(Bytes.BYTES_COMPARATOR);
               for (StoreSequenceId storeSeqId : ids.getStoreSequenceIdList()) {
                 maxSeqIdInStores.put(storeSeqId.getFamilyName().toByteArray(),
-                    storeSeqId.getSequenceId());
+                  storeSeqId.getSequenceId());
               }
               regionMaxSeqIdInStores.put(encodedRegionNameAsStr, maxSeqIdInStores);
               lastFlushedSequenceId = ids.getLastFlushedSequenceId();
               if (LOG.isDebugEnabled()) {
                 LOG.debug("Last flushed sequenceid for " + encodedRegionNameAsStr + ": "
-                    + TextFormat.shortDebugString(ids));
+                  + TextFormat.shortDebugString(ids));
               }
             }
             if (lastFlushedSequenceId == null) {
@@ -370,11 +372,12 @@ public class WALSplitter {
         entryBuffers.appendEntry(entry);
         int moreWritersFromLastCheck = this.getNumOpenWriters() - numOpenedFilesLastCheck;
         // If sufficient edits have passed, check if we should report progress.
-        if (editsCount % interval == 0
-            || moreWritersFromLastCheck > numOpenedFilesBeforeReporting) {
+        if (
+          editsCount % interval == 0 || moreWritersFromLastCheck > numOpenedFilesBeforeReporting
+        ) {
           numOpenedFilesLastCheck = this.getNumOpenWriters();
           String countsStr = (editsCount - (editsSkipped + outputSink.getTotalSkippedEdits()))
-              + " edits, skipped " + editsSkipped + " edits.";
+            + " edits, skipped " + editsSkipped + " edits.";
           status.setStatus("Split " + countsStr);
           if (cancel != null && !cancel.progress()) {
             cancelled = true;
@@ -402,12 +405,8 @@ public class WALSplitter {
       final String log = "Finishing writing output for " + wal + " so closing down";
       LOG.debug(log);
       status.setStatus(log);
-      try {
-        if (null != walReader) {
-          walReader.close();
-        }
-      } catch (IOException exception) {
-        LOG.warn("Could not close {} reader", wal, exception);
+      if (null != walReader) {
+        walReader.close();
       }
       try {
         if (outputSinkStarted) {
@@ -419,10 +418,10 @@ public class WALSplitter {
       } finally {
         long processCost = EnvironmentEdgeManager.currentTime() - startTS;
         // See if length got updated post lease recovery
-        String msg = "Processed " + editsCount + " edits across " +
-          outputSink.getNumberOfRecoveredRegions() + " Regions in " + processCost +
-          " ms; skipped=" + editsSkipped + "; WAL=" + wal + ", size=" + lengthStr +
-          ", length=" + length + ", corrupted=" + corrupt + ", cancelled=" + cancelled;
+        String msg = "Processed " + editsCount + " edits across "
+          + outputSink.getNumberOfRecoveredRegions() + " Regions in " + processCost
+          + " ms; skipped=" + editsSkipped + "; WAL=" + wal + ", size=" + lengthStr + ", length="
+          + length + ", corrupted=" + corrupt + ", cancelled=" + cancelled;
         LOG.info(msg);
         status.markComplete(msg);
         if (LOG.isDebugEnabled()) {
@@ -438,14 +437,14 @@ public class WALSplitter {
   }
 
   /**
-   * Create a new {@link Reader} for reading logs to split.
+   * Create a new {@link WALStreamReader} for reading logs to split.
    * @return Returns null if file has length zero or file can't be found.
    */
-  protected Reader getReader(FileStatus walStatus, boolean skipErrors, CancelableProgressable cancel)
-      throws IOException, CorruptedLogFileException {
+  protected WALStreamReader getReader(FileStatus walStatus, boolean skipErrors,
+    CancelableProgressable cancel) throws IOException, CorruptedLogFileException {
     Path path = walStatus.getPath();
     long length = walStatus.getLen();
-    Reader in;
+    WALStreamReader in;
 
     // Check for possibly empty file. With appends, currently Hadoop reports a
     // zero length even if the file has been sync'd. Revisit if HDFS-376 or
@@ -479,14 +478,14 @@ public class WALSplitter {
       if (!skipErrors || e instanceof InterruptedIOException) {
         throw e; // Don't mark the file corrupted if interrupted, or not skipErrors
       }
-      throw new CorruptedLogFileException("skipErrors=true; could not open " + path +
-        ", skipping", e);
+      throw new CorruptedLogFileException("skipErrors=true; could not open " + path + ", skipping",
+        e);
     }
     return in;
   }
 
-  private Entry getNextLogLine(Reader in, Path path, boolean skipErrors)
-      throws CorruptedLogFileException, IOException {
+  private Entry getNextLogLine(WALStreamReader in, Path path, boolean skipErrors)
+    throws CorruptedLogFileException, IOException {
     try {
       return in.next();
     } catch (EOFException eof) {
@@ -496,8 +495,10 @@ public class WALSplitter {
     } catch (IOException e) {
       // If the IOE resulted from bad file format,
       // then this problem is idempotent and retrying won't help
-      if (e.getCause() != null && (e.getCause() instanceof ParseException
-          || e.getCause() instanceof org.apache.hadoop.fs.ChecksumException)) {
+      if (
+        e.getCause() != null && (e.getCause() instanceof ParseException
+          || e.getCause() instanceof org.apache.hadoop.fs.ChecksumException)
+      ) {
         LOG.warn("Parse exception from {}; continuing", path, e);
         return null;
       }
@@ -518,11 +519,12 @@ public class WALSplitter {
   }
 
   /**
-   * Create a new {@link Reader} for reading logs to split.
+   * Create a new {@link WALStreamReader} for reading logs to split.
    * @return new Reader instance, caller should close
    */
-  private Reader getReader(Path curLogFile, CancelableProgressable reporter) throws IOException {
-    return walFactory.createReader(walFS, curLogFile, reporter);
+  private WALStreamReader getReader(Path curLogFile, CancelableProgressable reporter)
+    throws IOException {
+    return walFactory.createStreamReader(walFS, curLogFile, reporter);
   }
 
   /**
@@ -560,6 +562,7 @@ public class WALSplitter {
       if (thrown == null) {
         return;
       }
+      this.thrown.set(null);
       if (thrown instanceof IOException) {
         throw new IOException(thrown);
       } else {
@@ -577,9 +580,8 @@ public class WALSplitter {
 
     /**
      * CorruptedLogFileException with cause
-     *
      * @param message the message for this exception
-     * @param cause the cause for this exception
+     * @param cause   the cause for this exception
      */
     CorruptedLogFileException(String message, Throwable cause) {
       super(message, cause);

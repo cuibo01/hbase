@@ -24,6 +24,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.when;
+
 import java.io.IOException;
 import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
@@ -38,12 +39,14 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.ClientInternalHelper;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Get;
@@ -87,7 +90,7 @@ import org.slf4j.LoggerFactory;
 public class TestWALSplitToHFile {
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestWALSplitToHFile.class);
+    HBaseClassTestRule.forClass(TestWALSplitToHFile.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(AbstractTestWALReplay.class);
   static final HBaseTestingUtil UTIL = new HBaseTestingUtil();
@@ -131,10 +134,9 @@ public class TestWALSplitToHFile {
     this.fs = UTIL.getDFSCluster().getFileSystem();
     this.rootDir = CommonFSUtils.getRootDir(this.conf);
     this.oldLogDir = new Path(this.rootDir, HConstants.HREGION_OLDLOGDIR_NAME);
-    String serverName =
-      ServerName.valueOf(TEST_NAME.getMethodName() + "-manual", 16010,
-        EnvironmentEdgeManager.currentTime())
-          .toString();
+    String serverName = ServerName
+      .valueOf(TEST_NAME.getMethodName() + "-manual", 16010, EnvironmentEdgeManager.currentTime())
+      .toString();
     this.logName = AbstractFSWALProvider.getWALDirectoryName(serverName);
     this.logDir = new Path(this.rootDir, logName);
     if (UTIL.getDFSCluster().getFileSystem().exists(this.rootDir)) {
@@ -171,12 +173,15 @@ public class TestWALSplitToHFile {
   }
 
   private WAL createWAL(Configuration c, Path hbaseRootDir, String logName) throws IOException {
-    FSHLog wal = new FSHLog(FileSystem.get(c), hbaseRootDir, logName, c);
+    FileSystem fs = hbaseRootDir.getFileSystem(c);
+    fs.mkdirs(new Path(hbaseRootDir, logName));
+    FSHLog wal = new FSHLog(fs, hbaseRootDir, logName, c);
     wal.init();
     return wal;
   }
 
   private WAL createWAL(FileSystem fs, Path hbaseRootDir, String logName) throws IOException {
+    fs.mkdirs(new Path(hbaseRootDir, logName));
     FSHLog wal = new FSHLog(fs, hbaseRootDir, logName, this.conf);
     wal.init();
     return wal;
@@ -209,10 +214,9 @@ public class TestWALSplitToHFile {
 
     FileSystem walFs = CommonFSUtils.getWALFileSystem(this.conf);
     this.oldLogDir = new Path(walRootDir, HConstants.HREGION_OLDLOGDIR_NAME);
-    String serverName =
-      ServerName.valueOf(TEST_NAME.getMethodName() + "-manual", 16010,
-        EnvironmentEdgeManager.currentTime())
-          .toString();
+    String serverName = ServerName
+      .valueOf(TEST_NAME.getMethodName() + "-manual", 16010, EnvironmentEdgeManager.currentTime())
+      .toString();
     this.logName = AbstractFSWALProvider.getWALDirectoryName(serverName);
     this.logDir = new Path(walRootDir, logName);
     this.wals = new WALFactory(conf, TEST_NAME.getMethodName());
@@ -258,10 +262,10 @@ public class TestWALSplitToHFile {
 
     // Write a corrupt recovered hfile
     Path regionDir =
-        new Path(CommonFSUtils.getTableDir(rootDir, td.getTableName()), ri.getEncodedName());
+      new Path(CommonFSUtils.getTableDir(rootDir, td.getTableName()), ri.getEncodedName());
     for (ColumnFamilyDescriptor cfd : td.getColumnFamilies()) {
       FileStatus[] files =
-          WALSplitUtil.getRecoveredHFiles(this.fs, regionDir, cfd.getNameAsString());
+        WALSplitUtil.getRecoveredHFiles(this.fs, regionDir, cfd.getNameAsString());
       assertNotNull(files);
       assertTrue(files.length > 0);
       writeCorruptRecoveredHFile(files[0].getPath());
@@ -285,7 +289,7 @@ public class TestWALSplitToHFile {
       assertTrue(Bytes.equals(VALUE1, result2.getValue(cfd.getName(), QUALIFIER)));
       // Assert the corrupt file was skipped and still exist
       FileStatus[] files =
-          WALSplitUtil.getRecoveredHFiles(this.fs, regionDir, cfd.getNameAsString());
+        WALSplitUtil.getRecoveredHFiles(this.fs, regionDir, cfd.getNameAsString());
       assertNotNull(files);
       assertEquals(1, files.length);
       assertTrue(files[0].getPath().getName().contains("corrupt"));
@@ -342,10 +346,10 @@ public class TestWALSplitToHFile {
         region.put(new Put(Bytes.toBytes(i)).addColumn(cfd.getName(), QUALIFIER, VALUE1));
         Result result = region.get(new Get(Bytes.toBytes(i)).addFamily(cfd.getName()));
         assertTrue(Bytes.equals(VALUE1, result.getValue(cfd.getName(), QUALIFIER)));
-        List<Cell> cells = result.listCells();
-        assertEquals(1, cells.size());
+        ExtendedCell[] cells = ClientInternalHelper.getExtendedRawCells(result);
+        assertEquals(1, cells.length);
         seqIdMap.computeIfAbsent(i, r -> new HashMap<>()).put(cfd.getNameAsString(),
-          cells.get(0).getSequenceId());
+          cells[0].getSequenceId());
       }
     }
 
@@ -363,26 +367,25 @@ public class TestWALSplitToHFile {
       for (ColumnFamilyDescriptor cfd : td.getColumnFamilies()) {
         Result result = region2.get(new Get(Bytes.toBytes(i)).addFamily(cfd.getName()));
         assertTrue(Bytes.equals(VALUE1, result.getValue(cfd.getName(), QUALIFIER)));
-        List<Cell> cells = result.listCells();
-        assertEquals(1, cells.size());
-        assertEquals((long) seqIdMap.get(i).get(cfd.getNameAsString()),
-          cells.get(0).getSequenceId());
+        ExtendedCell[] cells = ClientInternalHelper.getExtendedRawCells(result);
+        assertEquals(1, cells.length);
+        assertEquals((long) seqIdMap.get(i).get(cfd.getNameAsString()), cells[0].getSequenceId());
       }
     }
   }
 
   /**
-   * Test writing edits into an HRegion, closing it, splitting logs, opening
-   * Region again.  Verify seqids.
+   * Test writing edits into an HRegion, closing it, splitting logs, opening Region again. Verify
+   * seqids.
    */
   @Test
   public void testWrittenViaHRegion()
-      throws IOException, SecurityException, IllegalArgumentException, InterruptedException {
+    throws IOException, SecurityException, IllegalArgumentException, InterruptedException {
     Pair<TableDescriptor, RegionInfo> pair = setupTableAndRegion();
     TableDescriptor td = pair.getFirst();
     RegionInfo ri = pair.getSecond();
 
-    // Write countPerFamily edits into the three families.  Do a flush on one
+    // Write countPerFamily edits into the three families. Do a flush on one
     // of the families during the load of edits so its seqid is not same as
     // others to test we do right thing when different seqids.
     WAL wal = createWAL(this.conf, rootDir, logName);
@@ -419,7 +422,7 @@ public class TestWALSplitToHFile {
     final Result result1b = region2.get(g);
     assertEquals(result.size(), result1b.size());
 
-    // Next test.  Add more edits, then 'crash' this region by stealing its wal
+    // Next test. Add more edits, then 'crash' this region by stealing its wal
     // out from under it and assert that replay of the log adds the edits back
     // correctly when region is opened again.
     for (ColumnFamilyDescriptor hcd : td.getColumnFamilies()) {
@@ -445,7 +448,7 @@ public class TestWALSplitToHFile {
         // Assert that count of cells is same as before crash.
         assertEquals(result2.size(), result3.size());
 
-        // I can't close wal1.  Its been appropriated when we split.
+        // I can't close wal1. Its been appropriated when we split.
         region3.close();
         wal3.close();
         return null;
@@ -454,23 +457,21 @@ public class TestWALSplitToHFile {
   }
 
   /**
-   * Test that we recover correctly when there is a failure in between the
-   * flushes. i.e. Some stores got flushed but others did not.
-   * Unfortunately, there is no easy hook to flush at a store level. The way
-   * we get around this is by flushing at the region level, and then deleting
-   * the recently flushed store file for one of the Stores. This would put us
-   * back in the situation where all but that store got flushed and the region
-   * died.
-   * We restart Region again, and verify that the edits were replayed.
+   * Test that we recover correctly when there is a failure in between the flushes. i.e. Some stores
+   * got flushed but others did not. Unfortunately, there is no easy hook to flush at a store level.
+   * The way we get around this is by flushing at the region level, and then deleting the recently
+   * flushed store file for one of the Stores. This would put us back in the situation where all but
+   * that store got flushed and the region died. We restart Region again, and verify that the edits
+   * were replayed.
    */
   @Test
   public void testAfterPartialFlush()
-      throws IOException, SecurityException, IllegalArgumentException {
+    throws IOException, SecurityException, IllegalArgumentException {
     Pair<TableDescriptor, RegionInfo> pair = setupTableAndRegion();
     TableDescriptor td = pair.getFirst();
     RegionInfo ri = pair.getSecond();
 
-    // Write countPerFamily edits into the three families.  Do a flush on one
+    // Write countPerFamily edits into the three families. Do a flush on one
     // of the families during the load of edits so its seqid is not same as
     // others to test we do right thing when different seqids.
     WAL wal = createWAL(this.conf, rootDir, logName);
@@ -514,9 +515,8 @@ public class TestWALSplitToHFile {
   }
 
   /**
-   * Test that we could recover the data correctly after aborting flush. In the
-   * test, first we abort flush after writing some data, then writing more data
-   * and flush again, at last verify the data.
+   * Test that we could recover the data correctly after aborting flush. In the test, first we abort
+   * flush after writing some data, then writing more data and flush again, at last verify the data.
    */
   @Test
   public void testAfterAbortingFlush() throws IOException {
@@ -534,14 +534,14 @@ public class TestWALSplitToHFile {
     when(rsServices.getConfiguration()).thenReturn(conf);
     Configuration customConf = new Configuration(this.conf);
     customConf.set(DefaultStoreEngine.DEFAULT_STORE_FLUSHER_CLASS_KEY,
-        AbstractTestWALReplay.CustomStoreFlusher.class.getName());
+      AbstractTestWALReplay.CustomStoreFlusher.class.getName());
     HRegion region = HRegion.openHRegion(this.rootDir, ri, td, wal, customConf, rsServices, null);
     int writtenRowCount = 10;
     List<ColumnFamilyDescriptor> families = Arrays.asList(td.getColumnFamilies());
     for (int i = 0; i < writtenRowCount; i++) {
       Put put = new Put(Bytes.toBytes(td.getTableName() + Integer.toString(i)));
       put.addColumn(families.get(i % families.size()).getName(), Bytes.toBytes("q"),
-          Bytes.toBytes("val"));
+        Bytes.toBytes("val"));
       region.put(put);
     }
 
@@ -566,7 +566,7 @@ public class TestWALSplitToHFile {
     for (int i = writtenRowCount; i < writtenRowCount + moreRow; i++) {
       Put put = new Put(Bytes.toBytes(td.getTableName() + Integer.toString(i)));
       put.addColumn(families.get(i % families.size()).getName(), Bytes.toBytes("q"),
-          Bytes.toBytes("val"));
+        Bytes.toBytes("val"));
       region.put(put);
     }
     writtenRowCount += moreRow;
@@ -576,7 +576,7 @@ public class TestWALSplitToHFile {
       region.flush(true);
     } catch (IOException t) {
       LOG.info(
-          "Expected exception when flushing region because server is stopped," + t.getMessage());
+        "Expected exception when flushing region because server is stopped," + t.getMessage());
     }
 
     region.close(true);

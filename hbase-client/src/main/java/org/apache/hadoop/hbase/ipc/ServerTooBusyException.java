@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,7 +18,6 @@
 package org.apache.hadoop.hbase.ipc;
 
 import java.net.InetSocketAddress;
-
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.net.Address;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -35,6 +33,9 @@ public class ServerTooBusyException extends DoNotRetryIOException {
     super("Busy Server! " + count + " concurrent RPCs against " + address);
   }
 
+  /**
+   * @deprecated Since 1.7.0, 2.4.18 and 2.5.0, will be removed in 4.0.0.
+   */
   @Deprecated
   public ServerTooBusyException(InetSocketAddress address, long count) {
     super("Busy Server! " + count + " concurrent RPCs against " + address);

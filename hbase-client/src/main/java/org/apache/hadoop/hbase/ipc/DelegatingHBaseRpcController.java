@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,13 +17,13 @@
  */
 package org.apache.hadoop.hbase.ipc;
 
-import org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback;
-
 import java.io.IOException;
-
-import org.apache.hadoop.hbase.CellScanner;
+import java.util.Map;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.yetus.audience.InterfaceAudience;
+
+import org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback;
 
 /**
  * Simple delegating controller for use with the {@link RpcControllerFactory} to help override
@@ -74,12 +74,12 @@ public class DelegatingHBaseRpcController implements HBaseRpcController {
   }
 
   @Override
-  public CellScanner cellScanner() {
+  public ExtendedCellScanner cellScanner() {
     return delegate.cellScanner();
   }
 
   @Override
-  public void setCellScanner(CellScanner cellScanner) {
+  public void setCellScanner(ExtendedCellScanner cellScanner) {
     delegate.setCellScanner(cellScanner);
   }
 
@@ -114,6 +114,16 @@ public class DelegatingHBaseRpcController implements HBaseRpcController {
   }
 
   @Override
+  public Map<String, byte[]> getRequestAttributes() {
+    return delegate.getRequestAttributes();
+  }
+
+  @Override
+  public void setRequestAttributes(Map<String, byte[]> requestAttributes) {
+    delegate.setRequestAttributes(requestAttributes);
+  }
+
+  @Override
   public void setFailed(IOException e) {
     delegate.setFailed(e);
   }
@@ -124,13 +134,23 @@ public class DelegatingHBaseRpcController implements HBaseRpcController {
   }
 
   @Override
-  public void setDone(CellScanner cellScanner) {
+  public void setDone(ExtendedCellScanner cellScanner) {
     delegate.setDone(cellScanner);
   }
 
   @Override
   public void notifyOnCancel(RpcCallback<Object> callback, CancellationCallback action)
-      throws IOException {
+    throws IOException {
     delegate.notifyOnCancel(callback, action);
+  }
+
+  @Override
+  public void setTableName(TableName tableName) {
+    delegate.setTableName(tableName);
+  }
+
+  @Override
+  public TableName getTableName() {
+    return delegate.getTableName();
   }
 }

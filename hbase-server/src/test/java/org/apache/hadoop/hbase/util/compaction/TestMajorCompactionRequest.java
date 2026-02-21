@@ -22,7 +22,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isA;
-import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -33,7 +32,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
-
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -48,38 +46,42 @@ import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.HRegionFileSystem;
 import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
+import org.apache.hadoop.hbase.regionserver.storefiletracker.StoreFileTrackerForTest;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+
 import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
 
-@Category({SmallTests.class})
+@Category({ SmallTests.class })
 public class TestMajorCompactionRequest {
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestMajorCompactionRequest.class);
+    HBaseClassTestRule.forClass(TestMajorCompactionRequest.class);
 
   protected static final HBaseTestingUtil UTILITY = new HBaseTestingUtil();
   protected static final String FAMILY = "a";
   protected Path rootRegionDir;
   protected Path regionStoreDir;
 
-  @Before public void setUp() throws Exception {
+  @Before
+  public void setUp() throws Exception {
     rootRegionDir = UTILITY.getDataTestDirOnTestFS("TestMajorCompactionRequest");
     regionStoreDir = new Path(rootRegionDir, FAMILY);
   }
 
-  @Test public void testStoresNeedingCompaction() throws Exception {
+  @Test
+  public void testStoresNeedingCompaction() throws Exception {
     // store files older than timestamp
     List<StoreFileInfo> storeFiles = mockStoreFiles(regionStoreDir, 5, 10);
     MajorCompactionRequest request = makeMockRequest(storeFiles, false);
     Optional<MajorCompactionRequest> result =
-        request.createRequest(mock(Connection.class), Sets.newHashSet(FAMILY), 100);
+      request.createRequest(mock(Connection.class), Sets.newHashSet(FAMILY), 100);
     assertTrue(result.isPresent());
 
     // store files newer than timestamp
@@ -89,40 +91,51 @@ public class TestMajorCompactionRequest {
     assertFalse(result.isPresent());
   }
 
-  @Test public void testIfWeHaveNewReferenceFilesButOldStoreFiles() throws Exception {
+  @Test
+  public void testIfWeHaveNewReferenceFilesButOldStoreFiles() throws Exception {
     // this tests that reference files that are new, but have older timestamps for the files
     // they reference still will get compacted.
-    TableName table = TableName.valueOf("TestMajorCompactor");
-    TableDescriptor htd = UTILITY.createTableDescriptor(table, Bytes.toBytes(FAMILY));
+    TableName tableName = TableName.valueOf("TestMajorCompactor");
+    TableDescriptor htd = UTILITY.createTableDescriptor(tableName, Bytes.toBytes(FAMILY));
     RegionInfo hri = RegionInfoBuilder.newBuilder(htd.getTableName()).build();
     HRegion region =
-        HBaseTestingUtil.createRegionAndWAL(hri, rootRegionDir, UTILITY.getConfiguration(), htd);
+      HBaseTestingUtil.createRegionAndWAL(hri, rootRegionDir, UTILITY.getConfiguration(), htd);
 
     Connection connection = mock(Connection.class);
     // the reference file timestamp is newer
     List<StoreFileInfo> storeFiles = mockStoreFiles(regionStoreDir, 4, 101);
     List<Path> paths = storeFiles.stream().map(StoreFileInfo::getPath).collect(Collectors.toList());
     // the files that are referenced are older, thus we still compact.
-    HRegionFileSystem fileSystem =
-        mockFileSystem(region.getRegionInfo(), true, storeFiles, 50);
-    MajorCompactionRequest majorCompactionRequest = spy(new MajorCompactionRequest(connection,
-        region.getRegionInfo(), Sets.newHashSet(FAMILY)));
+    HRegionFileSystem fileSystem = mockFileSystem(region.getRegionInfo(), true, storeFiles, 50);
+    MajorCompactionRequest majorCompactionRequest =
+      spy(new MajorCompactionRequest(connection, region.getRegionInfo(), Sets.newHashSet(FAMILY)));
     doReturn(paths).when(majorCompactionRequest).getReferenceFilePaths(any(FileSystem.class),
-        any(Path.class));
+      any(Path.class));
+    StoreFileTrackerForTest sft = mockSFT(true, storeFiles);
     doReturn(fileSystem).when(majorCompactionRequest).getFileSystem();
+    doReturn(sft).when(majorCompactionRequest).getStoreFileTracker(any(), any());
+    doReturn(UTILITY.getConfiguration()).when(connection).getConfiguration();
     Set<String> result =
-        majorCompactionRequest.getStoresRequiringCompaction(Sets.newHashSet("a"), 100);
+      majorCompactionRequest.getStoresRequiringCompaction(Sets.newHashSet("a"), 100);
     assertEquals(FAMILY, Iterables.getOnlyElement(result));
   }
 
+  protected StoreFileTrackerForTest mockSFT(boolean references, List<StoreFileInfo> storeFiles)
+    throws IOException {
+    StoreFileTrackerForTest sft = mock(StoreFileTrackerForTest.class);
+    doReturn(references).when(sft).hasReferences();
+    doReturn(storeFiles).when(sft).load();
+    return sft;
+  }
+
   protected HRegionFileSystem mockFileSystem(RegionInfo info, boolean hasReferenceFiles,
-      List<StoreFileInfo> storeFiles) throws IOException {
+    List<StoreFileInfo> storeFiles) throws IOException {
     long timestamp = storeFiles.stream().findFirst().get().getModificationTime();
     return mockFileSystem(info, hasReferenceFiles, storeFiles, timestamp);
   }
 
   private HRegionFileSystem mockFileSystem(RegionInfo info, boolean hasReferenceFiles,
-      List<StoreFileInfo> storeFiles, long referenceFileTimestamp) throws IOException {
+    List<StoreFileInfo> storeFiles, long referenceFileTimestamp) throws IOException {
     FileSystem fileSystem = mock(FileSystem.class);
     if (hasReferenceFiles) {
       FileStatus fileStatus = mock(FileStatus.class);
@@ -132,37 +145,37 @@ public class TestMajorCompactionRequest {
     HRegionFileSystem mockSystem = mock(HRegionFileSystem.class);
     doReturn(info).when(mockSystem).getRegionInfo();
     doReturn(regionStoreDir).when(mockSystem).getStoreDir(FAMILY);
-    doReturn(hasReferenceFiles).when(mockSystem).hasReferences(anyString());
-    doReturn(storeFiles).when(mockSystem).getStoreFiles(anyString());
     doReturn(fileSystem).when(mockSystem).getFileSystem();
     return mockSystem;
   }
 
   protected List<StoreFileInfo> mockStoreFiles(Path regionStoreDir, int howMany, long timestamp)
-      throws IOException {
+    throws IOException {
     List<StoreFileInfo> infos = Lists.newArrayList();
     int i = 0;
     while (i < howMany) {
       StoreFileInfo storeFileInfo = mock(StoreFileInfo.class);
       doReturn(timestamp).doReturn(timestamp).when(storeFileInfo).getModificationTime();
       doReturn(new Path(regionStoreDir, RandomStringUtils.randomAlphabetic(10))).when(storeFileInfo)
-          .getPath();
+        .getPath();
       infos.add(storeFileInfo);
       i++;
     }
     return infos;
   }
 
-  private MajorCompactionRequest makeMockRequest(List<StoreFileInfo> storeFiles,
-      boolean references) throws IOException {
+  private MajorCompactionRequest makeMockRequest(List<StoreFileInfo> storeFiles, boolean references)
+    throws IOException {
     Connection connection = mock(Connection.class);
     RegionInfo regionInfo = mock(RegionInfo.class);
     when(regionInfo.getEncodedName()).thenReturn("HBase");
     when(regionInfo.getTable()).thenReturn(TableName.valueOf("foo"));
     MajorCompactionRequest request =
-        new MajorCompactionRequest(connection, regionInfo, Sets.newHashSet("a"));
+      new MajorCompactionRequest(connection, regionInfo, Sets.newHashSet("a"));
     MajorCompactionRequest spy = spy(request);
     HRegionFileSystem fileSystem = mockFileSystem(regionInfo, references, storeFiles);
+    StoreFileTrackerForTest sft = mockSFT(references, storeFiles);
+    doReturn(sft).when(spy).getStoreFileTracker(any(), any());
     doReturn(fileSystem).when(spy).getFileSystem();
     return spy;
   }

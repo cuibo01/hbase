@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -37,6 +37,11 @@ public final class RestoreRequest {
       return this;
     }
 
+    public Builder withRestoreRootDir(String restoreRootDir) {
+      request.setRestoreRootDir(restoreRootDir);
+      return this;
+    }
+
     public Builder withBackupId(String backupId) {
       request.setBackupId(backupId);
       return this;
@@ -57,8 +62,13 @@ public final class RestoreRequest {
       return this;
     }
 
-    public Builder withOvewrite(boolean overwrite) {
+    public Builder withOverwrite(boolean overwrite) {
       request.setOverwrite(overwrite);
+      return this;
+    }
+
+    public Builder withKeepOriginalSplits(boolean keepOriginalSplits) {
+      request.setKeepOriginalSplits(keepOriginalSplits);
       return this;
     }
 
@@ -68,11 +78,14 @@ public final class RestoreRequest {
   }
 
   private String backupRootDir;
+  private String restoreRootDir;
   private String backupId;
   private boolean check = false;
   private TableName[] fromTables;
   private TableName[] toTables;
   private boolean overwrite = false;
+
+  private boolean keepOriginalSplits = false;
 
   private RestoreRequest() {
   }
@@ -83,6 +96,15 @@ public final class RestoreRequest {
 
   private RestoreRequest setBackupRootDir(String backupRootDir) {
     this.backupRootDir = backupRootDir;
+    return this;
+  }
+
+  public String getRestoreRootDir() {
+    return restoreRootDir;
+  }
+
+  private RestoreRequest setRestoreRootDir(String restoreRootDir) {
+    this.restoreRootDir = restoreRootDir;
     return this;
   }
 
@@ -128,6 +150,15 @@ public final class RestoreRequest {
 
   private RestoreRequest setOverwrite(boolean overwrite) {
     this.overwrite = overwrite;
+    return this;
+  }
+
+  public boolean isKeepOriginalSplits() {
+    return keepOriginalSplits;
+  }
+
+  private RestoreRequest setKeepOriginalSplits(boolean keepOriginalSplits) {
+    this.keepOriginalSplits = keepOriginalSplits;
     return this;
   }
 }

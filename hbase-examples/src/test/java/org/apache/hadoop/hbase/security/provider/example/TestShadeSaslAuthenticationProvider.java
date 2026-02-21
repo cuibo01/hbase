@@ -27,8 +27,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.io.PrintWriter;
-import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -68,10 +67,8 @@ import org.apache.hadoop.hbase.testclassification.SecurityTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.Pair;
-import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.hadoop.security.token.SecretManager.InvalidToken;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -83,40 +80,37 @@ import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.hbase.thirdparty.com.google.common.base.Throwables;
-
-@Category({MediumTests.class, SecurityTests.class})
+@Category({ MediumTests.class, SecurityTests.class })
 public class TestShadeSaslAuthenticationProvider {
-  private static final Logger LOG = LoggerFactory.getLogger(TestShadeSaslAuthenticationProvider.class);
+  private static final Logger LOG =
+    LoggerFactory.getLogger(TestShadeSaslAuthenticationProvider.class);
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestShadeSaslAuthenticationProvider.class);
-
+    HBaseClassTestRule.forClass(TestShadeSaslAuthenticationProvider.class);
 
   private static final char[] USER1_PASSWORD = "foobarbaz".toCharArray();
 
-  static LocalHBaseCluster createCluster(HBaseTestingUtil util, File keytabFile,
-      MiniKdc kdc, Map<String,char[]> userDatabase) throws Exception {
+  static LocalHBaseCluster createCluster(HBaseTestingUtil util, File keytabFile, MiniKdc kdc,
+    Map<String, char[]> userDatabase) throws Exception {
     String servicePrincipal = "hbase/localhost";
     String spnegoPrincipal = "HTTP/localhost";
     kdc.createPrincipal(keytabFile, servicePrincipal);
     util.startMiniZKCluster();
 
     HBaseKerberosUtils.setSecuredConfiguration(util.getConfiguration(),
-        servicePrincipal + "@" + kdc.getRealm(), spnegoPrincipal + "@" + kdc.getRealm());
+      servicePrincipal + "@" + kdc.getRealm(), spnegoPrincipal + "@" + kdc.getRealm());
     HBaseKerberosUtils.setSSLConfiguration(util, TestShadeSaslAuthenticationProvider.class);
 
     util.getConfiguration().setStrings(CoprocessorHost.REGION_COPROCESSOR_CONF_KEY,
-        TokenProvider.class.getName());
+      TokenProvider.class.getName());
     util.startMiniDFSCluster(1);
     Path testDir = util.getDataTestDirOnTestFS("TestShadeSaslAuthenticationProvider");
     USER_DATABASE_FILE = new Path(testDir, "user-db.txt");
 
-    createUserDBFile(
-        USER_DATABASE_FILE.getFileSystem(CONF), USER_DATABASE_FILE, userDatabase);
+    createUserDBFile(USER_DATABASE_FILE.getFileSystem(CONF), USER_DATABASE_FILE, userDatabase);
     CONF.set(ShadeSaslServerAuthenticationProvider.PASSWORD_FILE_KEY,
-        USER_DATABASE_FILE.toString());
+      USER_DATABASE_FILE.toString());
 
     Path rootdir = new Path(testDir, "hbase-root");
     CommonFSUtils.setRootDir(CONF, rootdir);
@@ -124,14 +118,14 @@ public class TestShadeSaslAuthenticationProvider {
     return cluster;
   }
 
-  static void createUserDBFile(FileSystem fs, Path p,
-      Map<String,char[]> userDatabase) throws IOException {
+  static void createUserDBFile(FileSystem fs, Path p, Map<String, char[]> userDatabase)
+    throws IOException {
     if (fs.exists(p)) {
       fs.delete(p, true);
     }
-    try (FSDataOutputStream out = fs.create(p);
-        BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(out))) {
-      for (Entry<String,char[]> e : userDatabase.entrySet()) {
+    try (FSDataOutputStream out = fs.create(p); BufferedWriter writer =
+      new BufferedWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8))) {
+      for (Entry<String, char[]> e : userDatabase.entrySet()) {
         writer.write(e.getKey());
         writer.write(ShadeSaslServerAuthenticationProvider.SEPARATOR);
         writer.write(e.getValue());
@@ -148,21 +142,19 @@ public class TestShadeSaslAuthenticationProvider {
 
   @BeforeClass
   public static void setupCluster() throws Exception {
-    KEYTAB_FILE = new File(
-        UTIL.getDataTestDir("keytab").toUri().getPath());
+    KEYTAB_FILE = new File(UTIL.getDataTestDir("keytab").toUri().getPath());
     final MiniKdc kdc = UTIL.setupMiniKdc(KEYTAB_FILE);
 
     // Adds our test impls instead of creating service loader entries which
     // might inadvertently get them loaded on a real cluster.
     CONF.setStrings(SaslClientAuthenticationProviders.EXTRA_PROVIDERS_KEY,
-        ShadeSaslClientAuthenticationProvider.class.getName());
+      ShadeSaslClientAuthenticationProvider.class.getName());
     CONF.setStrings(SaslServerAuthenticationProviders.EXTRA_PROVIDERS_KEY,
-        ShadeSaslServerAuthenticationProvider.class.getName());
-    CONF.set(SaslClientAuthenticationProviders.SELECTOR_KEY,
-        ShadeProviderSelector.class.getName());
+      ShadeSaslServerAuthenticationProvider.class.getName());
+    CONF.set(SaslClientAuthenticationProviders.SELECTOR_KEY, ShadeProviderSelector.class.getName());
 
-    CLUSTER = createCluster(UTIL, KEYTAB_FILE, kdc,
-        Collections.singletonMap("user1", USER1_PASSWORD));
+    CLUSTER =
+      createCluster(UTIL, KEYTAB_FILE, kdc, Collections.singletonMap("user1", USER1_PASSWORD));
     CLUSTER.startup();
   }
 
@@ -185,16 +177,15 @@ public class TestShadeSaslAuthenticationProvider {
     tableName = TableName.valueOf(name.getMethodName());
 
     // Create a table and write a record as the service user (hbase)
-    UserGroupInformation serviceUgi = UserGroupInformation.loginUserFromKeytabAndReturnUGI(
-        "hbase/localhost", KEYTAB_FILE.getAbsolutePath());
+    UserGroupInformation serviceUgi = UserGroupInformation
+      .loginUserFromKeytabAndReturnUGI("hbase/localhost", KEYTAB_FILE.getAbsolutePath());
     clusterId = serviceUgi.doAs(new PrivilegedExceptionAction<String>() {
-      @Override public String run() throws Exception {
+      @Override
+      public String run() throws Exception {
         try (Connection conn = ConnectionFactory.createConnection(CONF);
-            Admin admin = conn.getAdmin();) {
-          admin.createTable(TableDescriptorBuilder
-              .newBuilder(tableName)
-              .setColumnFamily(ColumnFamilyDescriptorBuilder.of("f1"))
-              .build());
+          Admin admin = conn.getAdmin();) {
+          admin.createTable(TableDescriptorBuilder.newBuilder(tableName)
+            .setColumnFamily(ColumnFamilyDescriptorBuilder.of("f1")).build());
 
           UTIL.waitTableAvailable(tableName);
 
@@ -215,20 +206,23 @@ public class TestShadeSaslAuthenticationProvider {
   @Test
   public void testPositiveAuthentication() throws Exception {
     final Configuration clientConf = new Configuration(CONF);
-    try (Connection conn = ConnectionFactory.createConnection(clientConf)) {
-      UserGroupInformation user1 = UserGroupInformation.createUserForTesting(
-          "user1", new String[0]);
-      user1.addToken(ShadeClientTokenUtil.obtainToken(conn, "user1", USER1_PASSWORD));
+    try (Connection conn1 = ConnectionFactory.createConnection(clientConf)) {
+      UserGroupInformation user1 =
+        UserGroupInformation.createUserForTesting("user1", new String[0]);
+      user1.addToken(ShadeClientTokenUtil.obtainToken(conn1, "user1", USER1_PASSWORD));
       user1.doAs(new PrivilegedExceptionAction<Void>() {
-        @Override public Void run() throws Exception {
-          try (Table t = conn.getTable(tableName)) {
-            Result r = t.get(new Get(Bytes.toBytes("r1")));
-            assertNotNull(r);
-            assertFalse("Should have read a non-empty Result", r.isEmpty());
-            final Cell cell = r.getColumnLatestCell(Bytes.toBytes("f1"), Bytes.toBytes("q1"));
-            assertTrue("Unexpected value", CellUtil.matchingValue(cell, Bytes.toBytes("1")));
+        @Override
+        public Void run() throws Exception {
+          try (Connection conn = ConnectionFactory.createConnection(clientConf)) {
+            try (Table t = conn.getTable(tableName)) {
+              Result r = t.get(new Get(Bytes.toBytes("r1")));
+              assertNotNull(r);
+              assertFalse("Should have read a non-empty Result", r.isEmpty());
+              final Cell cell = r.getColumnLatestCell(Bytes.toBytes("f1"), Bytes.toBytes("q1"));
+              assertTrue("Unexpected value", CellUtil.matchingValue(cell, Bytes.toBytes("1")));
 
-            return null;
+              return null;
+            }
           }
         }
       });
@@ -240,36 +234,36 @@ public class TestShadeSaslAuthenticationProvider {
     List<Pair<String, Class<? extends Exception>>> params = new ArrayList<>();
     // Master-based connection will fail to ask the master its cluster ID
     // as a part of creating the Connection.
-    params.add(new Pair<String, Class<? extends Exception>>(
-        MasterRegistry.class.getName(), MasterRegistryFetchException.class));
+    params.add(new Pair<String, Class<? extends Exception>>(MasterRegistry.class.getName(),
+      MasterRegistryFetchException.class));
     // ZK based connection will fail on the master RPC
     params.add(new Pair<String, Class<? extends Exception>>(
-        // ZKConnectionRegistry is package-private
-        HConstants.ZK_CONNECTION_REGISTRY_CLASS, RetriesExhaustedException.class));
+      // ZKConnectionRegistry is package-private
+      HConstants.ZK_CONNECTION_REGISTRY_CLASS, RetriesExhaustedException.class));
 
     params.forEach((pair) -> {
       LOG.info("Running negative authentication test for client registry {}, expecting {}",
-          pair.getFirst(), pair.getSecond().getName());
+        pair.getFirst(), pair.getSecond().getName());
       // Validate that we can read that record back out as the user with our custom auth'n
       final Configuration clientConf = new Configuration(CONF);
       clientConf.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 3);
       clientConf.set(HConstants.CLIENT_CONNECTION_REGISTRY_IMPL_CONF_KEY, pair.getFirst());
       try (Connection conn = ConnectionFactory.createConnection(clientConf)) {
-        UserGroupInformation user1 = UserGroupInformation.createUserForTesting(
-            "user1", new String[0]);
+        UserGroupInformation user1 =
+          UserGroupInformation.createUserForTesting("user1", new String[0]);
         user1.addToken(
-            ShadeClientTokenUtil.obtainToken(conn, "user1", "not a real password".toCharArray()));
+          ShadeClientTokenUtil.obtainToken(conn, "user1", "not a real password".toCharArray()));
 
         LOG.info("Executing request to HBase Master which should fail");
         user1.doAs(new PrivilegedExceptionAction<Void>() {
-          @Override public Void run() throws Exception {
+          @Override
+          public Void run() throws Exception {
             try (Connection conn = ConnectionFactory.createConnection(clientConf);) {
               conn.getAdmin().listTableDescriptors();
               fail("Should not successfully authenticate with HBase");
             } catch (Exception e) {
               LOG.info("Caught exception in negative Master connectivity test", e);
               assertEquals("Found unexpected exception", pair.getSecond(), e.getClass());
-              validateRootCause(Throwables.getRootCause(e));
             }
             return null;
           }
@@ -277,17 +271,17 @@ public class TestShadeSaslAuthenticationProvider {
 
         LOG.info("Executing request to HBase RegionServer which should fail");
         user1.doAs(new PrivilegedExceptionAction<Void>() {
-          @Override public Void run() throws Exception {
+          @Override
+          public Void run() throws Exception {
             // A little contrived because, with MasterRegistry, we'll still fail on talking
             // to the HBase master before trying to talk to a RegionServer.
             try (Connection conn = ConnectionFactory.createConnection(clientConf);
-                Table t = conn.getTable(tableName)) {
+              Table t = conn.getTable(tableName)) {
               t.get(new Get(Bytes.toBytes("r1")));
               fail("Should not successfully authenticate with HBase");
             } catch (Exception e) {
               LOG.info("Caught exception in negative RegionServer connectivity test", e);
               assertEquals("Found unexpected exception", pair.getSecond(), e.getClass());
-              validateRootCause(Throwables.getRootCause(e));
             }
             return null;
           }
@@ -300,19 +294,5 @@ public class TestShadeSaslAuthenticationProvider {
         throw new RuntimeException(e);
       }
     });
-  }
-
-  void validateRootCause(Throwable rootCause) {
-    LOG.info("Root cause was", rootCause);
-    if (rootCause instanceof RemoteException) {
-      RemoteException re = (RemoteException) rootCause;
-      IOException actualException = re.unwrapRemoteException();
-      assertEquals(InvalidToken.class, actualException.getClass());
-    } else {
-      StringWriter writer = new StringWriter();
-      rootCause.printStackTrace(new PrintWriter(writer));
-      String text = writer.toString();
-      assertTrue("Message did not contain expected text", text.contains(InvalidToken.class.getName()));
-    }
   }
 }

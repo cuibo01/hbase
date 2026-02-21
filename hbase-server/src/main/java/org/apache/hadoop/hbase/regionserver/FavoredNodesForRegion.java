@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,27 +19,24 @@ package org.apache.hadoop.hbase.regionserver;
 
 import java.net.InetSocketAddress;
 import java.util.List;
-
-import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.ServerName;
 import org.apache.yetus.audience.InterfaceAudience;
 
+import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.ServerName;
+
 /**
- * Abstraction that allows different modules in RegionServer to update/get
- * the favored nodes information for regions. 
+ * Abstraction that allows different modules in RegionServer to update/get the favored nodes
+ * information for regions.
  */
 @InterfaceAudience.Private
 public interface FavoredNodesForRegion {
   /**
    * Used to update the favored nodes mapping when required.
-   * @param encodedRegionName
-   * @param favoredNodes
    */
   void updateRegionFavoredNodesMapping(String encodedRegionName, List<ServerName> favoredNodes);
 
   /**
-   * Get the favored nodes mapping for this region. Used when the HDFS create API
-   * is invoked to pass in favored nodes hints for new region files.
-   * @param encodedRegionName
+   * Get the favored nodes mapping for this region. Used when the HDFS create API is invoked to pass
+   * in favored nodes hints for new region files.
    * @return array containing the favored nodes' InetSocketAddresses
    */
   InetSocketAddress[] getFavoredNodesForRegion(String encodedRegionName);

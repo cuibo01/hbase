@@ -19,14 +19,17 @@ package org.apache.hadoop.hbase.regionserver;
 
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -38,6 +41,7 @@ import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.regionserver.wal.AbstractFSWAL;
 import org.apache.hadoop.hbase.regionserver.wal.FSHLog;
 import org.apache.hadoop.hbase.regionserver.wal.FailedLogCloseException;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
@@ -54,32 +58,31 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
-import org.mockito.Mockito;
 import org.mockito.exceptions.verification.WantedButNotInvoked;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Testing sync/append failures.
- * Copied from TestHRegion.
+ * Testing sync/append failures. Copied from TestHRegion.
  */
-@Category({SmallTests.class})
+@Category({ SmallTests.class })
 public class TestFailedAppendAndSync {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestFailedAppendAndSync.class);
+    HBaseClassTestRule.forClass(TestFailedAppendAndSync.class);
 
   private static final Logger LOG = LoggerFactory.getLogger(TestFailedAppendAndSync.class);
-  @Rule public TestName name = new TestName();
+  @Rule
+  public TestName name = new TestName();
 
   private static final String COLUMN_FAMILY = "MyCF";
-  private static final byte [] COLUMN_FAMILY_BYTES = Bytes.toBytes(COLUMN_FAMILY);
+  private static final byte[] COLUMN_FAMILY_BYTES = Bytes.toBytes(COLUMN_FAMILY);
 
   HRegion region = null;
-  // Do not run unit tests in parallel (? Why not?  It don't work?  Why not?  St.Ack)
+  // Do not run unit tests in parallel (? Why not? It don't work? Why not? St.Ack)
   private static HBaseTestingUtil TEST_UTIL;
-  public static Configuration CONF ;
+  public static Configuration CONF;
   private String dir;
 
   // Test names
@@ -91,6 +94,7 @@ public class TestFailedAppendAndSync {
     CONF = TEST_UTIL.getConfiguration();
     // Disable block cache.
     CONF.setFloat(HConstants.HFILE_BLOCK_CACHE_SIZE_KEY, 0f);
+    CONF.setLong(AbstractFSWAL.WAL_SYNC_TIMEOUT_MS, 10000);
     dir = TEST_UTIL.getDataTestDir("TestHRegion").toString();
     tableName = TableName.valueOf(name.getMethodName());
   }
@@ -115,13 +119,13 @@ public class TestFailedAppendAndSync {
     final AtomicLong rolls = new AtomicLong(0);
 
     public DodgyFSLog(FileSystem fs, Server server, Path root, String logDir, Configuration conf)
-        throws IOException {
+      throws IOException {
       super(fs, server, root, logDir, conf);
     }
 
     @Override
     public Map<byte[], List<byte[]>> rollWriter(boolean force)
-        throws FailedLogCloseException, IOException {
+      throws FailedLogCloseException, IOException {
       Map<byte[], List<byte[]>> regions = super.rollWriter(force);
       rolls.getAndIncrement();
       return regions;
@@ -140,8 +144,8 @@ public class TestFailedAppendAndSync {
     }
 
     @Override
-    protected Writer createWriterInstance(Path path) throws IOException {
-      final Writer w = super.createWriterInstance(path);
+    protected Writer createWriterInstance(FileSystem fs, Path path) throws IOException {
+      final Writer w = super.createWriterInstance(fs, path);
       return new Writer() {
         @Override
         public void close() throws IOException {
@@ -176,11 +180,11 @@ public class TestFailedAppendAndSync {
       };
     }
   }
+
   /**
-   * Reproduce locking up that happens when we get an exceptions appending and syncing.
-   * See HBASE-14317.
-   * First I need to set up some mocks for Server and RegionServerServices. I also need to
-   * set up a dodgy WAL that will throw an exception when we go to append to it.
+   * Reproduce locking up that happens when we get an exceptions appending and syncing. See
+   * HBASE-14317. First I need to set up some mocks for Server and RegionServerServices. I also need
+   * to set up a dodgy WAL that will throw an exception when we go to append to it.
    */
   @Test
   public void testLockupAroundBadAssignSync() throws IOException {
@@ -193,7 +197,8 @@ public class TestFailedAppendAndSync {
     // the test.
     FileSystem fs = FileSystem.get(CONF);
     Path rootDir = new Path(dir + getName());
-    DodgyFSLog dodgyWAL = new DodgyFSLog(fs, (Server)services, rootDir, getName(), CONF);
+    fs.mkdirs(new Path(rootDir, getName()));
+    DodgyFSLog dodgyWAL = new DodgyFSLog(fs, (Server) services, rootDir, getName(), CONF);
     dodgyWAL.init();
     LogRoller logRoller = new LogRoller(services);
     logRoller.addWAL(dodgyWAL);
@@ -250,30 +255,22 @@ public class TestFailedAppendAndSync {
       // to just continue.
 
       // So, should be no abort at this stage. Verify.
-      Mockito.verify(services, Mockito.atLeast(0)).abort(Mockito.anyString(),
-        Mockito.any(Throwable.class));
+      verify(services, atLeast(0)).abort(anyString(), any(Throwable.class));
       try {
         dodgyWAL.throwAppendException = false;
         dodgyWAL.throwSyncException = true;
         Put put = new Put(value);
         put.addColumn(COLUMN_FAMILY_BYTES, Bytes.toBytes("2"), value);
+        region.rsServices = services;
         region.put(put);
       } catch (IOException ioe) {
         threwOnSync = true;
       }
-      // An append in the WAL but the sync failed is a server abort condition. That is our
-      // current semantic. Verify. It takes a while for abort to be called. Just hang here till it
-      // happens. If it don't we'll timeout the whole test. That is fine.
-      while (true) {
-        try {
-          Mockito.verify(services, Mockito.atLeast(1)).abort(Mockito.anyString(),
-            Mockito.any(Throwable.class));
-          break;
-        } catch (WantedButNotInvoked t) {
-          Threads.sleep(1);
-        }
-      }
 
+      region.rsServices = null;
+      // An append in the WAL but the sync failed is a server abort condition. That is our
+      // current semantic. Verify.
+      verify(services, atLeast(1)).abort(anyString(), any());
       try {
         dodgyWAL.throwAppendException = false;
         dodgyWAL.throwSyncException = false;
@@ -287,8 +284,7 @@ public class TestFailedAppendAndSync {
       while (true) {
         try {
           // one more abort needs to be called
-          Mockito.verify(services, Mockito.atLeast(2)).abort(Mockito.anyString(),
-            (Throwable) Mockito.anyObject());
+          verify(services, atLeast(2)).abort(anyString(), any());
           break;
         } catch (WantedButNotInvoked t) {
           Threads.sleep(1);
@@ -296,7 +292,7 @@ public class TestFailedAppendAndSync {
       }
     } finally {
       // To stop logRoller, its server has to say it is stopped.
-      Mockito.when(services.isStopped()).thenReturn(true);
+      when(services.isStopped()).thenReturn(true);
       if (logRoller != null) logRoller.close();
       if (region != null) {
         try {
@@ -313,13 +309,13 @@ public class TestFailedAppendAndSync {
   }
 
   /**
-   * @return A region on which you must call
-   *         {@link HBaseTestingUtil#closeRegionAndWAL(HRegion)} when done.
+   * @return A region on which you must call {@link HBaseTestingUtil#closeRegionAndWAL(HRegion)}
+   *         when done.
    */
   public static HRegion initHRegion(TableName tableName, byte[] startKey, byte[] stopKey,
-      Configuration conf, WAL wal) throws IOException {
-    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0,
-      0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
+    Configuration conf, WAL wal) throws IOException {
+    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null,
+      MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
     return TEST_UTIL.createLocalHRegion(tableName, startKey, stopKey, conf, false,
       Durability.SYNC_WAL, wal, COLUMN_FAMILY_BYTES);
   }

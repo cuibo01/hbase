@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -32,7 +32,9 @@ import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
+import org.apache.hadoop.hbase.regionserver.ChunkCreator;
 import org.apache.hadoop.hbase.regionserver.HRegion;
+import org.apache.hadoop.hbase.regionserver.MemStoreLAB;
 import org.apache.hadoop.hbase.regionserver.RegionCoprocessorHost;
 import org.apache.hadoop.hbase.regionserver.RegionServerServices;
 import org.apache.hadoop.hbase.testclassification.CoprocessorTests;
@@ -47,17 +49,18 @@ import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 
 /**
- * Test CoreCoprocessor Annotation works giving access to facility not usually available.
- * Test RegionCoprocessor.
+ * Test CoreCoprocessor Annotation works giving access to facility not usually available. Test
+ * RegionCoprocessor.
  */
-@Category({CoprocessorTests.class, SmallTests.class})
+@Category({ CoprocessorTests.class, SmallTests.class })
 public class TestCoreRegionCoprocessor {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCoreRegionCoprocessor.class);
+    HBaseClassTestRule.forClass(TestCoreRegionCoprocessor.class);
 
-  @Rule public TestName name = new TestName();
+  @Rule
+  public TestName name = new TestName();
   HBaseTestingUtil HTU = new HBaseTestingUtil();
   private HRegion region = null;
   private RegionServerServices rss;
@@ -66,16 +69,21 @@ public class TestCoreRegionCoprocessor {
   public void before() throws IOException {
     String methodName = this.name.getMethodName();
     TableName tn = TableName.valueOf(methodName);
-    ColumnFamilyDescriptor cfd = ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes(methodName)).build();
+    ColumnFamilyDescriptor cfd =
+      ColumnFamilyDescriptorBuilder.newBuilder(Bytes.toBytes(methodName)).build();
     TableDescriptor td = TableDescriptorBuilder.newBuilder(tn).setColumnFamily(cfd).build();
     RegionInfo ri = RegionInfoBuilder.newBuilder(tn).build();
     this.rss = new MockRegionServerServices(HTU.getConfiguration());
+    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null,
+      MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
+    HTU.createRegionDir(ri);
     this.region = HRegion.openHRegion(ri, td, null, HTU.getConfiguration(), this.rss, null);
   }
 
   @After
   public void after() throws IOException {
     this.region.close();
+    HTU.cleanupTestDir();
   }
 
   /**
@@ -83,7 +91,8 @@ public class TestCoreRegionCoprocessor {
    * RegionServerServices instance after some gymnastics.
    */
   public static class NotCoreRegionCoprocessor implements RegionCoprocessor {
-    public NotCoreRegionCoprocessor() {}
+    public NotCoreRegionCoprocessor() {
+    }
   }
 
   /**
@@ -92,23 +101,22 @@ public class TestCoreRegionCoprocessor {
    */
   @org.apache.hadoop.hbase.coprocessor.CoreCoprocessor
   public static class CoreRegionCoprocessor implements RegionCoprocessor {
-    public CoreRegionCoprocessor() {}
+    public CoreRegionCoprocessor() {
+    }
   }
 
   /**
-   * Assert that when a Coprocessor is annotated with CoreCoprocessor, then it is possible to
-   * access a RegionServerServices instance. Assert the opposite too.
-   * Do it to RegionCoprocessors.
-   * @throws IOException
+   * Assert that when a Coprocessor is annotated with CoreCoprocessor, then it is possible to access
+   * a RegionServerServices instance. Assert the opposite too. Do it to RegionCoprocessors.
    */
   @Test
   public void testCoreRegionCoprocessor() throws IOException {
     RegionCoprocessorHost rch = region.getCoprocessorHost();
     RegionCoprocessorEnvironment env =
-        rch.load(null, NotCoreRegionCoprocessor.class.getName(), 0, HTU.getConfiguration());
+      rch.load(null, NotCoreRegionCoprocessor.class.getName(), 0, HTU.getConfiguration());
     assertFalse(env instanceof HasRegionServerServices);
     env = rch.load(null, CoreRegionCoprocessor.class.getName(), 1, HTU.getConfiguration());
     assertTrue(env instanceof HasRegionServerServices);
-    assertEquals(this.rss, ((HasRegionServerServices)env).getRegionServerServices());
+    assertEquals(this.rss, ((HasRegionServerServices) env).getRegionServerServices());
   }
 }

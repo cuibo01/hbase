@@ -65,7 +65,7 @@ public class TestZKConnectionRegistry {
   public static void setUp() throws Exception {
     TEST_UTIL.startMiniCluster(3);
     HBaseTestingUtil.setReplicas(TEST_UTIL.getAdmin(), TableName.META_TABLE_NAME, 3);
-    REGISTRY = new ZKConnectionRegistry(TEST_UTIL.getConfiguration());
+    REGISTRY = new ZKConnectionRegistry(TEST_UTIL.getConfiguration(), null);
   }
 
   @AfterClass
@@ -83,8 +83,7 @@ public class TestZKConnectionRegistry {
       clusterId);
     assertEquals(TEST_UTIL.getHBaseCluster().getMaster().getServerName(),
       REGISTRY.getActiveMaster().get());
-    RegionReplicaTestHelper
-      .waitUntilAllMetaReplicasAreReady(TEST_UTIL, REGISTRY);
+    RegionReplicaTestHelper.waitUntilAllMetaReplicasAreReady(TEST_UTIL, REGISTRY);
     RegionLocations locs = REGISTRY.getMetaRegionLocations().get();
     assertEquals(3, locs.getRegionLocations().length);
     IntStream.range(0, 3).forEach(i -> {
@@ -100,10 +99,10 @@ public class TestZKConnectionRegistry {
     try (ReadOnlyZKClient zk1 = REGISTRY.getZKClient()) {
       Configuration otherConf = new Configuration(TEST_UTIL.getConfiguration());
       otherConf.set(HConstants.ZOOKEEPER_QUORUM, MiniZooKeeperCluster.HOST);
-      try (ZKConnectionRegistry otherRegistry = new ZKConnectionRegistry(otherConf)) {
+      try (ZKConnectionRegistry otherRegistry = new ZKConnectionRegistry(otherConf, null)) {
         ReadOnlyZKClient zk2 = otherRegistry.getZKClient();
-        assertNotSame("Using a different configuration / quorum should result in different " +
-          "backing zk connection.", zk1, zk2);
+        assertNotSame("Using a different configuration / quorum should result in different "
+          + "backing zk connection.", zk1, zk2);
         assertNotEquals(
           "Using a different configrution / quorum should be reflected in the zk connection.",
           zk1.getConnectString(), zk2.getConnectString());
@@ -117,7 +116,7 @@ public class TestZKConnectionRegistry {
   public void testNoMetaAvailable() throws InterruptedException {
     Configuration conf = new Configuration(TEST_UTIL.getConfiguration());
     conf.set("zookeeper.znode.metaserver", "whatever");
-    try (ZKConnectionRegistry registry = new ZKConnectionRegistry(conf)) {
+    try (ZKConnectionRegistry registry = new ZKConnectionRegistry(conf, null)) {
       try {
         registry.getMetaRegionLocations().get();
         fail("Should have failed since we set an incorrect meta znode prefix");

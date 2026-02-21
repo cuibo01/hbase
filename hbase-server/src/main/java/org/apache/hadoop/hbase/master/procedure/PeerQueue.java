@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hbase.master.procedure;
 
+import org.apache.commons.lang3.builder.ToStringBuilder;
+import org.apache.commons.lang3.builder.ToStringStyle;
 import org.apache.hadoop.hbase.master.procedure.PeerProcedureInterface.PeerOperationType;
 import org.apache.hadoop.hbase.procedure2.LockStatus;
 import org.apache.hadoop.hbase.procedure2.Procedure;
@@ -37,9 +39,15 @@ class PeerQueue extends Queue<String> {
   private static boolean requirePeerExclusiveLock(PeerProcedureInterface proc) {
     // These procedures will only be used as sub procedures, and if they are scheduled, it always
     // means that the root procedure holds the xlock, so we do not need to hold any locks.
-    return proc.getPeerOperationType() != PeerOperationType.REFRESH &&
-      proc.getPeerOperationType() != PeerOperationType.RECOVER_STANDBY &&
-      proc.getPeerOperationType() != PeerOperationType.SYNC_REPLICATION_REPLAY_WAL &&
-      proc.getPeerOperationType() != PeerOperationType.SYNC_REPLICATION_REPLAY_WAL_REMOTE;
+    return proc.getPeerOperationType() != PeerOperationType.REFRESH
+      && proc.getPeerOperationType() != PeerOperationType.RECOVER_STANDBY
+      && proc.getPeerOperationType() != PeerOperationType.SYNC_REPLICATION_REPLAY_WAL
+      && proc.getPeerOperationType() != PeerOperationType.SYNC_REPLICATION_REPLAY_WAL_REMOTE;
+  }
+
+  @Override
+  public String toString() {
+    return new ToStringBuilder(this, ToStringStyle.SHORT_PREFIX_STYLE).appendSuper(super.toString())
+      .build();
   }
 }

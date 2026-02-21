@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,10 +19,10 @@ package org.apache.hadoop.hbase.ipc;
 
 import io.opentelemetry.api.trace.Span;
 import java.io.IOException;
-import java.util.Optional;
+import java.util.Map;
 import org.apache.commons.lang3.builder.ToStringBuilder;
 import org.apache.commons.lang3.builder.ToStringStyle;
-import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.ExtendedCellScanner;
 import org.apache.hadoop.hbase.client.MetricsConnection;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -33,6 +33,7 @@ import org.apache.hbase.thirdparty.com.google.protobuf.RpcCallback;
 import org.apache.hbase.thirdparty.io.netty.util.Timeout;
 
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.RegistryProtos.ConnectionRegistryService;
 
 /** A call waiting for a value. */
 @InterfaceAudience.Private
@@ -43,27 +44,29 @@ class Call {
    * Optionally has cells when making call. Optionally has cells set on response. Used passing cells
    * to the rpc and receiving the response.
    */
-  CellScanner cells;
+  ExtendedCellScanner cells;
   @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "IS2_INCONSISTENT_SYNC",
       justification = "Direct access is only allowed after done")
   Message response; // value, null if error
   // The return type. Used to create shell into which we deserialize the response if any.
   Message responseDefaultType;
   @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "IS2_INCONSISTENT_SYNC",
-    justification = "Direct access is only allowed after done")
+      justification = "Direct access is only allowed after done")
   IOException error; // exception, null if value
   private boolean done; // true when call is done
   final Descriptors.MethodDescriptor md;
   final int timeout; // timeout in millisecond for this call; 0 means infinite.
   final int priority;
+  final Map<String, byte[]> attributes;
   final MetricsConnection.CallStats callStats;
   private final RpcCallback<Call> callback;
   final Span span;
   Timeout timeoutTask;
 
   Call(int id, final Descriptors.MethodDescriptor md, Message param,
-      final CellScanner cells, final Message responseDefaultType, int timeout, int priority,
-      RpcCallback<Call> callback, MetricsConnection.CallStats callStats) {
+    final ExtendedCellScanner cells, final Message responseDefaultType, int timeout, int priority,
+    Map<String, byte[]> attributes, RpcCallback<Call> callback,
+    MetricsConnection.CallStats callStats) {
     this.param = param;
     this.md = md;
     this.cells = cells;
@@ -73,6 +76,7 @@ class Call {
     this.id = id;
     this.timeout = timeout;
     this.priority = priority;
+    this.attributes = attributes;
     this.callback = callback;
     this.span = Span.current();
   }
@@ -81,21 +85,15 @@ class Call {
    * Builds a simplified {@link #toString()} that includes just the id and method name.
    */
   public String toShortString() {
-    return new ToStringBuilder(this, ToStringStyle.SHORT_PREFIX_STYLE)
-      .append("id", id)
-      .append("methodName", md.getName())
-      .toString();
+    // Call[id=32153218,methodName=Get]
+    return new ToStringBuilder(this, ToStringStyle.SHORT_PREFIX_STYLE).append("id", id)
+      .append("methodName", md != null ? md.getName() : "").toString();
   }
 
   @Override
   public String toString() {
-    // Call[id=32153218,methodName=Get]
-    return new ToStringBuilder(this, ToStringStyle.SHORT_PREFIX_STYLE)
-      .appendSuper(toShortString())
-      .append("param", Optional.ofNullable(param)
-        .map(ProtobufUtil::getShortTextFormat)
-        .orElse(""))
-      .toString();
+    return new ToStringBuilder(this, ToStringStyle.SHORT_PREFIX_STYLE).appendSuper(toShortString())
+      .append("param", param != null ? ProtobufUtil.getShortTextFormat(param) : "").toString();
   }
 
   /**
@@ -137,9 +135,9 @@ class Call {
   /**
    * Set the return value when there is no error. Notify the caller the call is done.
    * @param response return value of the call.
-   * @param cells Can be null
+   * @param cells    Can be null
    */
-  public void setResponse(Message response, final CellScanner cells) {
+  public void setResponse(Message response, final ExtendedCellScanner cells) {
     synchronized (this) {
       if (done) {
         return;
@@ -157,5 +155,9 @@ class Call {
 
   public long getStartTime() {
     return this.callStats.getStartTime();
+  }
+
+  public boolean isConnectionRegistryCall() {
+    return md.getService().equals(ConnectionRegistryService.getDescriptor());
   }
 }

@@ -1,5 +1,4 @@
-/**
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,7 +17,6 @@
  */
 package org.apache.hadoop.hbase.client;
 
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -29,37 +27,37 @@ import java.util.NavigableSet;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
-
+import java.util.stream.Collectors;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.io.TimeRange;
 import org.apache.hadoop.hbase.security.access.Permission;
 import org.apache.hadoop.hbase.security.visibility.Authorizations;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Used to perform Get operations on a single row.
  * <p>
- * To get everything for a row, instantiate a Get object with the row to get.
- * To further narrow the scope of what to Get, use the methods below.
+ * To get everything for a row, instantiate a Get object with the row to get. To further narrow the
+ * scope of what to Get, use the methods below.
  * <p>
- * To get all columns from specific families, execute {@link #addFamily(byte[]) addFamily}
- * for each family to retrieve.
+ * To get all columns from specific families, execute {@link #addFamily(byte[]) addFamily} for each
+ * family to retrieve.
  * <p>
- * To get specific columns, execute {@link #addColumn(byte[], byte[]) addColumn}
- * for each column to retrieve.
+ * To get specific columns, execute {@link #addColumn(byte[], byte[]) addColumn} for each column to
+ * retrieve.
  * <p>
- * To only retrieve columns within a specific range of version timestamps,
- * execute {@link #setTimeRange(long, long) setTimeRange}.
+ * To only retrieve columns within a specific range of version timestamps, execute
+ * {@link #setTimeRange(long, long) setTimeRange}.
  * <p>
- * To only retrieve columns with a specific timestamp, execute
- * {@link #setTimestamp(long) setTimestamp}.
+ * To only retrieve columns with a specific timestamp, execute {@link #setTimestamp(long)
+ * setTimestamp}.
  * <p>
- * To limit the number of versions of each column to be returned, execute
- * {@link #readVersions(int) readVersions}.
+ * To limit the number of versions of each column to be returned, execute {@link #readVersions(int)
+ * readVersions}.
  * <p>
  * To add a filter, call {@link #setFilter(Filter) setFilter}.
  */
@@ -67,31 +65,29 @@ import org.apache.hadoop.hbase.util.Bytes;
 public class Get extends Query implements Row {
   private static final Logger LOG = LoggerFactory.getLogger(Get.class);
 
-  private byte [] row = null;
+  private byte[] row = null;
   private int maxVersions = 1;
   private boolean cacheBlocks = true;
   private int storeLimit = -1;
   private int storeOffset = 0;
   private TimeRange tr = TimeRange.allTime();
   private boolean checkExistenceOnly = false;
-  private Map<byte [], NavigableSet<byte []>> familyMap = new TreeMap<>(Bytes.BYTES_COMPARATOR);
+  private Map<byte[], NavigableSet<byte[]>> familyMap = new TreeMap<>(Bytes.BYTES_COMPARATOR);
 
   /**
    * Create a Get operation for the specified row.
    * <p>
-   * If no further operations are done, this will get the latest version of
-   * all columns in all families of the specified row.
+   * If no further operations are done, this will get the latest version of all columns in all
+   * families of the specified row.
    * @param row row key
    */
-  public Get(byte [] row) {
+  public Get(byte[] row) {
     Mutation.checkRow(row);
     this.row = row;
   }
 
   /**
    * Copy-constructor
-   *
-   * @param get
    */
   public Get(Get get) {
     this(get.getRow());
@@ -99,6 +95,7 @@ public class Get extends Query implements Row {
     this.setFilter(get.getFilter());
     this.setReplicaId(get.getReplicaId());
     this.setConsistency(get.getConsistency());
+    this.setQueryMetricsEnabled(get.isQueryMetricsEnabled());
     // from Get
     this.cacheBlocks = get.getCacheBlocks();
     this.maxVersions = get.getMaxVersions();
@@ -108,8 +105,8 @@ public class Get extends Query implements Row {
     this.checkExistenceOnly = get.isCheckExistenceOnly();
     this.loadColumnFamiliesOnDemand = get.getLoadColumnFamiliesOnDemandValue();
     Map<byte[], NavigableSet<byte[]>> fams = get.getFamilyMap();
-    for (Map.Entry<byte[],NavigableSet<byte[]>> entry : fams.entrySet()) {
-      byte [] fam = entry.getKey();
+    for (Map.Entry<byte[], NavigableSet<byte[]>> entry : fams.entrySet()) {
+      byte[] fam = entry.getKey();
       NavigableSet<byte[]> cols = entry.getValue();
       if (cols != null && cols.size() > 0) {
         for (byte[] col : cols) {
@@ -131,9 +128,6 @@ public class Get extends Query implements Row {
 
   /**
    * Create a Get operation for the specified row.
-   * @param row
-   * @param rowOffset
-   * @param rowLength
    */
   public Get(byte[] row, int rowOffset, int rowLength) {
     Mutation.checkRow(row, rowOffset, rowLength);
@@ -142,7 +136,6 @@ public class Get extends Query implements Row {
 
   /**
    * Create a Get operation for the specified row.
-   * @param row
    */
   public Get(ByteBuffer row) {
     Mutation.checkRow(row);
@@ -166,7 +159,7 @@ public class Get extends Query implements Row {
    * @param family family name
    * @return the Get object
    */
-  public Get addFamily(byte [] family) {
+  public Get addFamily(byte[] family) {
     familyMap.remove(family);
     familyMap.put(family, null);
     return this;
@@ -176,13 +169,13 @@ public class Get extends Query implements Row {
    * Get the column from the specific family with the specified qualifier.
    * <p>
    * Overrides previous calls to addFamily for this family.
-   * @param family family name
+   * @param family    family name
    * @param qualifier column qualifier
    * @return the Get objec
    */
-  public Get addColumn(byte [] family, byte [] qualifier) {
-    NavigableSet<byte []> set = familyMap.get(family);
-    if(set == null) {
+  public Get addColumn(byte[] family, byte[] qualifier) {
+    NavigableSet<byte[]> set = familyMap.get(family);
+    if (set == null) {
       set = new TreeSet<>(Bytes.BYTES_COMPARATOR);
       familyMap.put(family, set);
     }
@@ -194,8 +187,7 @@ public class Get extends Query implements Row {
   }
 
   /**
-   * Get versions of columns only within the specified timestamp range,
-   * [minStamp, maxStamp).
+   * Get versions of columns only within the specified timestamp range, [minStamp, maxStamp).
    * @param minStamp minimum timestamp value, inclusive
    * @param maxStamp maximum timestamp value, exclusive
    * @return this for invocation chaining
@@ -213,7 +205,7 @@ public class Get extends Query implements Row {
   public Get setTimestamp(long timestamp) {
     try {
       tr = TimeRange.at(timestamp);
-    } catch(Exception e) {
+    } catch (Exception e) {
       // This should never happen, unless integer overflow or something extremely wrong...
       LOG.error("TimeRange failed, likely caused by integer overflow. ", e);
       throw e;
@@ -223,7 +215,8 @@ public class Get extends Query implements Row {
 
   @Override
   public Get setColumnFamilyTimeRange(byte[] cf, long minStamp, long maxStamp) {
-    return (Get) super.setColumnFamilyTimeRange(cf, minStamp, maxStamp);
+    super.setColumnFamilyTimeRange(cf, minStamp, maxStamp);
+    return this;
   }
 
   /**
@@ -251,7 +244,8 @@ public class Get extends Query implements Row {
 
   @Override
   public Get setLoadColumnFamiliesOnDemand(boolean value) {
-    return (Get) super.setLoadColumnFamiliesOnDemand(value);
+    super.setLoadColumnFamiliesOnDemand(value);
+    return this;
   }
 
   /**
@@ -286,12 +280,9 @@ public class Get extends Query implements Row {
   /**
    * Set whether blocks should be cached for this Get.
    * <p>
-   * This is true by default.  When true, default settings of the table and
-   * family are used (this will never override caching blocks if the block
-   * cache is disabled for that family or entirely).
-   *
-   * @param cacheBlocks if false, default settings are overridden and blocks
-   * will not be cached
+   * This is true by default. When true, default settings of the table and family are used (this
+   * will never override caching blocks if the block cache is disabled for that family or entirely).
+   * @param cacheBlocks if false, default settings are overridden and blocks will not be cached
    */
   public Get setCacheBlocks(boolean cacheBlocks) {
     this.cacheBlocks = cacheBlocks;
@@ -300,8 +291,7 @@ public class Get extends Query implements Row {
 
   /**
    * Get whether blocks should be cached for this Get.
-   * @return true if default caching should be used, false if blocks should not
-   * be cached
+   * @return true if default caching should be used, false if blocks should not be cached
    */
   public boolean getCacheBlocks() {
     return cacheBlocks;
@@ -309,10 +299,9 @@ public class Get extends Query implements Row {
 
   /**
    * Method for retrieving the get's row
-   * @return row
    */
   @Override
-  public byte [] getRow() {
+  public byte[] getRow() {
     return this.row;
   }
 
@@ -325,8 +314,7 @@ public class Get extends Query implements Row {
   }
 
   /**
-   * Method for retrieving the get's maximum number of values
-   * to return per Column Family
+   * Method for retrieving the get's maximum number of values to return per Column Family
    * @return the maximum number of values to fetch per CF
    */
   public int getMaxResultsPerColumnFamily() {
@@ -334,8 +322,7 @@ public class Get extends Query implements Row {
   }
 
   /**
-   * Method for retrieving the get's offset per row per column
-   * family (#kvs to be skipped)
+   * Method for retrieving the get's offset per row per column family (#kvs to be skipped)
    * @return the row offset
    */
   public int getRowOffsetPerColumnFamily() {
@@ -344,7 +331,6 @@ public class Get extends Query implements Row {
 
   /**
    * Method for retrieving the get's TimeRange
-   * @return timeRange
    */
   public TimeRange getTimeRange() {
     return this.tr;
@@ -376,36 +362,31 @@ public class Get extends Query implements Row {
 
   /**
    * Method for retrieving the get's familyMap
-   * @return familyMap
    */
-  public Map<byte[],NavigableSet<byte[]>> getFamilyMap() {
+  public Map<byte[], NavigableSet<byte[]>> getFamilyMap() {
     return this.familyMap;
   }
 
   /**
-   * Compile the table and column family (i.e. schema) information
-   * into a String. Useful for parsing and aggregation by debugging,
-   * logging, and administration tools.
-   * @return Map
+   * Compile the table and column family (i.e. schema) information into a String. Useful for parsing
+   * and aggregation by debugging, logging, and administration tools.
    */
   @Override
   public Map<String, Object> getFingerprint() {
     Map<String, Object> map = new HashMap<>();
     List<String> families = new ArrayList<>(this.familyMap.entrySet().size());
     map.put("families", families);
-    for (Map.Entry<byte [], NavigableSet<byte[]>> entry :
-      this.familyMap.entrySet()) {
+    for (Map.Entry<byte[], NavigableSet<byte[]>> entry : this.familyMap.entrySet()) {
       families.add(Bytes.toStringBinary(entry.getKey()));
     }
     return map;
   }
 
   /**
-   * Compile the details beyond the scope of getFingerprint (row, columns,
-   * timestamps, etc.) into a Map along with the fingerprinted information.
-   * Useful for debugging, logging, and administration tools.
+   * Compile the details beyond the scope of getFingerprint (row, columns, timestamps, etc.) into a
+   * Map along with the fingerprinted information. Useful for debugging, logging, and administration
+   * tools.
    * @param maxCols a limit on the number of columns output prior to truncation
-   * @return Map
    */
   @Override
   public Map<String, Object> toMap(int maxCols) {
@@ -425,11 +406,10 @@ public class Get extends Query implements Row {
     map.put("timeRange", timeRange);
     int colCount = 0;
     // iterate through affected families and add details
-    for (Map.Entry<byte [], NavigableSet<byte[]>> entry :
-      this.familyMap.entrySet()) {
+    for (Map.Entry<byte[], NavigableSet<byte[]>> entry : this.familyMap.entrySet()) {
       List<String> familyList = new ArrayList<>();
       columns.put(Bytes.toStringBinary(entry.getKey()), familyList);
-      if(entry.getValue() == null) {
+      if (entry.getValue() == null) {
         colCount++;
         --maxCols;
         familyList.add("ALL");
@@ -438,7 +418,7 @@ public class Get extends Query implements Row {
         if (maxCols <= 0) {
           continue;
         }
-        for (byte [] column : entry.getValue()) {
+        for (byte[] column : entry.getValue()) {
           if (--maxCols <= 0) {
             continue;
           }
@@ -454,12 +434,33 @@ public class Get extends Query implements Row {
     if (getId() != null) {
       map.put("id", getId());
     }
+    map.put("storeLimit", this.storeLimit);
+    map.put("storeOffset", this.storeOffset);
+    map.put("checkExistenceOnly", this.checkExistenceOnly);
+
+    map.put("targetReplicaId", this.targetReplicaId);
+    map.put("consistency", this.consistency);
+    map.put("loadColumnFamiliesOnDemand", this.loadColumnFamiliesOnDemand);
+    if (!colFamTimeRangeMap.isEmpty()) {
+      Map<String, List<Long>> colFamTimeRangeMapStr = colFamTimeRangeMap.entrySet().stream()
+        .collect(Collectors.toMap((e) -> Bytes.toStringBinary(e.getKey()), e -> {
+          TimeRange value = e.getValue();
+          List<Long> rangeList = new ArrayList<>();
+          rangeList.add(value.getMin());
+          rangeList.add(value.getMax());
+          return rangeList;
+        }));
+
+      map.put("colFamTimeRangeMap", colFamTimeRangeMapStr);
+    }
+    map.put("priority", getPriority());
+    map.put("queryMetricsEnabled", queryMetricsEnabled);
     return map;
   }
 
   @Override
   public int hashCode() {
-    // TODO: This is wrong.  Can't have two gets the same just because on same row.  But it
+    // TODO: This is wrong. Can't have two gets the same just because on same row. But it
     // matches how equals works currently and gets rid of the findbugs warning.
     return Bytes.hashCode(this.getRow());
   }
@@ -469,56 +470,65 @@ public class Get extends Query implements Row {
     if (this == obj) {
       return true;
     }
-    if (obj == null || getClass() != obj.getClass()) {
+    if (!(obj instanceof Row)) {
       return false;
     }
     Row other = (Row) obj;
-    // TODO: This is wrong.  Can't have two gets the same just because on same row.
+    // TODO: This is wrong. Can't have two gets the same just because on same row.
     return Row.COMPARATOR.compare(this, other) == 0;
   }
 
   @Override
   public Get setAttribute(String name, byte[] value) {
-    return (Get) super.setAttribute(name, value);
+    super.setAttribute(name, value);
+    return this;
   }
 
   @Override
   public Get setId(String id) {
-    return (Get) super.setId(id);
+    super.setId(id);
+    return this;
   }
 
   @Override
   public Get setAuthorizations(Authorizations authorizations) {
-    return (Get) super.setAuthorizations(authorizations);
+    super.setAuthorizations(authorizations);
+    return this;
   }
 
   @Override
   public Get setACL(Map<String, Permission> perms) {
-    return (Get) super.setACL(perms);
+    super.setACL(perms);
+    return this;
   }
 
   @Override
   public Get setACL(String user, Permission perms) {
-    return (Get) super.setACL(user, perms);
+    super.setACL(user, perms);
+    return this;
   }
 
   @Override
   public Get setConsistency(Consistency consistency) {
-    return (Get) super.setConsistency(consistency);
+    super.setConsistency(consistency);
+    return this;
   }
 
   @Override
   public Get setReplicaId(int Id) {
-    return (Get) super.setReplicaId(Id);
+    super.setReplicaId(Id);
+    return this;
   }
 
   @Override
   public Get setIsolationLevel(IsolationLevel level) {
-      return (Get) super.setIsolationLevel(level);
+    super.setIsolationLevel(level);
+    return this;
   }
 
   @Override
   public Get setPriority(int priority) {
-    return (Get) super.setPriority(priority);
+    super.setPriority(priority);
+    return this;
   }
 }

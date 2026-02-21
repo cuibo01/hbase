@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,38 +18,45 @@
 package org.apache.hadoop.hbase.master.cleaner;
 
 import java.util.Map;
-
-import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Stoppable;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * General interface for cleaning files from a folder (generally an archive or
- * backup folder). These are chained via the {@link CleanerChore} to determine
- * if a given file should be deleted.
+ * General interface for cleaning files from a folder (generally an archive or backup folder). These
+ * are chained via the {@link CleanerChore} to determine if a given file should be deleted.
  */
 @InterfaceAudience.Private
 public interface FileCleanerDelegate extends Configurable, Stoppable {
 
   /**
    * Determines which of the given files are safe to delete
+   * <p>
+   * This method can be called concurrently by multiple threads. Implementations must be thread
+   * safe.
+   * </p>
    * @param files files to check for deletion
    * @return files that are ok to delete according to this cleaner
    */
   Iterable<FileStatus> getDeletableFiles(Iterable<FileStatus> files);
 
-
   /**
    * this method is used to pass some instance into subclass
-   * */
+   */
   void init(Map<String, Object> params);
 
   /**
    * Used to do some initialize work before every period clean
    */
   default void preClean() {
+  }
+
+  /**
+   * Will be called after cleaner run.
+   */
+  default void postClean() {
   }
 
   /**

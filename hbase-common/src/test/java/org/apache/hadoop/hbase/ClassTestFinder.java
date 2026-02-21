@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,20 +15,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Pattern;
-
-import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.Tag;
 import org.junit.runners.Suite;
 
 /**
- * ClassFinder that is pre-configured with filters that will only allow test classes.
- * The name is strange because a logical name would start with "Test" and be confusing.
+ * ClassFinder that is pre-configured with filters that will only allow test classes. The name is
+ * strange because a logical name would start with "Test" and be confusing.
  */
 public class ClassTestFinder extends ClassFinder {
 
@@ -48,15 +48,23 @@ public class ClassTestFinder extends ClassFinder {
     return new Class<?>[0];
   }
 
+  public static String[] getTagAnnotations(Class<?> c) {
+    // TODO handle optional Tags annotation
+    Tag[] tags = c.getAnnotationsByType(Tag.class);
+    List<String> values = new ArrayList<>();
+    for (Tag tag : tags) {
+      values.add(tag.value());
+    }
+    return values.toArray(new String[values.size()]);
+  }
+
   /** Filters both test classes and anything in the hadoop-compat modules */
   public static class TestFileNameFilter implements FileNameFilter, ResourcePathFilter {
-    private static final Pattern hadoopCompactRe =
-        Pattern.compile("hbase-hadoop\\d?-compat");
+    private static final Pattern hadoopCompactRe = Pattern.compile("hbase-hadoop\\d?-compat");
 
     @Override
     public boolean isCandidateFile(String fileName, String absFilePath) {
-      boolean isTestFile = fileName.startsWith("Test")
-          || fileName.startsWith("IntegrationTest");
+      boolean isTestFile = fileName.startsWith("Test") || fileName.startsWith("IntegrationTest");
       return isTestFile && !hadoopCompactRe.matcher(absFilePath).find();
     }
 
@@ -67,13 +75,12 @@ public class ClassTestFinder extends ClassFinder {
   }
 
   /*
-  * A class is considered as a test class if:
-   *  - it's not Abstract AND
-   *  - one or more of its methods is annotated with org.junit.Test OR
-   *  - the class is annotated with Suite.SuiteClasses
-  * */
+   * A class is considered as a test class if: - it's not Abstract AND - one or more of its methods
+   * is annotated with org.junit.Test OR - the class is annotated with Suite.SuiteClasses
+   */
   public static class TestClassFilter implements ClassFilter {
     private Class<?> categoryAnnotation = null;
+
     public TestClassFilter(Class<?> categoryAnnotation) {
       this.categoryAnnotation = categoryAnnotation;
     }
@@ -97,7 +104,10 @@ public class ClassTestFinder extends ClassFinder {
       }
 
       for (Method met : c.getMethods()) {
-        if (met.getAnnotation(Test.class) != null) {
+        if (
+          met.getAnnotation(org.junit.Test.class) != null
+            || met.getAnnotation(org.junit.jupiter.api.Test.class) != null
+        ) {
           return true;
         }
       }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,11 +18,12 @@
 package org.apache.hadoop.hbase.ipc;
 
 import java.net.InetAddress;
+import java.security.cert.X509Certificate;
 import java.util.Optional;
-
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.VersionInfo;
 import org.apache.hadoop.hbase.security.User;
+import org.apache.yetus.audience.InterfaceAudience;
+
+import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.VersionInfo;
 
 /**
  * Interface of all necessary to carry out a RPC service invocation on the server. This interface
@@ -31,19 +32,19 @@ import org.apache.hadoop.hbase.security.User;
 @InterfaceAudience.Private
 public interface RpcCallContext {
   /**
-   * Check if the caller who made this IPC call has disconnected.
-   * If called from outside the context of IPC, this does nothing.
-   * @return &lt; 0 if the caller is still connected. The time in ms
-   *  since the disconnection otherwise
+   * Check if the caller who made this IPC call has disconnected. If called from outside the context
+   * of IPC, this does nothing.
+   * @return &lt; 0 if the caller is still connected. The time in ms since the disconnection
+   *         otherwise
    */
   long disconnectSince();
 
   /**
    * If the client connected and specified a codec to use, then we will use this codec making
-   * cellblocks to return.  If the client did not specify a codec, we assume it does not support
-   * cellblocks and will return all content protobuf'd (though it makes our serving slower).
-   * We need to ask this question per call because a server could be hosting both clients that
-   * support cellblocks while fielding requests from clients that do not.
+   * cellblocks to return. If the client did not specify a codec, we assume it does not support
+   * cellblocks and will return all content protobuf'd (though it makes our serving slower). We need
+   * to ask this question per call because a server could be hosting both clients that support
+   * cellblocks while fielding requests from clients that do not.
    * @return True if the client supports cellblocks, else return all content in pb
    */
   boolean isClientCellBlockSupported();
@@ -55,53 +56,59 @@ public interface RpcCallContext {
    */
   Optional<User> getRequestUser();
 
-  /**
-   * @return Current request's user name or not present if none ongoing.
-   */
+  /** Returns Current request's user name or not present if none ongoing. */
   default Optional<String> getRequestUserName() {
     return getRequestUser().map(User::getShortName);
   }
 
   /**
-   * @return Address of remote client in this call
+   * Returns the TLS certificate(s) that the client presented to this HBase server when making its
+   * connection. TLS is orthogonal to Kerberos, so this is unrelated to
+   * {@link RpcCallContext#getRequestUser()}. Both, one, or neither may be present.
    */
+  Optional<X509Certificate[]> getClientCertificateChain();
+
+  /** Returns Address of remote client in this call */
   InetAddress getRemoteAddress();
 
-  /**
-   * @return the client version info, or null if the information is not present
-   */
+  /** Returns the client version info, or null if the information is not present */
   VersionInfo getClientVersionInfo();
 
   /**
    * Sets a callback which has to be executed at the end of this RPC call. Such a callback is an
    * optional one for any Rpc call.
-   *
-   * @param callback
    */
   void setCallBack(RpcCallback callback);
 
   boolean isRetryImmediatelySupported();
 
   /**
-   * The size of response cells that have been accumulated so far.
-   * This along with the corresponding increment call is used to ensure that multi's or
-   * scans dont get too excessively large
+   * The size of response cells that have been accumulated so far. This along with the corresponding
+   * increment call is used to ensure that multi's or scans dont get too excessively large
    */
   long getResponseCellSize();
 
   /**
-   * Add on the given amount to the retained cell size.
-   *
-   * This is not thread safe and not synchronized at all. If this is used by more than one thread
-   * then everything will break. Since this is called for every row synchronization would be too
-   * onerous.
+   * Add on the given amount to the retained cell size. This is not thread safe and not synchronized
+   * at all. If this is used by more than one thread then everything will break. Since this is
+   * called for every row synchronization would be too onerous.
    */
   void incrementResponseCellSize(long cellSize);
 
-  long getResponseBlockSize();
+  /**
+   * Get the number of block bytes scanned by the current call. In order to serve a response, 1 or
+   * more lower level blocks must be loaded (from disk or cache) and scanned for the requested
+   * cells. This value includes the total block size for each block loaded for the request.
+   */
+  long getBlockBytesScanned();
 
-  void incrementResponseBlockSize(long blockSize);
+  /**
+   * Increment the number of block bytes scanned by the current call. See
+   * {@link #getBlockBytesScanned()} for details.
+   */
+  void incrementBlockBytesScanned(long blockSize);
 
   long getResponseExceptionSize();
+
   void incrementResponseExceptionSize(long exceptionSize);
 }

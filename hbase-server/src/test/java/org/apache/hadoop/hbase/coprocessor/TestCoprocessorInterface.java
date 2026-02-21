@@ -37,6 +37,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.Coprocessor;
 import org.apache.hadoop.hbase.CoprocessorEnvironment;
+import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtil;
 import org.apache.hadoop.hbase.HConstants;
@@ -71,14 +72,15 @@ import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 import org.mockito.Mockito;
 
-@Category({CoprocessorTests.class, MediumTests.class})
+@Category({ CoprocessorTests.class, MediumTests.class })
 public class TestCoprocessorInterface {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestCoprocessorInterface.class);
+    HBaseClassTestRule.forClass(TestCoprocessorInterface.class);
 
-  @Rule public TestName name = new TestName();
+  @Rule
+  public TestName name = new TestName();
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   static final Path DIR = TEST_UTIL.getDataTestDir();
 
@@ -91,25 +93,24 @@ public class TestCoprocessorInterface {
     }
 
     @Override
-    public boolean next(List<Cell> results) throws IOException {
+    public boolean next(List<? super ExtendedCell> results) throws IOException {
       return delegate.next(results);
     }
 
     @Override
-    public boolean next(List<Cell> result, ScannerContext scannerContext)
-        throws IOException {
+    public boolean next(List<? super ExtendedCell> result, ScannerContext scannerContext)
+      throws IOException {
       return delegate.next(result, scannerContext);
     }
 
     @Override
-    public boolean nextRaw(List<Cell> result)
-        throws IOException {
+    public boolean nextRaw(List<? super ExtendedCell> result) throws IOException {
       return delegate.nextRaw(result);
     }
 
     @Override
-    public boolean nextRaw(List<Cell> result, ScannerContext context)
-        throws IOException {
+    public boolean nextRaw(List<? super ExtendedCell> result, ScannerContext context)
+      throws IOException {
       return delegate.nextRaw(result, context);
     }
 
@@ -165,7 +166,7 @@ public class TestCoprocessorInterface {
 
     @Override
     public void start(CoprocessorEnvironment e) {
-      sharedData = ((RegionCoprocessorEnvironment)e).getSharedData();
+      sharedData = ((RegionCoprocessorEnvironment) e).getSharedData();
       // using new String here, so that there will be new object on each invocation
       sharedData.putIfAbsent("test1", new Object());
       startCalled = true;
@@ -183,71 +184,84 @@ public class TestCoprocessorInterface {
     }
 
     @Override
-    public void preOpen(ObserverContext<RegionCoprocessorEnvironment> e) {
+    public void preOpen(ObserverContext<? extends RegionCoprocessorEnvironment> e) {
       preOpenCalled = true;
     }
+
     @Override
-    public void postOpen(ObserverContext<RegionCoprocessorEnvironment> e) {
+    public void postOpen(ObserverContext<? extends RegionCoprocessorEnvironment> e) {
       postOpenCalled = true;
     }
+
     @Override
-    public void preClose(ObserverContext<RegionCoprocessorEnvironment> e, boolean abortRequested) {
+    public void preClose(ObserverContext<? extends RegionCoprocessorEnvironment> e,
+      boolean abortRequested) {
       preCloseCalled = true;
     }
+
     @Override
-    public void postClose(ObserverContext<RegionCoprocessorEnvironment> e, boolean abortRequested) {
+    public void postClose(ObserverContext<? extends RegionCoprocessorEnvironment> e,
+      boolean abortRequested) {
       postCloseCalled = true;
     }
+
     @Override
-    public InternalScanner preCompact(ObserverContext<RegionCoprocessorEnvironment> e,
-        Store store, InternalScanner scanner, ScanType scanType, CompactionLifeCycleTracker tracker,
-        CompactionRequest request) {
+    public InternalScanner preCompact(ObserverContext<? extends RegionCoprocessorEnvironment> e,
+      Store store, InternalScanner scanner, ScanType scanType, CompactionLifeCycleTracker tracker,
+      CompactionRequest request) {
       preCompactCalled = true;
       return scanner;
     }
+
     @Override
-    public void postCompact(ObserverContext<RegionCoprocessorEnvironment> e,
-        Store store, StoreFile resultFile, CompactionLifeCycleTracker tracker,
-        CompactionRequest request) {
+    public void postCompact(ObserverContext<? extends RegionCoprocessorEnvironment> e, Store store,
+      StoreFile resultFile, CompactionLifeCycleTracker tracker, CompactionRequest request) {
       postCompactCalled = true;
     }
 
     @Override
-    public void preFlush(ObserverContext<RegionCoprocessorEnvironment> e,
-        FlushLifeCycleTracker tracker) {
+    public void preFlush(ObserverContext<? extends RegionCoprocessorEnvironment> e,
+      FlushLifeCycleTracker tracker) {
       preFlushCalled = true;
     }
 
     @Override
-    public void postFlush(ObserverContext<RegionCoprocessorEnvironment> e,
-        FlushLifeCycleTracker tracker) {
+    public void postFlush(ObserverContext<? extends RegionCoprocessorEnvironment> e,
+      FlushLifeCycleTracker tracker) {
       postFlushCalled = true;
     }
 
     @Override
-    public RegionScanner postScannerOpen(final ObserverContext<RegionCoprocessorEnvironment> e,
-        final Scan scan, final RegionScanner s) throws IOException {
+    public RegionScanner postScannerOpen(
+      final ObserverContext<? extends RegionCoprocessorEnvironment> e, final Scan scan,
+      final RegionScanner s) throws IOException {
       return new CustomScanner(s);
     }
 
     boolean wasStarted() {
       return startCalled;
     }
+
     boolean wasStopped() {
       return stopCalled;
     }
+
     boolean wasOpened() {
       return (preOpenCalled && postOpenCalled);
     }
+
     boolean wasClosed() {
       return (preCloseCalled && postCloseCalled);
     }
+
     boolean wasFlushed() {
       return (preFlushCalled && postFlushCalled);
     }
+
     boolean wasCompacted() {
       return (preCompactCalled && postCompactCalled);
     }
+
     Map<String, Object> getSharedData() {
       return sharedData;
     }
@@ -258,7 +272,7 @@ public class TestCoprocessorInterface {
 
     @Override
     public void start(CoprocessorEnvironment e) {
-      sharedData = ((RegionCoprocessorEnvironment)e).getSharedData();
+      sharedData = ((RegionCoprocessorEnvironment) e).getSharedData();
       sharedData.putIfAbsent("test2", new Object());
     }
 
@@ -271,8 +285,8 @@ public class TestCoprocessorInterface {
     public Optional<RegionObserver> getRegionObserver() {
       return Optional.of(new RegionObserver() {
         @Override
-        public void preGetOp(final ObserverContext<RegionCoprocessorEnvironment> e,
-            final Get get, final List<Cell> results) throws IOException {
+        public void preGetOp(final ObserverContext<? extends RegionCoprocessorEnvironment> e,
+          final Get get, final List<Cell> results) throws IOException {
           throw new RuntimeException();
         }
       });
@@ -286,10 +300,10 @@ public class TestCoprocessorInterface {
   @Test
   public void testSharedData() throws IOException {
     TableName tableName = TableName.valueOf(name.getMethodName());
-    byte [][] families = { fam1, fam2, fam3 };
+    byte[][] families = { fam1, fam2, fam3 };
 
     Configuration hc = initConfig();
-    HRegion region = initHRegion(tableName, name.getMethodName(), hc, new Class<?>[]{}, families);
+    HRegion region = initHRegion(tableName, name.getMethodName(), hc, new Class<?>[] {}, families);
 
     for (int i = 0; i < 3; i++) {
       HTestConst.addContent(region, fam3);
@@ -302,24 +316,24 @@ public class TestCoprocessorInterface {
 
     Coprocessor c = region.getCoprocessorHost().findCoprocessor(CoprocessorImpl.class);
     Coprocessor c2 = region.getCoprocessorHost().findCoprocessor(CoprocessorII.class);
-    Object o = ((CoprocessorImpl)c).getSharedData().get("test1");
-    Object o2 = ((CoprocessorII)c2).getSharedData().get("test2");
+    Object o = ((CoprocessorImpl) c).getSharedData().get("test1");
+    Object o2 = ((CoprocessorII) c2).getSharedData().get("test2");
     assertNotNull(o);
     assertNotNull(o2);
     // to coprocessors get different sharedDatas
-    assertFalse(((CoprocessorImpl)c).getSharedData() == ((CoprocessorII)c2).getSharedData());
+    assertFalse(((CoprocessorImpl) c).getSharedData() == ((CoprocessorII) c2).getSharedData());
     c = region.getCoprocessorHost().findCoprocessor(CoprocessorImpl.class);
     c2 = region.getCoprocessorHost().findCoprocessor(CoprocessorII.class);
     // make sure that all coprocessor of a class have identical sharedDatas
-    assertTrue(((CoprocessorImpl)c).getSharedData().get("test1") == o);
-    assertTrue(((CoprocessorII)c2).getSharedData().get("test2") == o2);
+    assertTrue(((CoprocessorImpl) c).getSharedData().get("test1") == o);
+    assertTrue(((CoprocessorII) c2).getSharedData().get("test2") == o2);
 
     // now have all Environments fail
     try {
-      byte [] r = region.getRegionInfo().getStartKey();
+      byte[] r = region.getRegionInfo().getStartKey();
       if (r == null || r.length <= 0) {
-        // Its the start row.  Can't ask for null.  Ask for minimal key instead.
-        r = new byte [] {0};
+        // Its the start row. Can't ask for null. Ask for minimal key instead.
+        r = new byte[] { 0 };
       }
       Get g = new Get(r);
       region.get(g);
@@ -328,7 +342,7 @@ public class TestCoprocessorInterface {
     }
     assertNull(region.getCoprocessorHost().findCoprocessor(CoprocessorII.class));
     c = region.getCoprocessorHost().findCoprocessor(CoprocessorImpl.class);
-    assertTrue(((CoprocessorImpl)c).getSharedData().get("test1") == o);
+    assertTrue(((CoprocessorImpl) c).getSharedData().get("test1") == o);
     c = c2 = null;
     // perform a GC
     System.gc();
@@ -336,11 +350,11 @@ public class TestCoprocessorInterface {
     region = reopenRegion(region, CoprocessorImpl.class, CoprocessorII.class);
     c = region.getCoprocessorHost().findCoprocessor(CoprocessorImpl.class);
     // CPimpl is unaffected, still the same reference
-    assertTrue(((CoprocessorImpl)c).getSharedData().get("test1") == o);
+    assertTrue(((CoprocessorImpl) c).getSharedData().get("test1") == o);
     c2 = region.getCoprocessorHost().findCoprocessor(CoprocessorII.class);
     // new map and object created, hence the reference is different
     // hence the old entry was indeed removed by the GC and new one has been created
-    Object o3 = ((CoprocessorII)c2).getSharedData().get("test2");
+    Object o3 = ((CoprocessorII) c2).getSharedData().get("test2");
     assertFalse(o3 == o2);
     HBaseTestingUtil.closeRegionAndWAL(region);
   }
@@ -348,11 +362,11 @@ public class TestCoprocessorInterface {
   @Test
   public void testCoprocessorInterface() throws IOException {
     TableName tableName = TableName.valueOf(name.getMethodName());
-    byte [][] families = { fam1, fam2, fam3 };
+    byte[][] families = { fam1, fam2, fam3 };
 
     Configuration hc = initConfig();
     HRegion region = initHRegion(tableName, name.getMethodName(), hc,
-      new Class<?>[]{CoprocessorImpl.class}, families);
+      new Class<?>[] { CoprocessorImpl.class }, families);
     for (int i = 0; i < 3; i++) {
       HTestConst.addContent(region, fam3);
       region.flush(true);
@@ -370,17 +384,16 @@ public class TestCoprocessorInterface {
     HBaseTestingUtil.closeRegionAndWAL(region);
     Coprocessor c = region.getCoprocessorHost().findCoprocessor(CoprocessorImpl.class);
 
-    assertTrue("Coprocessor not started", ((CoprocessorImpl)c).wasStarted());
-    assertTrue("Coprocessor not stopped", ((CoprocessorImpl)c).wasStopped());
-    assertTrue(((CoprocessorImpl)c).wasOpened());
-    assertTrue(((CoprocessorImpl)c).wasClosed());
-    assertTrue(((CoprocessorImpl)c).wasFlushed());
-    assertTrue(((CoprocessorImpl)c).wasCompacted());
+    assertTrue("Coprocessor not started", ((CoprocessorImpl) c).wasStarted());
+    assertTrue("Coprocessor not stopped", ((CoprocessorImpl) c).wasStopped());
+    assertTrue(((CoprocessorImpl) c).wasOpened());
+    assertTrue(((CoprocessorImpl) c).wasClosed());
+    assertTrue(((CoprocessorImpl) c).wasFlushed());
+    assertTrue(((CoprocessorImpl) c).wasCompacted());
   }
 
-  HRegion reopenRegion(final HRegion closedRegion, Class<?> ... implClasses)
-      throws IOException {
-    //RegionInfo info = new RegionInfo(tableName, null, null, false);
+  HRegion reopenRegion(final HRegion closedRegion, Class<?>... implClasses) throws IOException {
+    // RegionInfo info = new RegionInfo(tableName, null, null, false);
     HRegion r = HRegion.openHRegion(closedRegion, null);
 
     // this following piece is a hack. currently a coprocessorHost
@@ -388,8 +401,8 @@ public class TestCoprocessorInterface {
     // start a region server here, so just manually create cphost
     // and set it to region.
     Configuration conf = TEST_UTIL.getConfiguration();
-    RegionCoprocessorHost host = new RegionCoprocessorHost(r,
-        Mockito.mock(RegionServerServices.class), conf);
+    RegionCoprocessorHost host =
+      new RegionCoprocessorHost(r, Mockito.mock(RegionServerServices.class), conf);
     r.setCoprocessorHost(host);
 
     for (Class<?> implClass : implClasses) {
@@ -412,19 +425,16 @@ public class TestCoprocessorInterface {
     for (byte[] family : families) {
       builder.setColumnFamily(ColumnFamilyDescriptorBuilder.of(family));
     }
-    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0,
-      0, null, MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
-    RegionInfo info = RegionInfoBuilder.newBuilder(tableName)
-        .setStartKey(null)
-        .setEndKey(null)
-        .setSplit(false)
-        .build();
+    ChunkCreator.initialize(MemStoreLAB.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null,
+      MemStoreLAB.INDEX_CHUNK_SIZE_PERCENTAGE_DEFAULT);
+    RegionInfo info = RegionInfoBuilder.newBuilder(tableName).setStartKey(null).setEndKey(null)
+      .setSplit(false).build();
     Path path = new Path(DIR + callingMethod);
     HRegion r = HBaseTestingUtil.createRegionAndWAL(info, path, conf, builder.build());
 
     // this following piece is a hack.
     RegionCoprocessorHost host =
-        new RegionCoprocessorHost(r, Mockito.mock(RegionServerServices.class), conf);
+      new RegionCoprocessorHost(r, Mockito.mock(RegionServerServices.class), conf);
     r.setCoprocessorHost(host);
 
     for (Class<?> implClass : implClasses) {
@@ -446,9 +456,8 @@ public class TestCoprocessorInterface {
     // Increase the amount of time between client retries
     TEST_UTIL.getConfiguration().setLong("hbase.client.pause", 15 * 1000);
     // This size should make it so we always split using the addContent
-    // below.  After adding all data, the first region is 1.3M
-    TEST_UTIL.getConfiguration().setLong(HConstants.HREGION_MAX_FILESIZE,
-        1024 * 128);
+    // below. After adding all data, the first region is 1.3M
+    TEST_UTIL.getConfiguration().setLong(HConstants.HREGION_MAX_FILESIZE, 1024 * 128);
     TEST_UTIL.getConfiguration().setBoolean(CoprocessorHost.ABORT_ON_ERROR_KEY, false);
 
     return TEST_UTIL.getConfiguration();

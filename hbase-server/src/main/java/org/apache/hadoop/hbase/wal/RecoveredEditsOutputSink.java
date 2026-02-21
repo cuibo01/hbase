@@ -28,21 +28,20 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.monitoring.MonitoredTask;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.io.MultipleIOException;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 /**
- * Class that manages the output streams from the log splitting process.
- * Every region only has one recovered edits file PER split WAL (if we split
- * multiple WALs during a log-splitting session, on open, a Region may
- * have multiple recovered.edits files to replay -- one per split WAL).
- * @see BoundedRecoveredEditsOutputSink which is like this class but imposes upper bound on
- *   the number of writers active at one time (makes for better throughput).
+ * Class that manages the output streams from the log splitting process. Every region only has one
+ * recovered edits file PER split WAL (if we split multiple WALs during a log-splitting session, on
+ * open, a Region may have multiple recovered.edits files to replay -- one per split WAL).
+ * @see BoundedRecoveredEditsOutputSink which is like this class but imposes upper bound on the
+ *      number of writers active at one time (makes for better throughput).
  */
 @InterfaceAudience.Private
 class RecoveredEditsOutputSink extends AbstractRecoveredEditsOutputSink {
@@ -50,21 +49,19 @@ class RecoveredEditsOutputSink extends AbstractRecoveredEditsOutputSink {
   private ConcurrentMap<String, RecoveredEditsWriter> writers = new ConcurrentHashMap<>();
 
   public RecoveredEditsOutputSink(WALSplitter walSplitter,
-      WALSplitter.PipelineController controller, EntryBuffers entryBuffers, int numWriters) {
+    WALSplitter.PipelineController controller, EntryBuffers entryBuffers, int numWriters) {
     super(walSplitter, controller, entryBuffers, numWriters);
   }
 
   @Override
-  public void append(EntryBuffers.RegionEntryBuffer buffer)
-      throws IOException {
+  public void append(EntryBuffers.RegionEntryBuffer buffer) throws IOException {
     List<WAL.Entry> entries = buffer.entryBuffer;
     if (entries.isEmpty()) {
       LOG.warn("got an empty buffer, skipping");
       return;
     }
-    RecoveredEditsWriter writer =
-      getRecoveredEditsWriter(buffer.tableName, buffer.encodedRegionName,
-        entries.get(0).getKey().getSequenceId());
+    RecoveredEditsWriter writer = getRecoveredEditsWriter(buffer.tableName,
+      buffer.encodedRegionName, entries.get(0).getKey().getSequenceId());
     if (writer != null) {
       writer.writeRegionEntries(entries);
     }
@@ -76,7 +73,7 @@ class RecoveredEditsOutputSink extends AbstractRecoveredEditsOutputSink {
    * @return null if this region shouldn't output any logs
    */
   private RecoveredEditsWriter getRecoveredEditsWriter(TableName tableName, byte[] region,
-      long seqId) throws IOException {
+    long seqId) throws IOException {
     RecoveredEditsWriter ret = writers.get(Bytes.toString(region));
     if (ret != null) {
       return ret;
@@ -92,25 +89,40 @@ class RecoveredEditsOutputSink extends AbstractRecoveredEditsOutputSink {
 
   @Override
   public List<Path> close() throws IOException {
-    boolean isSuccessful = true;
+    boolean isSuccessful;
     try {
       isSuccessful = finishWriterThreads();
-    } finally {
-      isSuccessful &= closeWriters();
+    } catch (IOException e) {
+      closeWriters(false);
+      throw e;
     }
+    if (!isSuccessful) {
+      // Even if an exception is not thrown, finishWriterThreads() not being successful is an
+      // error case where the WAL files should not be finalized.
+      closeWriters(false);
+      return null;
+    }
+    isSuccessful = closeWriters(true);
     return isSuccessful ? splits : null;
   }
 
   /**
-   * Close all of the output streams.
-   *
+   * Close all the output streams.
+   * @param finalizeEdits true in the successful close case, false when we don't want to rename and
+   *                      finalize the temporary, possibly corrupted WAL files, such as when there
+   *                      was a previous failure or exception. Please see HBASE-28569.
    * @return true when there is no error.
    */
-  private boolean closeWriters() throws IOException {
+  boolean closeWriters(boolean finalizeEdits) throws IOException {
     List<IOException> thrown = Lists.newArrayList();
     for (RecoveredEditsWriter writer : writers.values()) {
       closeCompletionService.submit(() -> {
-        Path dst = closeRecoveredEditsWriter(writer, thrown);
+        if (!finalizeEdits) {
+          abortRecoveredEditsWriter(writer, thrown);
+          LOG.trace("Aborted edits at {}", writer.path);
+          return null;
+        }
+        Path dst = closeRecoveredEditsWriterAndFinalizeEdits(writer, thrown);
         LOG.trace("Closed {}", dst);
         splits.add(dst);
         return null;

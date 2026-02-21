@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -30,6 +30,7 @@ import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.Waiter;
+import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
@@ -63,15 +64,15 @@ public class TestAsyncConnectionTracing {
 
   @Before
   public void setUp() throws IOException {
-    ConnectionRegistry registry = new DoNothingConnectionRegistry(CONF) {
+    User user = UserProvider.instantiate(CONF).getCurrent();
+    ConnectionRegistry registry = new DoNothingConnectionRegistry(CONF, user) {
 
       @Override
       public CompletableFuture<ServerName> getActiveMaster() {
         return CompletableFuture.completedFuture(masterServer);
       }
     };
-    conn = new AsyncConnectionImpl(CONF, registry, "test", null,
-      UserProvider.instantiate(CONF).getCurrent());
+    conn = new AsyncConnectionImpl(CONF, registry, "test", null, user);
   }
 
   @After
@@ -82,8 +83,8 @@ public class TestAsyncConnectionTracing {
   private void assertTrace(String methodName, ServerName serverName) {
     Waiter.waitFor(CONF, 1000,
       () -> traceRule.getSpans().stream()
-        .anyMatch(span -> span.getName().equals("AsyncConnection." + methodName) &&
-          span.getKind() == SpanKind.INTERNAL && span.hasEnded()));
+        .anyMatch(span -> span.getName().equals("AsyncConnection." + methodName)
+          && span.getKind() == SpanKind.INTERNAL && span.hasEnded()));
     SpanData data = traceRule.getSpans().stream()
       .filter(s -> s.getName().equals("AsyncConnection." + methodName)).findFirst().get();
     assertEquals(StatusCode.OK, data.getStatus().getStatusCode());
@@ -101,8 +102,8 @@ public class TestAsyncConnectionTracing {
 
   @Test
   public void testHbckWithServerName() throws IOException {
-    ServerName serverName = ServerName.valueOf("localhost", 23456,
-      EnvironmentEdgeManager.currentTime());
+    ServerName serverName =
+      ServerName.valueOf("localhost", 23456, EnvironmentEdgeManager.currentTime());
     conn.getHbck(serverName);
     assertTrace("getHbck", serverName);
   }

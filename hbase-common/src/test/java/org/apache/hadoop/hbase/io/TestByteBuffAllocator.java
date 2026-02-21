@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,18 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.io;
 
 import static org.apache.hadoop.hbase.io.ByteBuffAllocator.HEAP;
 import static org.apache.hadoop.hbase.io.ByteBuffAllocator.getHeapAllocationRatio;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.nio.ByteBuffer;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
@@ -45,7 +44,22 @@ public class TestByteBuffAllocator {
 
   @ClassRule
   public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestByteBuffAllocator.class);
+    HBaseClassTestRule.forClass(TestByteBuffAllocator.class);
+
+  @Test
+  public void testRecycleOnlyPooledBuffers() {
+    int maxBuffersInPool = 10;
+    int bufSize = 1024;
+    int minSize = bufSize / 8;
+    ByteBuffAllocator alloc = new ByteBuffAllocator(true, maxBuffersInPool, bufSize, minSize);
+
+    ByteBuff buff = alloc.allocate(minSize - 1);
+    assertSame(ByteBuffAllocator.NONE, buff.getRefCnt().getRecycler());
+
+    alloc = new ByteBuffAllocator(true, 0, bufSize, minSize);
+    buff = alloc.allocate(minSize * 2);
+    assertSame(ByteBuffAllocator.NONE, buff.getRefCnt().getRecycler());
+  }
 
   @Test
   public void testAllocateByteBuffToReadInto() {
@@ -207,8 +221,10 @@ public class TestByteBuffAllocator {
     assertEquals(0, buf2.refCnt());
     assertEquals(0, dup2.refCnt());
     assertEquals(0, alloc.getFreeBufferCount());
-    assertException(dup2::position);
-    assertException(buf2::position);
+    // these should not throw an exception because they are heap buffers.
+    // off-heap buffers would throw an exception if trying to call a method once released.
+    dup2.position();
+    buf2.position();
 
     // duplicate the buf1, if the dup1 released, buf1 will also be released (MultipleByteBuffer)
     ByteBuff dup1 = buf1.duplicate();
@@ -331,8 +347,6 @@ public class TestByteBuffAllocator {
     ByteBuff buf = alloc.allocate(bufSize);
     assertException(() -> buf.retain(2));
     assertException(() -> buf.release(2));
-    assertException(() -> buf.touch());
-    assertException(() -> buf.touch(new Object()));
   }
 
   private void assertException(Runnable r) {
@@ -403,4 +417,103 @@ public class TestByteBuffAllocator {
     alloc1.allocate(1024);
     Assert.assertEquals(getHeapAllocationRatio(HEAP, HEAP, alloc1), 1024f / (1024f + 2048f), 1e-6);
   }
+
+  /**
+   * Tests that we only call the logic in checkRefCount for ByteBuff's that have a non-NONE
+   * recycler.
+   */
+  @Test
+  public void testCheckRefCountOnlyWithRecycler() {
+    TrackingSingleByteBuff singleBuff = new TrackingSingleByteBuff(ByteBuffer.allocate(1));
+    singleBuff.get();
+    assertEquals(1, singleBuff.getCheckRefCountCalls());
+    assertEquals(0, singleBuff.getRefCntCalls());
+    singleBuff = new TrackingSingleByteBuff(() -> {
+      // do nothing, just so we dont use NONE recycler
+    }, ByteBuffer.allocate(1));
+    singleBuff.get();
+    assertEquals(1, singleBuff.getCheckRefCountCalls());
+    assertEquals(1, singleBuff.getRefCntCalls());
+
+    TrackingMultiByteBuff multiBuff = new TrackingMultiByteBuff(ByteBuffer.allocate(1));
+
+    multiBuff.get();
+    assertEquals(1, multiBuff.getCheckRefCountCalls());
+    assertEquals(0, multiBuff.getRefCntCalls());
+    multiBuff = new TrackingMultiByteBuff(() -> {
+      // do nothing, just so we dont use NONE recycler
+    }, ByteBuffer.allocate(1));
+    multiBuff.get();
+    assertEquals(1, multiBuff.getCheckRefCountCalls());
+    assertEquals(1, multiBuff.getRefCntCalls());
+  }
+
+  private static class TrackingSingleByteBuff extends SingleByteBuff {
+
+    int refCntCalls = 0;
+    int checkRefCountCalls = 0;
+
+    public TrackingSingleByteBuff(ByteBuffer buf) {
+      super(buf);
+    }
+
+    public TrackingSingleByteBuff(ByteBuffAllocator.Recycler recycler, ByteBuffer buf) {
+      super(recycler, buf);
+    }
+
+    public int getRefCntCalls() {
+      return refCntCalls;
+    }
+
+    public int getCheckRefCountCalls() {
+      return checkRefCountCalls;
+    }
+
+    @Override
+    protected void checkRefCount() {
+      checkRefCountCalls++;
+      super.checkRefCount();
+    }
+
+    @Override
+    public int refCnt() {
+      refCntCalls++;
+      return super.refCnt();
+    }
+  }
+
+  private static class TrackingMultiByteBuff extends MultiByteBuff {
+
+    int refCntCalls = 0;
+    int checkRefCountCalls = 0;
+
+    public TrackingMultiByteBuff(ByteBuffer... items) {
+      super(items);
+    }
+
+    public TrackingMultiByteBuff(ByteBuffAllocator.Recycler recycler, ByteBuffer... items) {
+      super(recycler, items);
+    }
+
+    public int getRefCntCalls() {
+      return refCntCalls;
+    }
+
+    public int getCheckRefCountCalls() {
+      return checkRefCountCalls;
+    }
+
+    @Override
+    protected void checkRefCount() {
+      checkRefCountCalls++;
+      super.checkRefCount();
+    }
+
+    @Override
+    public int refCnt() {
+      refCntCalls++;
+      return super.refCnt();
+    }
+  }
+
 }

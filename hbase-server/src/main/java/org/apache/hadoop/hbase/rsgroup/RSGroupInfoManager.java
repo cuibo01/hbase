@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -113,13 +113,12 @@ public interface RSGroupInfoManager {
    * Rename rsgroup
    * @param oldName old rsgroup name
    * @param newName new rsgroup name
-   * @throws IOException
    */
   void renameRSGroup(String oldName, String newName) throws IOException;
 
   /**
    * Update RSGroup configuration
-   * @param groupName the group name
+   * @param groupName     the group name
    * @param configuration new configuration of the group name to be set
    * @throws IOException if a remote or network exception occurs
    */

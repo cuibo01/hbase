@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,26 +17,25 @@
  */
 package org.apache.hadoop.hbase.procedure2;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseCommonTestingUtil;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStore;
 import org.apache.hadoop.hbase.procedure2.store.wal.WALProcedureStore;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Ignore;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,13 +45,10 @@ import org.apache.hbase.thirdparty.com.google.protobuf.Int64Value;
  * For now we do not guarantee this, we will restore the locks when restarting ProcedureExecutor so
  * we should use lock to obtain the correct order. Ignored.
  */
-@Ignore
-@Category({ MasterTests.class, SmallTests.class })
+@Disabled
+@Tag(MasterTests.TAG)
+@Tag(SmallTests.TAG)
 public class TestProcedureReplayOrder {
-  @ClassRule
-  public static final HBaseClassTestRule CLASS_RULE =
-      HBaseClassTestRule.forClass(TestProcedureReplayOrder.class);
-
   private static final Logger LOG = LoggerFactory.getLogger(TestProcedureReplayOrder.class);
 
   private static final int NUM_THREADS = 16;
@@ -66,7 +62,7 @@ public class TestProcedureReplayOrder {
   private Path testDir;
   private Path logDir;
 
-  @Before
+  @BeforeEach
   public void setUp() throws IOException {
     htu = new HBaseCommonTestingUtil();
     htu.getConfiguration().setInt(WALProcedureStore.SYNC_WAIT_MSEC_CONF_KEY, 25);
@@ -83,7 +79,7 @@ public class TestProcedureReplayOrder {
     ProcedureTestingUtility.initAndStartWorkers(procExecutor, 1, true);
   }
 
-  @After
+  @AfterEach
   public void tearDown() throws IOException {
     procExecutor.stop();
     procStore.stop(false);
@@ -133,7 +129,7 @@ public class TestProcedureReplayOrder {
   }
 
   private void submitProcedures(final int nthreads, final int nprocPerThread,
-      final Class<?> procClazz) throws Exception {
+    final Class<?> procClazz) throws Exception {
     Thread[] submitThreads = new Thread[nthreads];
     for (int i = 0; i < submitThreads.length; ++i) {
       submitThreads[i] = new Thread() {
@@ -141,8 +137,8 @@ public class TestProcedureReplayOrder {
         public void run() {
           for (int i = 0; i < nprocPerThread; ++i) {
             try {
-              procExecutor.submitProcedure((Procedure)
-                procClazz.getDeclaredConstructor().newInstance());
+              procExecutor
+                .submitProcedure((Procedure) procClazz.getDeclaredConstructor().newInstance());
             } catch (Exception e) {
               LOG.error("unable to instantiate the procedure", e);
               fail("failure during the proc.newInstance(): " + e.getMessage());
@@ -183,7 +179,7 @@ public class TestProcedureReplayOrder {
       for (int i = 0; i < execList.size() - 1; ++i) {
         TestProcedure a = execList.get(i);
         TestProcedure b = execList.get(i + 1);
-        assertTrue("exec list not sorted: " + a + " < " + b, a.getExecId() > b.getExecId());
+        assertTrue(a.getExecId() > b.getExecId(), "exec list not sorted: " + a + " < " + b);
       }
     }
   }
@@ -197,7 +193,8 @@ public class TestProcedureReplayOrder {
     }
 
     @Override
-    protected void rollback(TestProcedureEnv env) { }
+    protected void rollback(TestProcedureEnv env) {
+    }
 
     @Override
     protected boolean abort(TestProcedureEnv env) {
@@ -205,15 +202,13 @@ public class TestProcedureReplayOrder {
     }
 
     @Override
-    protected void serializeStateData(ProcedureStateSerializer serializer)
-        throws IOException {
+    protected void serializeStateData(ProcedureStateSerializer serializer) throws IOException {
       Int64Value.Builder builder = Int64Value.newBuilder().setValue(execId);
       serializer.serialize(builder.build());
     }
 
     @Override
-    protected void deserializeStateData(ProcedureStateSerializer serializer)
-        throws IOException {
+    protected void deserializeStateData(ProcedureStateSerializer serializer) throws IOException {
       Int64Value value = serializer.deserialize(Int64Value.class);
       execId = value.getValue();
       step = 2;
@@ -221,7 +216,8 @@ public class TestProcedureReplayOrder {
   }
 
   public static class TestSingleStepProcedure extends TestProcedure {
-    public TestSingleStepProcedure() { }
+    public TestSingleStepProcedure() {
+    }
 
     @Override
     protected Procedure[] execute(TestProcedureEnv env) throws ProcedureYieldException {
@@ -244,7 +240,8 @@ public class TestProcedureReplayOrder {
   }
 
   public static class TestTwoStepProcedure extends TestProcedure {
-    public TestTwoStepProcedure() { }
+    public TestTwoStepProcedure() {
+    }
 
     @Override
     protected Procedure[] execute(TestProcedureEnv env) throws ProcedureYieldException {
